@@ -115,7 +115,10 @@ impl Subscription {
         if result.get("type").and_then(Value::as_str) != Some("subscription_started") {
             return Err(ApiError::Protocol(format!("subscription not acknowledged: {result}")));
         }
-        reader.get_ref().set_read_timeout(None)?;
+        // macOS refuses socket options once the peer has closed (EINVAL); the
+        // next read then reports the end of the stream, so this cannot fail
+        // in a way that matters.
+        let _ = reader.get_ref().set_read_timeout(None);
         Ok(Self { reader, control })
     }
 
