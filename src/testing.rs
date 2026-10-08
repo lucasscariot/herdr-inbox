@@ -110,3 +110,20 @@ pub fn write_line(stream: &mut UnixStream, value: &Value) {
     let _ = stream.write_all(&bytes);
     let _ = stream.flush();
 }
+
+/// Writes an executable script without this process ever holding it open for
+/// writing. Tests run in parallel threads; a thread that forks while another
+/// holds a write handle passes that handle to its child, and executing the
+/// script then fails with "text file busy" (ETXTBSY) until the child execs.
+/// A short-lived `sh` does the writing instead, so no handle can leak.
+pub fn write_executable(path: &Path, body: &str) {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn sh to write a test script");
+    child.stdin.take().expect("stdin").write_all(body.as_bytes()).expect("write test script");
+    assert!(child.wait().expect("wait for sh").success(), "writing {} failed", path.display());
+}

@@ -46,6 +46,9 @@ impl Group {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thread {
     pub id: ThreadId,
+    pub machine_id: String,
+    /// `None` on the local machine.
+    pub machine_label: Option<String>,
     pub pane_id: String,
     pub workspace_id: String,
     pub status: AgentStatus,
@@ -55,8 +58,8 @@ pub struct Thread {
     pub harness: String,
     /// When the status last changed, if this client saw it change.
     pub changed_at: Option<SystemTime>,
-    /// Herdr's per-server change counter, used to order threads whose change
-    /// time is unknown.
+    /// Herdr's change counter, used to order threads whose change time is
+    /// unknown. It counts per server: never compare it across machines.
     pub change_seq: u64,
 }
 
@@ -137,46 +140,81 @@ impl Activity {
     }
 }
 
-/// Builds the inbox's threads from a snapshot, sorted for display.
-pub fn build(
-    snapshot: &SessionSnapshot,
-    activity: &Activity,
-    checkout: &dyn Fn(&Path) -> Option<Checkout>,
-) -> Vec<Thread> {
-    let workspaces: HashMap<&str, &WorkspaceInfo> =
-        snapshot.workspaces.iter().map(|w| (w.workspace_id.as_str(), w)).collect();
-    let tabs: HashMap<&str, &TabInfo> = snapshot.tabs.iter().map(|t| (t.tab_id.as_str(), t)).collect();
-    let mut threads: Vec<Thread> = snapshot
+/// The machine a thread runs on, as seen in the list.
+pub const LOCAL: &str = "local";
+
+/// A thread's identity across machines: `machine/pane`.
+pub fn thread_id(machine: &str, pane: &str) -> ThreadId {
+    format!("{machine}/{pane}")
+}
+
+/// One machine's view, to build threads from.
+pub struct Source<'a> {
+    pub machine_id: &'a str,
+    /// Shown on rows; `None` for the local machine.
+    pub machine_label: Option<&'a str>,
+    pub snapshot: &'a SessionSnapshot,
+    /// Repository and branch, keyed by the path from [`checkout_path`].
+    pub checkouts: &'a HashMap<String, Checkout>,
+}
+
+/// The directory that identifies an agent's checkout: its workspace's
+/// worktree, else where the agent's process runs, else where the pane started.
+pub fn checkout_path<'a>(agent: &'a AgentInfo, workspace: Option<&'a WorkspaceInfo>) -> Option<&'a str> {
+    workspace
+        .and_then(|w| w.worktree.as_ref())
+        .map(|w| w.checkout_path.as_str())
+        .or(agent.foreground_cwd.as_deref())
+        .or(agent.cwd.as_deref())
+}
+
+/// Every checkout path a snapshot's threads need.
+pub fn checkout_paths(snapshot: &SessionSnapshot) -> Vec<String> {
+    let mut paths: Vec<String> = snapshot
         .agents
         .iter()
-        .map(|agent| {
-            let workspace = workspaces.get(agent.workspace_id.as_str()).copied();
-            let tab = tabs.get(agent.tab_id.as_str()).copied();
-            thread(agent, workspace, tab, activity, checkout)
+        .filter_map(|agent| {
+            let workspace = snapshot.workspaces.iter().find(|w| w.workspace_id == agent.workspace_id);
+            checkout_path(agent, workspace).map(str::to_string)
         })
         .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Builds every machine's threads, sorted for display.
+pub fn build(sources: &[Source], activity: &Activity) -> Vec<Thread> {
+    let mut threads = Vec::new();
+    for source in sources {
+        let snapshot = source.snapshot;
+        let workspaces: HashMap<&str, &WorkspaceInfo> =
+            snapshot.workspaces.iter().map(|w| (w.workspace_id.as_str(), w)).collect();
+        let tabs: HashMap<&str, &TabInfo> = snapshot.tabs.iter().map(|t| (t.tab_id.as_str(), t)).collect();
+        for agent in &snapshot.agents {
+            let workspace = workspaces.get(agent.workspace_id.as_str()).copied();
+            let tab = tabs.get(agent.tab_id.as_str()).copied();
+            threads.push(thread(source, agent, workspace, tab, activity));
+        }
+    }
     sort(&mut threads);
     threads
 }
 
 fn thread(
+    source: &Source,
     agent: &AgentInfo,
     workspace: Option<&WorkspaceInfo>,
     tab: Option<&TabInfo>,
     activity: &Activity,
-    checkout: &dyn Fn(&Path) -> Option<Checkout>,
 ) -> Thread {
-    let id = agent.pane_id.clone();
-    let path = workspace
-        .and_then(|w| w.worktree.as_ref())
-        .map(|w| w.checkout_path.as_str())
-        .or(agent.foreground_cwd.as_deref())
-        .or(agent.cwd.as_deref());
-    let found = path.and_then(|path| checkout(Path::new(path)));
+    let id = thread_id(source.machine_id, &agent.pane_id);
+    let path = checkout_path(agent, workspace);
+    let found = path.and_then(|path| source.checkouts.get(path));
     let project = workspace
         .and_then(|w| w.worktree.as_ref())
         .map(|w| w.repo_name.clone())
-        .or_else(|| found.as_ref().map(|c| c.repo.clone()))
+        .or_else(|| found.map(|c| c.repo.clone()))
         .or_else(|| path.and_then(basename))
         .or_else(|| workspace.map(|w| w.label.clone()).filter(|l| !l.is_empty()))
         .unwrap_or_else(|| "no project".to_string());
@@ -185,7 +223,9 @@ fn thread(
         title: title(agent, tab, &harness),
         status: activity.effective(&id, agent.agent_status),
         changed_at: activity.changed_at(&id),
-        branch: found.and_then(|c| c.branch),
+        branch: found.and_then(|c| c.branch.clone()),
+        machine_id: source.machine_id.to_string(),
+        machine_label: source.machine_label.map(str::to_string),
         pane_id: agent.pane_id.clone(),
         workspace_id: agent.workspace_id.clone(),
         change_seq: agent.state_change_seq,
@@ -290,7 +330,7 @@ pub fn harness_label(agent: &AgentInfo) -> String {
 
 /// Needs input first, then ready, working, idle, unknown. Inside a group the
 /// most recent change comes first; threads without a known change time follow,
-/// newest Herdr change counter first. Ties fall back to stable text order so
+/// newest Herdr change counter first among threads of the same machine. Ties fall back to stable text order so
 /// the list never shuffles on refresh.
 pub fn sort(threads: &mut [Thread]) {
     threads.sort_by(|a, b| {
@@ -302,7 +342,10 @@ pub fn sort(threads: &mut [Thread]) {
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,
             })
-            .then_with(|| b.change_seq.cmp(&a.change_seq))
+            .then_with(|| match a.machine_id == b.machine_id {
+                true => b.change_seq.cmp(&a.change_seq),
+                false => std::cmp::Ordering::Equal,
+            })
             .then_with(|| a.project.cmp(&b.project))
             .then_with(|| a.title.cmp(&b.title))
             .then_with(|| a.id.cmp(&b.id))
@@ -335,8 +378,21 @@ mod tests {
         }
     }
 
-    fn no_checkout(_: &Path) -> Option<Checkout> {
-        None
+    fn local(snapshot: &SessionSnapshot, checkouts: &HashMap<String, Checkout>) -> Vec<Thread> {
+        let sources = [Source { machine_id: LOCAL, machine_label: None, snapshot, checkouts }];
+        build(&sources, &Activity::default())
+    }
+
+    fn checkouts(entries: &[(&str, &str, &str)]) -> HashMap<String, Checkout> {
+        entries
+            .iter()
+            .map(|(path, repo, branch)| {
+                (
+                    path.to_string(),
+                    Checkout { repo: repo.to_string(), branch: Some(branch.to_string()), root: path.into() },
+                )
+            })
+            .collect()
     }
 
     fn at(secs: u64) -> SystemTime {
@@ -443,15 +499,11 @@ mod tests {
                 is_linked_worktree: true,
             }),
         });
-        let looked_up = std::cell::RefCell::new(Vec::new());
-        let checkout = |path: &Path| {
-            looked_up.borrow_mut().push(path.to_path_buf());
-            Some(Checkout { repo: "ignored".into(), branch: Some("fix-login".into()), root: path.into() })
-        };
-        let threads = build(&snapshot, &Activity::default(), &checkout);
-        assert_eq!(threads[0].project, "cockpit");
+        assert_eq!(checkout_paths(&snapshot), ["/h/.herdr/worktrees/cockpit/fix-login"], "the worktree, not the cwd");
+        let threads =
+            local(&snapshot, &checkouts(&[("/h/.herdr/worktrees/cockpit/fix-login", "ignored", "fix-login")]));
+        assert_eq!(threads[0].project, "cockpit", "Herdr's worktree repo name wins");
         assert_eq!(threads[0].branch.as_deref(), Some("fix-login"));
-        assert_eq!(looked_up.borrow().as_slice(), [Path::new("/h/.herdr/worktrees/cockpit/fix-login")]);
     }
 
     #[test]
@@ -467,14 +519,8 @@ mod tests {
         snapshot.agents.push(agent("w3:p1", AgentStatus::Idle));
         snapshot.workspaces.push(WorkspaceInfo { workspace_id: "w3".into(), label: "notes".into(), worktree: None });
         snapshot.agents.push(agent("w4:p1", AgentStatus::Idle));
-        let checkout = |path: &Path| {
-            (path == Path::new("/w/api/src")).then(|| Checkout {
-                repo: "api".into(),
-                branch: Some("main".into()),
-                root: "/w/api".into(),
-            })
-        };
-        let threads = build(&snapshot, &Activity::default(), &checkout);
+        assert_eq!(checkout_paths(&snapshot), ["/tmp/scratch", "/w/api/src"], "sorted, foreground cwd first");
+        let threads = local(&snapshot, &checkouts(&[("/w/api/src", "api", "main")]));
         let by_pane = |pane: &str| threads.iter().find(|t| t.pane_id == pane).unwrap().clone();
         assert_eq!(by_pane("w1:p1").project, "api");
         assert_eq!(by_pane("w1:p1").branch.as_deref(), Some("main"));
@@ -544,6 +590,8 @@ mod tests {
             id: id.into(),
             pane_id: id.into(),
             workspace_id: "w".into(),
+            machine_id: LOCAL.into(),
+            machine_label: None,
             status,
             title: format!("title {id}"),
             project: "p".into(),
@@ -584,6 +632,42 @@ mod tests {
     }
 
     #[test]
+    fn herdr_counters_are_never_compared_across_machines() {
+        let mut studio = named("studio-high", AgentStatus::Working, None, 900);
+        studio.machine_id = "studio".into();
+        studio.project = "z".into();
+        let local_low = named("local-low", AgentStatus::Working, None, 1);
+        let mut threads = vec![studio, local_low];
+        sort(&mut threads);
+        let ids: Vec<&str> = threads.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["local-low", "studio-high"], "project order decides, not 900 > 1");
+    }
+
+    #[test]
+    fn threads_from_every_machine_are_merged_and_labelled() {
+        let mut local_snapshot = SessionSnapshot::default();
+        local_snapshot.agents.push(agent("w1:p1", AgentStatus::Idle));
+        let mut studio_snapshot = SessionSnapshot::default();
+        studio_snapshot.agents.push(agent("w1:p1", AgentStatus::Blocked));
+        let empty = HashMap::new();
+        let sources = [
+            Source { machine_id: LOCAL, machine_label: None, snapshot: &local_snapshot, checkouts: &empty },
+            Source {
+                machine_id: "studio",
+                machine_label: Some("Mac Studio"),
+                snapshot: &studio_snapshot,
+                checkouts: &empty,
+            },
+        ];
+        let threads = build(&sources, &Activity::default());
+        assert_eq!(threads.len(), 2, "the same pane id on two machines is two threads");
+        assert_eq!(threads[0].id, "studio/w1:p1");
+        assert_eq!(threads[0].machine_label.as_deref(), Some("Mac Studio"));
+        assert_eq!(threads[1].id, "local/w1:p1");
+        assert_eq!(threads[1].machine_label, None);
+    }
+
+    #[test]
     fn sort_is_deterministic_for_identical_threads() {
         let mut a = vec![named("b", AgentStatus::Idle, None, 0), named("a", AgentStatus::Idle, None, 0)];
         let mut b = a.clone();
@@ -598,10 +682,14 @@ mod tests {
         let mut snapshot = SessionSnapshot::default();
         snapshot.agents.push(agent("w1:p1", AgentStatus::Done));
         let mut activity = Activity::default();
-        activity.observe("w1:p1", AgentStatus::Working, at(1));
-        activity.observe("w1:p1", AgentStatus::Done, at(2));
-        activity.mark_seen("w1:p1");
-        let threads = build(&snapshot, &activity, &no_checkout);
+        activity.observe("local/w1:p1", AgentStatus::Working, at(1));
+        activity.observe("local/w1:p1", AgentStatus::Done, at(2));
+        activity.mark_seen("local/w1:p1");
+        let empty = HashMap::new();
+        let threads = build(
+            &[Source { machine_id: LOCAL, machine_label: None, snapshot: &snapshot, checkouts: &empty }],
+            &activity,
+        );
         assert_eq!(threads[0].status, AgentStatus::Idle);
         assert_eq!(threads[0].changed_at, Some(at(2)));
     }

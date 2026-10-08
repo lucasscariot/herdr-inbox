@@ -21,6 +21,9 @@ pub enum ApiError {
     /// Nothing is listening: the server is not running.
     #[error("no Herdr server is listening at {0}")]
     Unavailable(PathBuf),
+    /// A remote machine could not be reached; the message is SSH's.
+    #[error("{0}")]
+    Unreachable(String),
     #[error("Herdr socket error: {0}")]
     Io(#[from] std::io::Error),
     #[error("unexpected answer from Herdr: {0}")]

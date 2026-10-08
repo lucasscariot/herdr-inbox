@@ -13,6 +13,9 @@ All notable changes to Herdr Inbox. The format follows
   interactive, and archiving. It talks to the running Herdr server through the
   JSON API and `herdr terminal session control` only, and follows the Herdr
   theme. Plain `herdr` keeps working beside it.
+- Threads from every enabled saved SSH machine join the same list, open live
+  over SSH, and can be archived. A status bar strip shows each machine's
+  connection; an unreachable machine never blocks the others.
 
 ### Changed
 

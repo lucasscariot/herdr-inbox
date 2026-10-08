@@ -8,6 +8,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::process::Child;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -77,53 +79,94 @@ pub fn parse_event(line: &str) -> Result<Option<Event>, ApiError> {
 }
 
 pub struct Subscription {
-    reader: BufReader<UnixStream>,
-    control: UnixStream,
+    reader: Box<dyn BufRead + Send>,
+    closer: Closer,
 }
 
-/// Closes a subscription from another thread; its reader then ends.
-#[derive(Debug)]
-pub struct Closer(UnixStream);
+/// Ends a subscription from another thread; its reader then sees the end of
+/// the stream.
+#[derive(Debug, Clone)]
+pub struct Closer(CloseHandle);
+
+#[derive(Debug, Clone)]
+enum CloseHandle {
+    Socket(Arc<UnixStream>),
+    Process(Arc<Mutex<Child>>),
+}
 
 impl Closer {
+    pub fn socket(stream: UnixStream) -> Self {
+        Self(CloseHandle::Socket(Arc::new(stream)))
+    }
+
+    pub fn process(child: Arc<Mutex<Child>>) -> Self {
+        Self(CloseHandle::Process(child))
+    }
+
     pub fn close(&self) {
-        let _ = self.0.shutdown(Shutdown::Both);
+        match &self.0 {
+            CloseHandle::Socket(stream) => {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            CloseHandle::Process(child) => {
+                let mut child = child.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
     }
 }
 
+/// The `events.subscribe` request line.
+pub fn subscribe_request(subscriptions: Vec<Value>) -> Result<Vec<u8>, ApiError> {
+    let request = json!({
+        "id": next_request_id(),
+        "method": "events.subscribe",
+        "params": {"subscriptions": subscriptions},
+    });
+    let mut line = serde_json::to_vec(&request).map_err(|err| ApiError::Protocol(err.to_string()))?;
+    line.push(b'\n');
+    Ok(line)
+}
+
+/// Reads the `subscription_started` acknowledgement.
+pub fn read_ack(reader: &mut dyn BufRead) -> Result<(), ApiError> {
+    let mut ack = String::new();
+    if reader.read_line(&mut ack)? == 0 {
+        return Err(ApiError::Protocol("subscription closed before it started".into()));
+    }
+    let result = parse_response(&ack)?;
+    if result.get("type").and_then(Value::as_str) != Some("subscription_started") {
+        return Err(ApiError::Protocol(format!("subscription not acknowledged: {result}")));
+    }
+    Ok(())
+}
+
 impl Subscription {
+    /// Subscribes on a local Unix socket.
     pub fn open(socket: &Path, subscriptions: Vec<Value>) -> Result<Self, ApiError> {
         let mut stream = connect(socket)?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         // The acknowledgement must come quickly; events afterwards may not.
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let request = json!({
-            "id": next_request_id(),
-            "method": "events.subscribe",
-            "params": {"subscriptions": subscriptions},
-        });
-        let mut line = serde_json::to_vec(&request).map_err(|err| ApiError::Protocol(err.to_string()))?;
-        line.push(b'\n');
-        stream.write_all(&line)?;
+        stream.write_all(&subscribe_request(subscriptions)?)?;
         let control = stream.try_clone()?;
         let mut reader = BufReader::new(stream);
-        let mut ack = String::new();
-        if reader.read_line(&mut ack)? == 0 {
-            return Err(ApiError::Protocol("subscription closed before it started".into()));
-        }
-        let result = parse_response(&ack)?;
-        if result.get("type").and_then(Value::as_str) != Some("subscription_started") {
-            return Err(ApiError::Protocol(format!("subscription not acknowledged: {result}")));
-        }
+        read_ack(&mut reader)?;
         // macOS refuses socket options once the peer has closed (EINVAL); the
         // next read then reports the end of the stream, so this cannot fail
         // in a way that matters.
         let _ = reader.get_ref().set_read_timeout(None);
-        Ok(Self { reader, control })
+        Ok(Self { reader: Box::new(reader), closer: Closer::socket(control) })
     }
 
-    pub fn closer(&self) -> Result<Closer, ApiError> {
-        Ok(Closer(self.control.try_clone()?))
+    /// A subscription whose acknowledgement was already read from `reader`.
+    pub fn from_parts(reader: Box<dyn BufRead + Send>, closer: Closer) -> Self {
+        Self { reader, closer }
+    }
+
+    pub fn closer(&self) -> Closer {
+        self.closer.clone()
     }
 
     /// The next event, or `None` once the server closes the stream. Lines that
@@ -279,7 +322,7 @@ mod tests {
             std::thread::sleep(Duration::from_secs(5));
         });
         let mut subscription = Subscription::open(server.path(), lifecycle_subscriptions()).unwrap();
-        let closer = subscription.closer().unwrap();
+        let closer = subscription.closer();
         let reader = std::thread::spawn(move || subscription.next_event());
         std::thread::sleep(Duration::from_millis(50));
         closer.close();

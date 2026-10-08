@@ -21,15 +21,13 @@ pub(super) fn key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut V
     if key.kind == KeyEventKind::Release {
         return;
     }
-    match app.connection {
-        Connection::NoServer => return no_server_key(app, key, now, effects),
-        Connection::Starting(_) => {
-            if key.code == KeyCode::Char('q') || is_ctrl_c(key) {
-                effects.push(Effect::Quit);
-            }
-            return;
+    if app.needs_server_screen() {
+        match app.local().connection {
+            Connection::NoServer => no_server_key(app, key, now, effects),
+            _ if key.code == KeyCode::Char('q') || is_ctrl_c(key) => effects.push(Effect::Quit),
+            _ => {}
         }
-        _ => {}
+        return;
     }
     match app.focus {
         Focus::Terminal => terminal_key(app, key, now, effects),
@@ -43,11 +41,7 @@ fn is_ctrl_c(key: KeyEvent) -> bool {
 
 fn no_server_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     match key.code {
-        KeyCode::Enter => {
-            app.connection = Connection::Starting(now);
-            app.notice = None;
-            effects.push(Effect::StartServer);
-        }
+        KeyCode::Enter => app.start_local_server(now, effects),
         KeyCode::Char('q') | KeyCode::Esc => effects.push(Effect::Quit),
         _ if is_ctrl_c(key) => effects.push(Effect::Quit),
         _ => {}
@@ -87,6 +81,7 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
             && let Some(thread) = app.thread(&id)
         {
             effects.push(Effect::Archive {
+                machine: thread.machine_id.clone(),
                 thread: thread.id.clone(),
                 workspace_id: thread.workspace_id.clone(),
                 title: thread.title.clone(),
@@ -114,6 +109,9 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
             app.confirm_archive = app.cursor.clone();
         }
+        // With saved machines the list stays up without a local server; `s`
+        // starts one.
+        KeyCode::Char('s') if app.local().connection == Connection::NoServer => app.start_local_server(now, effects),
         _ => {}
     }
 }

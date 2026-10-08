@@ -7,6 +7,7 @@ pub mod git;
 pub mod herdr;
 pub mod keys;
 pub mod link;
+pub mod machines;
 pub mod runtime;
 pub mod screen;
 pub mod theme;

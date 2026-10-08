@@ -20,6 +20,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+pub use super::transport::Runner;
+
 /// How to run `herdr` so it reaches the right server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HerdrCommand {
@@ -195,18 +197,17 @@ impl Session {
     /// Starts the controller and delivers every message to `on_message` from a
     /// reader thread. The last message is always `Message::Closed`.
     pub fn spawn(
-        herdr: &HerdrCommand,
+        runner: &Runner,
         target: &str,
         cols: u16,
         rows: u16,
         on_message: impl Fn(Message) + Send + 'static,
     ) -> std::io::Result<Self> {
-        let mut command = herdr.command();
-        command
-            .args(HerdrCommand::control_args(target, cols.max(1), rows.max(1)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let args = HerdrCommand::control_args(target, cols.max(1), rows.max(1));
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut command = runner.command(&args);
+        let skip_to_marker = runner.has_marker();
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn()?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or_else(|| std::io::Error::other("no stdout"))?;
@@ -227,7 +228,7 @@ impl Session {
         {
             let child = Arc::clone(&child);
             thread::spawn(move || {
-                let closed = read_stream(stdout, &on_message);
+                let closed = read_stream(stdout, skip_to_marker, &on_message);
                 // Give stderr a moment to deliver the line that explains an exit.
                 let mut reason = closed.and_then(|reason| reason);
                 if reason.is_none() {
@@ -279,11 +280,17 @@ impl Drop for Session {
 
 /// Reads records until EOF. Returns `Some(reason)` when Herdr sent
 /// `terminal.closed`, `None` when the stream just ended.
-fn read_stream(stdout: impl Read, on_message: &impl Fn(Message)) -> Option<Option<String>> {
+fn read_stream(stdout: impl Read, skip_to_marker: bool, on_message: &impl Fn(Message)) -> Option<Option<String>> {
+    let mut ready = !skip_to_marker;
     for line in BufReader::new(stdout).lines() {
         let Ok(line) = line else {
             return None;
         };
+        if !ready {
+            // Login noise before the remote shell runs herdr.
+            ready = super::ssh::is_marker(&line);
+            continue;
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -415,29 +422,17 @@ mod tests {
             out = out.display(),
             stdin = dir.join("stdin").display(),
         );
-        std::fs::write(&script, body).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::testing::write_executable(&script, &body);
         HerdrCommand::new(script)
     }
 
-    /// Spawns, retrying while another test thread's fork still holds the
-    /// freshly written script open (ETXTBSY), a race only tests that write
-    /// executables can hit.
     fn spawn(
         herdr: &HerdrCommand,
         target: &str,
         (cols, rows): (u16, u16),
-        on_message: impl Fn(Message) + Send + Clone + 'static,
+        on_message: impl Fn(Message) + Send + 'static,
     ) -> Session {
-        for _ in 0..50 {
-            match Session::spawn(herdr, target, cols, rows, on_message.clone()) {
-                Ok(session) => return session,
-                Err(err) if err.raw_os_error() == Some(26) => thread::sleep(Duration::from_millis(10)),
-                Err(err) => panic!("spawn failed: {err}"),
-            }
-        }
-        panic!("the fake herdr script stayed busy");
+        Session::spawn(&Runner::Local(herdr.clone()), target, cols, rows, on_message).expect("spawn the fake herdr")
     }
 
     fn collect(rx: &mpsc::Receiver<Message>) -> Vec<Message> {
@@ -498,6 +493,33 @@ mod tests {
         });
         session.release();
         assert_eq!(collect(&rx), vec![Message::Closed { reason: Some("taken over".into()) }]);
+    }
+
+    #[test]
+    fn remote_sessions_skip_login_noise_before_the_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let noisy = format!(
+            "Welcome to macOS\n{}\nherdr-inbox-ready\n{}\n",
+            frame_line(9, true, b"early"),
+            frame_line(1, true, b"X")
+        );
+        let herdr = fake_herdr(dir.path(), &noisy, "", 0);
+        // An SSH runner whose "ssh" is the fake: it ignores its arguments.
+        let runner = Runner::Ssh(super::super::ssh::SshHerdr {
+            ssh: herdr.program.clone(),
+            target: "host".into(),
+            session: None,
+            control_dir: dir.path().into(),
+        });
+        let (tx, rx) = mpsc::channel();
+        let mut session = Session::spawn(&runner, "w1:p1", 80, 24, move |m| {
+            let _ = tx.send(m);
+        })
+        .unwrap();
+        session.release();
+        let messages = collect(&rx);
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(matches!(&messages[0], Message::Frame(f) if f.bytes == b"X"), "a frame before the marker is noise");
     }
 
     #[test]
