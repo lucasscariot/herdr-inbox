@@ -54,6 +54,11 @@ impl FakeServer {
                 while !stop.load(Ordering::Relaxed) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            // BSD sockets inherit the listener's non-blocking
+                            // flag on accept; Linux ones do not.
+                            if stream.set_nonblocking(false).is_err() {
+                                continue;
+                            }
                             let requests = Arc::clone(&requests);
                             let handler = Arc::clone(&handler);
                             thread::spawn(move || serve(stream, &requests, handler.as_ref()));

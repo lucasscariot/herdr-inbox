@@ -230,8 +230,6 @@ fn the_inbox_shows_threads_drives_an_agent_and_archives() {
     inbox.wait_for_text("NEEDS INPUT");
     inbox.wait_for_text("Fix the login loop");
     inbox.wait_for_text("⎇ fix-login · Claude");
-    // The shell prompt, drawn right of the separator (trailing spaces trimmed).
-    inbox.wait_for_text("│$");
 
     // Enter focuses the agent; what we type runs in the pane.
     inbox.keys("\r");

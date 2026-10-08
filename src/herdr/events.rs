@@ -265,7 +265,8 @@ mod tests {
         let server = FakeServer::start_raw(|request, stream| {
             write_line(stream, &json!({"id": request["id"], "result": {"type": "ok"}}));
         });
-        assert!(matches!(Subscription::open(server.path(), lifecycle_subscriptions()), Err(ApiError::Protocol(_))));
+        let result = Subscription::open(server.path(), lifecycle_subscriptions());
+        assert!(matches!(result, Err(ApiError::Protocol(_))), "{:?}", result.err());
     }
 
     #[test]
