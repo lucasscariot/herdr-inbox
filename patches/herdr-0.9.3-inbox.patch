@@ -1,0 +1,881 @@
+diff --git a/src/client/mod.rs b/src/client/mod.rs
+index d55e4c4..f28fe9a 100644
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -2234,6 +2234,9 @@ async fn run_client_loop(
+                     let (effects, outcome, frame) = {
+                         let shell = state.shell.as_mut().expect("checked shell mode");
+                         let mut outcome = shell.tick_selection_autoscroll(now);
++                        let inbox_focus = shell.tick_inbox_focus(now);
++                        outcome.actions.extend(inbox_focus.actions);
++                        outcome.repaint |= inbox_focus.repaint;
+                         for expired in expired_endpoints {
+                             if !shell.endpoint_is_active(&expired.endpoint_id) {
+                                 continue;
+diff --git a/src/client/shell/actions.rs b/src/client/shell/actions.rs
+index 9d0a3bd..33da692 100644
+--- a/src/client/shell/actions.rs
++++ b/src/client/shell/actions.rs
+@@ -181,6 +181,24 @@ impl ClientShellState {
+                 outcome.actions.push(ClientShellAction::Keybind(action));
+             }
+             crate::input::KeybindMatch::Command(command) => {
++                let inbox_action = self
++                    .config
++                    .inbox_mode
++                    .then(|| {
++                        ["new", "open"].into_iter().find(|action| {
++                            let labels = self.inbox_binding_labels(action);
++                            command.action == crate::config::CustomCommandAction::PluginAction
++                                && !labels.is_empty()
++                                && labels
++                                    .iter()
++                                    .all(|label| command.bindings.labels().contains(label))
++                        })
++                    })
++                    .flatten();
++                if let Some(action) = inbox_action {
++                    self.open_inbox_action(action, outcome);
++                    return;
++                }
+                 let action = command.action.into();
+                 let resolved_labels = command.bindings.labels();
+                 let command_id = self.snapshot.as_deref().and_then(|snapshot| {
+@@ -304,6 +322,142 @@ impl ClientShellState {
+         );
+     }
+ 
++    fn inbox_binding_labels(&self, action: &str) -> Vec<String> {
++        let config = crate::config::Config {
++            keys: self.config.local_keys.clone(),
++            ..Default::default()
++        };
++        config
++            .keybinds()
++            .custom_commands
++            .iter()
++            .find(|binding| binding.command == format!("lucas.herdr-inbox.{action}"))
++            .map(|binding| binding.bindings.labels())
++            .unwrap_or_else(|| {
++                vec![if action == "new" {
++                    "prefix+c"
++                } else {
++                    "prefix+j"
++                }
++                .into()]
++            })
++    }
++
++    // Run the composer on Local, where the user's saved fleet profiles live,
++    // even while the client is presenting a remote agent terminal.
++    pub(super) fn open_inbox_action(&mut self, action: &str, outcome: &mut ClientShellInput) {
++        let labels = self.inbox_binding_labels(action);
++        let snapshot = if self.active_endpoint_id.is_local() {
++            self.snapshot.as_deref()
++        } else {
++            self.endpoints
++                .iter()
++                .find(|endpoint| endpoint.endpoint_id.is_local())
++                .and_then(|endpoint| endpoint.snapshot.as_deref())
++        };
++        let Some(snapshot) = snapshot else {
++            return;
++        };
++        let Some(command) = snapshot.commands.iter().find(|command| {
++            command.action == crate::protocol::ClientShellCommandAction::PluginAction
++                && !labels.is_empty()
++                && labels
++                    .iter()
++                    .all(|label| command.binding_labels.contains(label))
++        }) else {
++            self.set_endpoint_error(
++                "inbox launcher is not configured on Local; reload configuration",
++            );
++            outcome.repaint = true;
++            return;
++        };
++        // The TUI transport supports command.invoke, not the public API's
++        // plugin.action.invoke. Resolve the server's opaque command ID.
++        let boot_id = snapshot.boot_id.clone();
++        let method =
++            crate::api::schema::Method::CommandInvoke(crate::api::schema::CommandInvokeParams {
++                command_id: command.command_id.clone(),
++                workspace_id: snapshot.focused_workspace_id.clone(),
++                tab_id: snapshot.focused_tab_id.clone(),
++                pane_id: snapshot.focused_pane_id.clone(),
++                selection: None,
++            });
++        let label = if action == "new" {
++            "New thread"
++        } else {
++            "Agent inbox"
++        }
++        .to_string();
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
++        if self.active_endpoint_id.is_local() {
++            self.pending_inbox_focus = Some((label, boot_id, deadline));
++            self.push_endpoint_method(method, outcome);
++            return;
++        }
++        self.activate_endpoint(ClientEndpointId::Local, outcome);
++        self.pending_inbox_focus = Some((label, boot_id.clone(), deadline));
++        let request_id = format!("client-shell:{}", self.next_request_id);
++        self.next_request_id = self.next_request_id.saturating_add(1);
++        self.pending_requests.insert(
++            request_id.clone(),
++            PendingEndpointRequest {
++                boot_id: boot_id.clone(),
++                method_name: "command.invoke".into(),
++                confirmation_workspace_id: None,
++                kind: PendingEndpointKind::Generic,
++            },
++        );
++        outcome.actions.push(ClientShellAction::Endpoint {
++            endpoint_id: ClientEndpointId::Local,
++            boot_id,
++            request: Box::new(crate::api::schema::Request {
++                id: request_id,
++                method,
++            }),
++        });
++    }
++
++    pub(crate) fn tick_inbox_focus(&mut self, now: std::time::Instant) -> ClientShellInput {
++        let mut outcome = ClientShellInput::default();
++        let Some((label, boot_id, deadline)) = self.pending_inbox_focus.as_ref() else {
++            return outcome;
++        };
++        if now >= *deadline {
++            self.pending_inbox_focus = None;
++            return outcome;
++        }
++        if !self.active_endpoint_id.is_local() {
++            return outcome;
++        }
++        if self
++            .snapshot
++            .as_deref()
++            .is_some_and(|snapshot| &snapshot.boot_id != boot_id)
++        {
++            self.pending_inbox_focus = None;
++            return outcome;
++        }
++        // Plugin actions create/focus their pane through the public API. That
++        // changes server focus, while each attached client owns its own focus.
++        // Complete this client's explicit New-thread request over its TUI channel.
++        let pane_id = self.snapshot.as_deref().and_then(|snapshot| {
++            snapshot
++                .panes
++                .iter()
++                .rev()
++                .find(|pane| pane.label.as_ref() == Some(label))
++                .map(|pane| pane.pane_id.clone())
++        });
++        if let Some(pane_id) = pane_id {
++            self.pending_inbox_focus = None;
++            self.push_endpoint_method(
++                crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id }),
++                &mut outcome,
++            );
++        }
++        outcome
++    }
++
+     pub(super) fn push_endpoint_method(
+         &mut self,
+         method: crate::api::schema::Method,
+@@ -371,6 +525,7 @@ impl ClientShellState {
+             _ => false,
+         };
+         if changes_focus {
++            self.pending_inbox_focus = None;
+             outcome.repaint |= self.pending_workspace_highlight.take().is_some();
+         }
+         if !self.endpoint_is_online(&self.active_endpoint_id) {
+diff --git a/src/client/shell/agent_sidebar.rs b/src/client/shell/agent_sidebar.rs
+index e43ab8c..3556187 100644
+--- a/src/client/shell/agent_sidebar.rs
++++ b/src/client/shell/agent_sidebar.rs
+@@ -113,7 +113,11 @@ pub(super) fn render_agent_panel_header(
+         area.x,
+         area.y + 1,
+         area.width,
+-        " agents",
++        if config.inbox_mode {
++            " threads"
++        } else {
++            " agents"
++        },
+         Style::default()
+             .fg(config.palette.overlay0)
+             .add_modifier(Modifier::BOLD),
+@@ -292,24 +296,69 @@ pub(super) fn agent_row(
+         .agent
+         .as_deref()
+         .and_then(crate::detect::parse_agent_label);
+-    let rows = crate::ui::sidebar_agent_rows(
+-        &config.agents,
+-        crate::ui::AgentTokenContext {
+-            machine,
+-            workspace: &workspace.label,
+-            tab: tab_label,
+-            pane: agent
+-                .title
+-                .as_deref()
+-                .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
+-            agent_label,
+-            terminal_title: agent.terminal_title.as_deref(),
+-            terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
+-            canonical_agent,
+-            tokens: &tokens,
+-        },
+-        state_text,
+-    );
++    let rows = if config.inbox_mode {
++        use crate::ui::{ResolvedToken, ResolvedTokenKind};
++        let text = |kind| ResolvedToken {
++            kind,
++            style: Default::default(),
++        };
++        let fallback = format!("New {} thread", agent.agent.as_deref().unwrap_or("agent"));
++        let title = tokens
++            .get("thread")
++            .map(String::as_str)
++            .or(agent.terminal_title_stripped.as_deref())
++            .or(tab_label)
++            .or(agent.title.as_deref())
++            .or(agent.name.as_deref())
++            .filter(|value| !value.trim().is_empty())
++            .unwrap_or(&fallback);
++        let title = match title
++            .strip_prefix('[')
++            .and_then(|value| value.split_once(']'))
++        {
++            Some((number, rest)) if number.chars().all(|c| c.is_ascii_digit()) => rest.trim(),
++            _ => title,
++        };
++        let mut rows = vec![
++            vec![text(ResolvedTokenKind::Workspace(workspace.label.clone()))],
++            vec![text(ResolvedTokenKind::TerminalTitle(
++                title.split_whitespace().collect::<Vec<_>>().join(" "),
++            ))],
++        ];
++        if let Some(branch) = workspace
++            .branch
++            .as_deref()
++            .filter(|branch| !branch.is_empty())
++        {
++            rows.push(vec![text(ResolvedTokenKind::Custom(format!("↳ {branch}")))]);
++        }
++        rows.push(vec![text(ResolvedTokenKind::Custom(format!(
++            "{} · {}",
++            machine.unwrap_or("Local"),
++            agent.agent.as_deref().unwrap_or("agent")
++        )))]);
++        rows.push(vec![]);
++        rows
++    } else {
++        crate::ui::sidebar_agent_rows(
++            &config.agents,
++            crate::ui::AgentTokenContext {
++                machine,
++                workspace: &workspace.label,
++                tab: tab_label,
++                pane: agent
++                    .title
++                    .as_deref()
++                    .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
++                agent_label,
++                terminal_title: agent.terminal_title.as_deref(),
++                terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
++                canonical_agent,
++                tokens: &tokens,
++            },
++            state_text,
++        )
++    };
+     Some(AgentRow {
+         pane_id: agent.pane_id.clone(),
+         status: agent.agent_status,
+@@ -324,6 +373,10 @@ pub(super) fn render_agent_row(
+     row: &AgentRow,
+     config: &ClientShellConfig,
+ ) {
++    if config.inbox_mode {
++        render_inbox_row(buffer, rect, row, config);
++        return;
++    }
+     let palette = &config.palette;
+     let row_style = if row.focused {
+         Style::default().bg(palette.active_row_bg)
+@@ -373,6 +426,64 @@ pub(super) fn render_agent_row(
+     }
+ }
+ 
++fn render_inbox_row(buffer: &mut Buffer, rect: Rect, row: &AgentRow, config: &ClientShellConfig) {
++    use crate::api::schema::AgentStatus;
++    use crate::ui::ResolvedTokenKind;
++    let palette = &config.palette;
++    let background = if row.focused {
++        Style::default().bg(palette.active_row_bg)
++    } else {
++        Style::default()
++    };
++    let status = match row.status {
++        AgentStatus::Blocked => "Input",
++        AgentStatus::Done => "Ready",
++        AgentStatus::Working => "Working",
++        AgentStatus::Idle | AgentStatus::Unknown => "Waiting",
++    };
++    for (index, tokens) in row.rows.iter().take(rect.height as usize).enumerate() {
++        let text = tokens
++            .first()
++            .map(|token| match &token.kind {
++                ResolvedTokenKind::Workspace(value)
++                | ResolvedTokenKind::TerminalTitle(value)
++                | ResolvedTokenKind::Custom(value) => value.as_str(),
++                _ => "",
++            })
++            .unwrap_or("");
++        let style = if index == 1 {
++            Style::default()
++                .fg(palette.text)
++                .add_modifier(Modifier::BOLD)
++        } else {
++            Style::default().fg(palette.overlay0)
++        };
++        let line = Rect::new(rect.x, rect.y + index as u16, rect.width, 1);
++        Paragraph::new("").style(background).render(line, buffer);
++        let width = if index == 0 {
++            rect.width.saturating_sub(status.len() as u16 + 5)
++        } else {
++            rect.width.saturating_sub(4)
++        };
++        Paragraph::new(crate::ui::truncate_end(text, width as usize))
++            .style(background.patch(style))
++            .render(Rect::new(line.x + 2, line.y, width, 1), buffer);
++        if index == 0 && rect.width > status.len() as u16 + 4 {
++            Paragraph::new(status)
++                .style(background.fg(status_color(row.status, palette)))
++                .render(
++                    Rect::new(
++                        line.x + line.width - status.len() as u16 - 2,
++                        line.y,
++                        status.len() as u16,
++                        1,
++                    ),
++                    buffer,
++                );
++        }
++    }
++}
++
+ fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
+     for (offset, character) in text.chars().take(width as usize).enumerate() {
+         if let Some(cell) = buffer.cell_mut((x + offset as u16, y)) {
+diff --git a/src/client/shell/composition.rs b/src/client/shell/composition.rs
+index b7ab4a9..a7884ba 100644
+--- a/src/client/shell/composition.rs
++++ b/src/client/shell/composition.rs
+@@ -132,8 +132,7 @@ impl ClientShellState {
+             None,
+             self.endpoint_error.as_deref(),
+             false,
+-            &self.config.keybinds,
+-            &self.config.palette,
++            &self.config,
+         );
+         if let Some(notice) = &self.visible_endpoint_notice {
+             self.hits.notification_toast = endpoint_notices::render_notice(
+@@ -328,8 +327,7 @@ impl ClientShellState {
+                 self.copy_mode.as_ref(),
+                 self.endpoint_error.as_deref(),
+                 snapshot.update_available.is_some(),
+-                &self.config.keybinds,
+-                &self.config.palette,
++                &self.config,
+             )
+         };
+         if mode_bar == Some(layout.tab_bar) {
+diff --git a/src/client/shell/config.rs b/src/client/shell/config.rs
+index bfa1fb2..3f31cb5 100644
+--- a/src/client/shell/config.rs
++++ b/src/client/shell/config.rs
+@@ -113,6 +113,7 @@ impl ClientShellConfig {
+     pub(crate) fn from_config(config: &Config) -> Self {
+         let theme_runtime = crate::app::client_theme_runtime_from_config(config);
+         Self {
++            inbox_mode: std::env::var("HERDR_INBOX_MODE").is_ok_and(|value| value == "1"),
+             sidebar_width: config.ui.sidebar_width,
+             sidebar_min_width: config.ui.sidebar_min_width,
+             sidebar_max_width: config.ui.sidebar_max_width,
+@@ -390,7 +391,8 @@ impl ClientShellConfig {
+         }
+         .min(cols.saturating_sub(1));
+         let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
+-        let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
++        let show_tab_bar =
++            rows > 1 && !self.inbox_mode && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
+         let tab_height = u16::from(show_tab_bar);
+         let (tab_bar, pane_surface) = match self.tab_bar_position {
+             TabBarPositionConfig::Top => (
+diff --git a/src/client/shell/endpoint_navigation.rs b/src/client/shell/endpoint_navigation.rs
+index a1f7ac2..d6faca4 100644
+--- a/src/client/shell/endpoint_navigation.rs
++++ b/src/client/shell/endpoint_navigation.rs
+@@ -231,6 +231,7 @@ impl ClientShellState {
+         outcome: &mut ClientShellInput,
+     ) -> bool {
+         self.pending_workspace_highlight = None;
++        self.pending_inbox_focus = None;
+         self.pending_agent_reveal = None;
+         let online = self.endpoint_is_online(&endpoint_id);
+         if !online && !endpoint_id.is_local() {
+diff --git a/src/client/shell/endpoint_sidebar.rs b/src/client/shell/endpoint_sidebar.rs
+index 9698248..f2a48fc 100644
+--- a/src/client/shell/endpoint_sidebar.rs
++++ b/src/client/shell/endpoint_sidebar.rs
+@@ -21,6 +21,17 @@ pub(super) fn render_collapsed(
+ ) {
+     let palette = &config.palette;
+     super::render::render_sidebar_background(buffer, area, palette);
++    if config.inbox_mode {
++        super::endpoint_agents::render_collapsed(
++            buffer,
++            area,
++            state.endpoints,
++            state.active_endpoint_id,
++            config,
++            hits,
++        );
++        return;
++    }
+     let (workspace_area, divider_y, detail_area) = super::sidebar::collapsed_sidebar_sections(area);
+     let mut total_rows = 0usize;
+     let mut selected_row = None;
+@@ -249,6 +260,20 @@ pub(super) fn render_expanded(
+     } else {
+         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
+     };
++    if config.inbox_mode {
++        let content = super::render::render_inbox_header(buffer, area, config, hits);
++        super::endpoint_agents::render_expanded(
++            buffer,
++            content,
++            None,
++            state.endpoints,
++            state.active_endpoint_id,
++            config,
++            state.agent_scroll,
++            hits,
++        );
++        return;
++    }
+     let (workspace_area, detail_area) =
+         crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+     hits.sidebar_section_divider =
+diff --git a/src/client/shell/mouse.rs b/src/client/shell/mouse.rs
+index f2df294..c1b6d6c 100644
+--- a/src/client/shell/mouse.rs
++++ b/src/client/shell/mouse.rs
+@@ -2008,6 +2008,10 @@ impl ClientShellState {
+                     outcome.repaint = true;
+                     return;
+                 }
++                if super::contains(self.hits.inbox_new_thread, point) {
++                    self.open_inbox_action("new", outcome);
++                    return;
++                }
+                 if super::contains(self.hits.new_workspace, point) {
+                     self.record_binding(
+                         crate::input::KeybindMatch::Action(
+diff --git a/src/client/shell/render.rs b/src/client/shell/render.rs
+index 248216c..5d90737 100644
+--- a/src/client/shell/render.rs
++++ b/src/client/shell/render.rs
+@@ -35,8 +35,7 @@ pub(super) fn render_mode_bar(
+     copy_mode: Option<&ClientCopyModeState>,
+     endpoint_error: Option<&str>,
+     update_available: bool,
+-    keybinds: &LiveKeybindConfig,
+-    palette: &Palette,
++    config: &ClientShellConfig,
+ ) -> Option<Rect> {
+     if (mode == ClientShellMode::Terminal && endpoint_error.is_none()) || pane_area.is_empty() {
+         return None;
+@@ -48,6 +47,8 @@ pub(super) fn render_mode_bar(
+         pane_area.width,
+         1,
+     );
++    let keybinds = &config.keybinds;
++    let palette = &config.palette;
+     let base = Style::default().fg(palette.overlay0).bg(palette.panel_bg);
+     for x in bar.x..bar.x + bar.width {
+         buffer[(x, bar.y)].set_symbol(" ").set_style(base);
+@@ -57,17 +58,24 @@ pub(super) fn render_mode_bar(
+         .fg(palette.accent)
+         .bg(palette.panel_bg)
+         .add_modifier(Modifier::BOLD);
+-    let mode_style = Style::default()
+-        .fg(match palette.panel_bg {
+-            ratatui::style::Color::Reset => palette.surface_dim,
+-            color => color,
+-        })
+-        .bg(if mode == ClientShellMode::Resize {
+-            palette.mauve
+-        } else {
+-            palette.accent
+-        })
+-        .add_modifier(Modifier::BOLD);
++    let mode_color = if mode == ClientShellMode::Resize {
++        palette.mauve
++    } else {
++        palette.accent
++    };
++    // Keep Inbox's bottom edge uniform: terminals can extend the last row's
++    // background into window padding, making a filled badge look several rows tall.
++    let mode_style = if config.inbox_mode {
++        Style::default().fg(mode_color).bg(palette.panel_bg)
++    } else {
++        Style::default()
++            .fg(match palette.panel_bg {
++                ratatui::style::Color::Reset => palette.surface_dim,
++                color => color,
++            })
++            .bg(mode_color)
++    }
++    .add_modifier(Modifier::BOLD);
+     let prefix = keybinds.primary_prefix_label();
+     let prefix_rhs = |bindings: &crate::config::ActionKeybinds| {
+         bindings
+@@ -327,6 +335,7 @@ pub(super) fn render_shell(
+         hits.workspace_scrollbar = Rect::default();
+         hits.agent_scrollbar = Rect::default();
+         hits.agent_sort_toggle = Rect::default();
++        hits.inbox_new_thread = Rect::default();
+         hits.new_workspace = Rect::default();
+         hits.machines.clear();
+         hits.workspaces.clear();
+@@ -375,3 +384,62 @@ pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &s
+ pub(super) fn display_width(text: &str) -> u16 {
+     UnicodeWidthStr::width(text).min(u16::MAX as usize) as u16
+ }
++
++// The inbox chrome belongs to this client; agent facts still come from each server.
++pub(super) fn render_inbox_header(
++    buffer: &mut Buffer,
++    area: Rect,
++    config: &ClientShellConfig,
++    hits: &mut ShellHitMap,
++) -> Rect {
++    hits.inbox_new_thread = Rect::new(
++        area.x + 1,
++        area.y,
++        area.width.saturating_sub(3),
++        u16::from(area.height > 0),
++    );
++    put_text(
++        buffer,
++        hits.inbox_new_thread.x,
++        area.y,
++        hits.inbox_new_thread.width,
++        "+ New thread",
++        Style::default()
++            .fg(config.palette.accent)
++            .add_modifier(Modifier::BOLD),
++    );
++    hits.global_launcher = Rect::new(
++        area.x + 1,
++        area.bottom().saturating_sub(1),
++        4.min(area.width.saturating_sub(2)),
++        u16::from(area.height > 0),
++    );
++    put_text(
++        buffer,
++        hits.global_launcher.x,
++        hits.global_launcher.y,
++        hits.global_launcher.width,
++        "menu",
++        Style::default().fg(config.palette.overlay0),
++    );
++    hits.sidebar_toggle = Rect::new(
++        area.right().saturating_sub(2),
++        area.bottom().saturating_sub(1),
++        u16::from(area.width > 1),
++        u16::from(area.height > 0),
++    );
++    put_text(
++        buffer,
++        hits.sidebar_toggle.x,
++        hits.sidebar_toggle.y,
++        hits.sidebar_toggle.width,
++        "«",
++        Style::default().fg(config.palette.overlay0),
++    );
++    Rect::new(
++        area.x,
++        area.y.saturating_add(2),
++        area.width.saturating_sub(1),
++        area.height.saturating_sub(3),
++    )
++}
+diff --git a/src/client/shell/sidebar.rs b/src/client/shell/sidebar.rs
+index f94f6bd..eda37a0 100644
+--- a/src/client/shell/sidebar.rs
++++ b/src/client/shell/sidebar.rs
+@@ -211,6 +211,11 @@ pub(crate) fn render_sidebar(
+     } else {
+         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
+     };
++    if config.inbox_mode {
++        let content = super::render::render_inbox_header(buffer, area, config, hits);
++        super::render_agent_panel(buffer, content, snapshot, config, state.agent_scroll, hits);
++        return;
++    }
+     let (workspace_area, detail_area) =
+         crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+     hits.sidebar_section_divider =
+diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
+index c170c9b..1e7c129 100644
+--- a/src/client/shell/state.rs
++++ b/src/client/shell/state.rs
+@@ -13,6 +13,7 @@ pub(crate) enum ClientShellKeybindingSource {
+ }
+ 
+ pub(crate) struct ClientShellConfig {
++    pub(super) inbox_mode: bool,
+     pub(super) sidebar_width: u16,
+     pub(super) sidebar_min_width: u16,
+     pub(super) sidebar_max_width: u16,
+@@ -103,6 +104,7 @@ pub(super) struct ShellHitMap {
+     pub(super) sidebar_divider: Rect,
+     pub(super) sidebar_section_divider: Rect,
+     pub(super) sidebar_toggle: Rect,
++    pub(super) inbox_new_thread: Rect,
+     pub(super) new_workspace: Rect,
+     pub(super) new_tab: Rect,
+     pub(super) tab_scroll_left: Rect,
+@@ -920,6 +922,7 @@ pub(crate) struct ClientShellState {
+     pub(super) popup_pending_deadline: Option<std::time::Instant>,
+     pub(super) next_request_id: u64,
+     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
++    pub(super) pending_inbox_focus: Option<(String, String, std::time::Instant)>,
+     pub(super) pending_integration_installs: usize,
+     pub(super) pending_notifications: Vec<ClientPendingNotification>,
+     pub(super) visible_notification: Option<ClientVisibleNotification>,
+@@ -1085,6 +1088,7 @@ impl ClientShellState {
+             popup_pending_deadline: None,
+             next_request_id: 1,
+             pending_requests: HashMap::new(),
++            pending_inbox_focus: None,
+             pending_integration_installs: 0,
+             pending_notifications: Vec::new(),
+             visible_notification: None,
+diff --git a/src/client/shell/tests/endpoints.rs b/src/client/shell/tests/endpoints.rs
+index f327f8c..555e32a 100644
+--- a/src/client/shell/tests/endpoints.rs
++++ b/src/client/shell/tests/endpoints.rs
+@@ -2591,3 +2591,203 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
+         }] if activated == &endpoint_id && workspace_id == "ws_1"
+     ));
+ }
++
++#[test]
++fn inbox_mode_hides_machine_and_tab_chrome_and_keeps_cross_machine_agents() {
++    let (mut state, remote_id) = state_with_remote();
++    state.config.inbox_mode = true;
++    let mut local = snapshot();
++    local.agents.push(agent(
++        "local-worker",
++        crate::api::schema::AgentStatus::Working,
++        1,
++    ));
++    state.set_snapshot(Box::new(local));
++    let mut remote = snapshot();
++    remote.boot_id = "remote-boot".into();
++    remote.agents.push(agent(
++        "remote-worker",
++        crate::api::schema::AgentStatus::Blocked,
++        1,
++    ));
++    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
++    let frame = state.compose(120, 40).expect("inbox frame");
++    assert!(state.hits.machines.is_empty());
++    assert!(state.hits.workspaces.is_empty());
++    assert!(state.hits.tabs.is_empty());
++    assert!(state.hits.sidebar_section_divider.is_empty());
++    assert!(!state.hits.inbox_new_thread.is_empty());
++    assert!(state
++        .hits
++        .endpoint_agents
++        .iter()
++        .any(|(_, id, _)| id.is_local()));
++    assert!(state
++        .hits
++        .endpoint_agents
++        .iter()
++        .any(|(_, id, _)| id == &remote_id));
++    let text = frame
++        .cells
++        .iter()
++        .map(|cell| cell.symbol.as_str())
++        .collect::<String>();
++    assert!(text.contains("+ New thread"));
++    assert!(!text.contains("machines"));
++}
++
++#[test]
++fn inbox_new_thread_from_remote_view_routes_the_picker_to_local() {
++    let (mut state, remote_id) = state_with_remote();
++    state.config.inbox_mode = true;
++    let mut local = snapshot();
++    local.commands.push(inbox_command());
++    state.set_snapshot(Box::new(local));
++    state.set_endpoint_methods(Some(vec!["command.invoke".into()]));
++    assert!(state.activate_endpoint_projection(&remote_id));
++    state.compose(120, 40).expect("inbox frame");
++    let hit = state.hits.inbox_new_thread;
++    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: hit.x,
++        row: hit.y,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { endpoint_id: ClientEndpointId::Local, request, .. }
++            if matches!(&request.method, crate::api::schema::Method::CommandInvoke(params) if params.command_id == "cmd_inbox_new"))));
++}
++
++fn inbox_command() -> crate::protocol::ClientShellCommand {
++    crate::protocol::ClientShellCommand {
++        command_id: "cmd_inbox_new".into(),
++        binding_label: "prefix+c".into(),
++        binding_labels: vec!["prefix+c".into()],
++        action: crate::protocol::ClientShellCommandAction::PluginAction,
++        description: Some("New agent thread".into()),
++    }
++}
++
++#[test]
++fn inbox_local_client_uses_the_registered_tui_command() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.config.inbox_mode = true;
++    let mut local = snapshot();
++    local.commands.push(inbox_command());
++    local
++        .agents
++        .push(agent("worker", crate::api::schema::AgentStatus::Working, 1));
++    state.set_snapshot(Box::new(local));
++    state.set_pane_surface(surface());
++    state.set_endpoint_methods(Some(vec!["command.invoke".into()]));
++    state.compose(120, 40).expect("local inbox frame");
++    assert!(!state.hits.agents.is_empty());
++    assert!(state.hits.workspaces.is_empty());
++    let hit = state.hits.inbox_new_thread;
++    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: hit.x,
++        row: hit.y,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { request, .. }
++            if matches!(&request.method, crate::api::schema::Method::CommandInvoke(params) if params.command_id == "cmd_inbox_new"))));
++}
++
++#[test]
++fn inbox_new_thread_follows_the_created_main_pane_once() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.config.inbox_mode = true;
++    let mut initial = snapshot();
++    initial.commands.push(inbox_command());
++    state.set_snapshot(Box::new(initial.clone()));
++    state.set_endpoint_methods(Some(vec!["command.invoke".into(), "pane.focus".into()]));
++    let mut outcome = ClientShellInput::default();
++    state.open_inbox_action("new", &mut outcome);
++    assert!(state
++        .tick_inbox_focus(std::time::Instant::now())
++        .actions
++        .is_empty());
++    let mut composer = initial.panes[0].clone();
++    composer.pane_id = "composer-pane".into();
++    composer.label = Some("New thread".into());
++    initial.panes.push(composer);
++    initial.revision += 1;
++    state.set_snapshot(Box::new(initial));
++    let focus = state.tick_inbox_focus(std::time::Instant::now());
++    assert!(focus.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { request, .. }
++        if matches!(&request.method, crate::api::schema::Method::PaneFocus(params) if params.pane_id == "composer-pane"))));
++    assert!(state
++        .tick_inbox_focus(std::time::Instant::now())
++        .actions
++        .is_empty());
++}
++
++#[test]
++fn inbox_pending_focus_expires_and_does_not_cross_a_server_restart() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.config.inbox_mode = true;
++    let mut initial = snapshot();
++    initial.commands.push(inbox_command());
++    state.set_snapshot(Box::new(initial.clone()));
++    let mut outcome = ClientShellInput::default();
++    state.open_inbox_action("new", &mut outcome);
++    assert!(state
++        .tick_inbox_focus(std::time::Instant::now() + std::time::Duration::from_secs(16))
++        .actions
++        .is_empty());
++    assert!(state.pending_inbox_focus.is_none());
++    state.open_inbox_action("new", &mut outcome);
++    initial.boot_id = "restarted-server".into();
++    initial.panes[0].label = Some("New thread".into());
++    state.set_snapshot(Box::new(initial));
++    assert!(state
++        .tick_inbox_focus(std::time::Instant::now())
++        .actions
++        .is_empty());
++    assert!(state.pending_inbox_focus.is_none());
++}
++
++#[test]
++fn inbox_pending_focus_does_not_override_later_thread_selection() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    let mut initial = snapshot();
++    initial.commands.push(inbox_command());
++    state.set_snapshot(Box::new(initial));
++    let mut outcome = ClientShellInput::default();
++    state.open_inbox_action("new", &mut outcome);
++    assert!(state.pending_inbox_focus.is_some());
++    state.push_endpoint_method(
++        crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
++            pane_id: "pane_1".into(),
++        }),
++        &mut outcome,
++    );
++    assert!(state.pending_inbox_focus.is_none());
++}
++
++#[test]
++fn inbox_composer_focus_survives_the_return_from_a_remote_thread() {
++    let (mut state, remote_id) = state_with_remote();
++    state.config.inbox_mode = true;
++    let mut local = snapshot();
++    local.commands.push(inbox_command());
++    local.panes[0].label = Some("New thread".into());
++    state.set_snapshot(Box::new(local));
++    state.set_endpoint_methods(Some(vec!["command.invoke".into(), "pane.focus".into()]));
++    assert!(state.activate_endpoint_projection(&remote_id));
++    let mut outcome = ClientShellInput::default();
++    state.open_inbox_action("new", &mut outcome);
++    assert!(state
++        .tick_inbox_focus(std::time::Instant::now())
++        .actions
++        .is_empty());
++    assert!(state.pending_inbox_focus.is_some());
++    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
++    let focus = state.tick_inbox_focus(std::time::Instant::now());
++    assert!(focus.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { endpoint_id, request, .. }
++        if endpoint_id.is_local() && matches!(&request.method, crate::api::schema::Method::PaneFocus(params) if params.pane_id == "pane_1"))));
++}

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile
+        run: python -m compileall -q inbox main.py tests
+      - name: Test
+        run: python -m unittest discover -s tests -v
+
+  manifest:
+    name: Plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Validate herdr-plugin.toml
+        run: |
+          python - <<'EOF'
+          import tomllib
+          manifest = tomllib.load(open("herdr-plugin.toml", "rb"))
+          for key in ("id", "name", "version", "min_herdr_version", "description", "platforms"):
+              assert manifest.get(key), key + " is missing"
+          ids = [entry["id"] for entry in manifest.get("actions", []) + manifest.get("panes", [])]
+          assert len(ids) == len(set(ids)), "duplicate entrypoint ids"
+          for entry in manifest.get("actions", []) + manifest.get("panes", []):
+              assert entry["command"][:2] == ["python3", "main.py"], entry
+          print("manifest ok:", manifest["id"], manifest["version"])
+          EOF
