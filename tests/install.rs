@@ -87,7 +87,8 @@ fn it_installs_the_binary_for_this_platform_and_says_so() {
     assert!(stdout.contains("Downloading herdr-inbox-linux-x86_64.tar.gz"), "{}", said(&output));
     assert!(
         stdout.contains(&format!("Installed herdr-inbox 1.2.3 to {}/bin/herdr-inbox", dir.path().display())),
-        "{}", said(&output)
+        "{}",
+        said(&output)
     );
     assert!(!stdout.contains("not on your PATH"), "{}", said(&output));
     let binary = dir.path().join("bin/herdr-inbox");
