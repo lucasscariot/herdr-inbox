@@ -14,7 +14,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import banner, speech
+from . import banner, meter, speech
 from .herdr import HerdrError
 from .inventory import checkout_for, discover, models_fresh
 from .live import Links
@@ -701,7 +701,7 @@ class UI:
             self.notify(str(error), WARN)
             return
         self.speech_target = target
-        self.notify("● Recording — Enter stops and sends, Ctrl+T stops to edit, Esc cancels", WARN)
+        self.message = ""
 
     def stop_dictation(self, send):
         recording, self.recording = self.recording, None
@@ -799,6 +799,20 @@ class UI:
         self.text(y, x + 2 + width_of(entry.prompt) + available, " ]", curses.color_pair(ACCENT))
         self.cursor_position = y, x + 2 + width_of(entry.prompt) + width_of(entry.text[offset:entry.cursor])
 
+    def draw_recording_strip(self, y, x, width):
+        """The live microphone meter: elapsed time, an equalizer, and a note when nothing is coming in."""
+        seconds = int(self.recording.elapsed())
+        label = "● %d:%02d " % divmod(seconds, 60)
+        self.text(y, x, label, curses.color_pair(WARN) | curses.A_BOLD, width)
+        note = "   no sound is reaching the microphone" if self.recording.quiet() else ""
+        bar_width = max(0, min(40, width - width_of(label) - width_of(note)))
+        column = x + width_of(label)
+        for text, tone in meter.bars(self.recording.levels(), bar_width)[0] if bar_width else ():
+            self.text(y, column, text, curses.color_pair((OK, ACCENT, WARN)[tone]), width - (column - x))
+            column += len(text)
+        if note:
+            self.text(y, column, note, curses.color_pair(WARN), width - (column - x))
+
     def draw_header(self, height, width):
         title = "New thread" if self.view == "new" else "Agent inbox"
         self.text(0, 2, title, curses.A_BOLD)
@@ -857,7 +871,7 @@ class UI:
         wrapped, (cursor_row, cursor_column), positions = task_layout(self.task, self.cursor, task_width)
         thinking_visible = self.thinking_visible()
         notes = self.visible_launches()
-        extra = int(stacked) + min(3, len(notes)) + int(bool(self.message))
+        extra = int(stacked) + min(3, len(notes)) + int(bool(self.message) or bool(self.recording))
         task_height = min(max(4, len(wrapped)), max(3, min(10, height - 12 - extra)))
         offset = max(0, min(cursor_row - task_height + 1, len(wrapped) - task_height))
         block = task_height + 8 + extra
@@ -895,8 +909,7 @@ class UI:
         self.text(y, x + 2, " Task ", border_style | curses.A_BOLD)
         self.anchors[DICTATION] = (y + 1, x + 2)
         if self.recording and self.speech_target == "task":
-            seconds = int(self.recording.elapsed())
-            marker = " ● Recording " + str(seconds // 60) + ":" + str(seconds % 60).zfill(2) + " "
+            marker = " ● Recording "  # the meter strip below carries the clock and the levels
             self.text(y, x + box_width - len(marker) - 2, marker, curses.color_pair(WARN) | curses.A_BOLD)
         elif self.transcribing and self.speech_target == "task":
             marker = " ⟳ Transcribing… "
@@ -942,7 +955,9 @@ class UI:
             label = glyph + " " + note["project"] + " · " + note["harness"] + " · " + note["title"] + " — " + note["message"]
             self.text(line, x + 2, label, curses.color_pair(color), box_width - 4)
             line += 1
-        if self.message:
+        if self.recording:
+            self.draw_recording_strip(line, x + 2, box_width - 4)
+        elif self.message:
             self.text(line, x + 2, self.message.splitlines()[0], curses.color_pair(self.message_color) if self.message_color else 0, box_width - 4)
         if height >= 24:
             if self.recording:
@@ -1088,9 +1103,11 @@ class UI:
         trouble = [m.label + ": " + (self.link_state.get(m.id, ("", ""))[1] or "connecting…") for m in self.machines if self.link_state.get(m.id, ("connecting", ""))[0] != "live" and not self.demo]
         if self.entry:
             self.draw_entry(height - 4, 2, width - 4)
-        elif self.message:
+        if self.recording:
+            self.draw_recording_strip(height - 3, 2, width - 4)
+        elif self.message and not self.entry:
             self.text(height - 3, 2, self.message.splitlines()[0], curses.color_pair(self.message_color) if self.message_color else 0, width - 4)
-        elif trouble:
+        elif trouble and not self.entry:
             self.text(height - 3, 2, ellipsis("   ".join(trouble), width - 4), curses.A_DIM)
         if self.recording:
             hints = ["Speak now   Enter stop and send   Ctrl+T stop and edit   Esc discard"]
@@ -1482,7 +1499,9 @@ class UI:
                     if self.banner_visible and not self.picker and not self.entry and not self.pasting:
                         self.banner_elapsed += min(elapsed, 0.25)
                         self.banner_pose, self.dirty = banner.pose(self.banner_elapsed), True
-                if (self.recording or self.in_flight("install", self.machines[0]) or self.launches and any(note["state"] == "running" for note in self.launches)) and now - getattr(self, "_tick", 0) > 0.5:
+                if self.recording and now - getattr(self, "_tick", 0) >= 1 / meter.FPS:
+                    self._tick, self.dirty = now, True
+                elif (self.in_flight("install", self.machines[0]) or self.launches and any(note["state"] == "running" for note in self.launches)) and now - getattr(self, "_tick", 0) > 0.5:
                     self._tick, self.dirty = now, True
                 if self.dirty or size != self.size:
                     self.draw()
@@ -1532,6 +1551,12 @@ class DemoRecording:
 
     def elapsed(self):
         return time.monotonic() - self.started
+
+    def levels(self):
+        return meter.synthetic(self.elapsed())
+
+    def quiet(self):
+        return False
 
     def stop(self):
         return os.devnull

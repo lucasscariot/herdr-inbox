@@ -1149,10 +1149,10 @@ index 9698248..e81eb0b 100644
          area.right().saturating_sub(2),
 diff --git a/src/client/shell/inbox_keys.rs b/src/client/shell/inbox_keys.rs
 new file mode 100644
-index 0000000..ec29459
+index 0000000..85b0edf
 --- /dev/null
 +++ b/src/client/shell/inbox_keys.rs
-@@ -0,0 +1,737 @@
+@@ -0,0 +1,799 @@
 +//! Keyboard flow for inbox mode.
 +//!
 +//! Tab moves focus between the thread list and the terminal, j/k walk the
@@ -1187,8 +1187,16 @@ index 0000000..ec29459
 +pub(super) enum InboxDictationEvent {
 +    Stdin(Box<dyn Write + Send>),
 +    Recording,
++    /// Live microphone levels, one per band, 0..=8 eighths of a cell.
++    Level {
++        bands: Vec<u8>,
++        quiet: bool,
++    },
 +    Transcribing,
-+    Done { mode: String, text: String },
++    Done {
++        mode: String,
++        text: String,
++    },
 +    Cancelled,
 +    Error(String),
 +    Exited,
@@ -1200,6 +1208,10 @@ index 0000000..ec29459
 +    Recording {
 +        since: std::time::Instant,
 +        shown_seconds: u64,
++        /// The equalizer the plugin reports while recording; empty until the first level line.
++        bands: Vec<u8>,
++        /// Nothing audible has reached the microphone for a few seconds.
++        quiet: bool,
 +    },
 +    Finishing {
 +        mode: &'static str,
@@ -1261,6 +1273,8 @@ index 0000000..ec29459
 +            phase: InboxDictationPhase::Recording {
 +                since: std::time::Instant::now(),
 +                shown_seconds: 0,
++                bands: Vec::new(),
++                quiet: false,
 +            },
 +            stdin: Some(Box::new(SharedWriter(written.clone()))),
 +            pending_command: None,
@@ -1400,6 +1414,16 @@ index 0000000..ec29459
 +            };
 +            let event = match value["event"].as_str().unwrap_or_default() {
 +                "recording" => InboxDictationEvent::Recording,
++                "level" => InboxDictationEvent::Level {
++                    bands: value["bands"]
++                        .as_array()
++                        .into_iter()
++                        .flatten()
++                        .filter_map(serde_json::Value::as_f64)
++                        .map(|level| (level.clamp(0.0, 1.0) * 8.0).round() as u8)
++                        .collect(),
++                    quiet: value["quiet"].as_bool().unwrap_or(false),
++                },
 +                "transcribing" => InboxDictationEvent::Transcribing,
 +                "done" => InboxDictationEvent::Done {
 +                    mode: value["mode"].as_str().unwrap_or("send").to_owned(),
@@ -1441,6 +1465,18 @@ index 0000000..ec29459
 +        }));
 +    }
 +    let _ = sender.send(InboxDictationEvent::Exited);
++}
++
++/// The plugin's equalizer as one row of block glyphs, the same look as its own panes.
++fn level_meter(bands: &[u8]) -> String {
++    const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
++    if bands.is_empty() {
++        return "▁".repeat(12);
++    }
++    bands
++        .iter()
++        .map(|&level| BLOCKS[usize::from(level.clamp(1, 8))])
++        .collect()
 +}
 +
 +/// What the mode bar shows for the inbox: a badge plus hint segments; `true` marks a key.
@@ -1759,7 +1795,19 @@ index 0000000..ec29459
 +                        session.phase = InboxDictationPhase::Recording {
 +                            since: now,
 +                            shown_seconds: 0,
++                            bands: Vec::new(),
++                            quiet: false,
 +                        };
++                    }
++                }
++                InboxDictationEvent::Level {
++                    bands: levels,
++                    quiet: silent,
++                } => {
++                    if let InboxDictationPhase::Recording { bands, quiet, .. } = &mut session.phase
++                    {
++                        *bands = levels;
++                        *quiet = silent;
 +                    }
 +                }
 +                InboxDictationEvent::Transcribing => {
@@ -1810,6 +1858,7 @@ index 0000000..ec29459
 +            InboxDictationPhase::Recording {
 +                since,
 +                shown_seconds,
++                ..
 +            } => {
 +                let seconds = now.saturating_duration_since(*since).as_secs();
 +                if seconds != *shown_seconds {
@@ -1841,10 +1890,23 @@ index 0000000..ec29459
 +                    badge: " DICTATE ".to_owned(),
 +                    segments: vec![(format!(" starting the recorder for {title}…"), false)],
 +                },
-+                InboxDictationPhase::Recording { shown_seconds, .. } => InboxStatus {
++                InboxDictationPhase::Recording {
++                    shown_seconds,
++                    bands,
++                    quiet,
++                    ..
++                } => InboxStatus {
 +                    badge: format!(" ● REC {}:{:02} ", shown_seconds / 60, shown_seconds % 60),
 +                    segments: vec![
-+                        (format!(" to {title}   "), false),
++                        (level_meter(bands), true),
++                        (
++                            if *quiet {
++                                format!("  no sound is reaching the microphone · to {title}   ")
++                            } else {
++                                format!("  to {title}   ")
++                            },
++                            false,
++                        ),
 +                        ("enter".to_owned(), true),
 +                        (" send  ".to_owned(), false),
 +                        ("ctrl+t".to_owned(), true),
@@ -2685,10 +2747,10 @@ index e54301a..b916a8b 100644
              query: TextEditor::default(),
 diff --git a/src/client/shell/tests/inbox_keyboard.rs b/src/client/shell/tests/inbox_keyboard.rs
 new file mode 100644
-index 0000000..ba25b7c
+index 0000000..247659d
 --- /dev/null
 +++ b/src/client/shell/tests/inbox_keyboard.rs
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,426 @@
 +use super::*;
 +use crate::api::schema::AgentStatus;
 +use crate::input::TerminalKey;
@@ -2948,6 +3010,45 @@ index 0000000..ba25b7c
 +    assert!(pane_input_for(&outcome, "pane_1"));
 +    assert!(state.tick_inbox_dictation(now + std::time::Duration::from_secs(5)));
 +    assert!(state.inbox_dictation.is_none());
++}
++
++#[test]
++fn level_lines_drive_the_meter_in_the_mode_bar() {
++    use super::super::inbox_keys::InboxDictationEvent;
++    let mut state = inbox_state("pane_1");
++    state.inbox_dictation_offline = true;
++    ctrl_t(&mut state);
++    let meter =
++        |state: &ClientShellState| state.inbox_status().expect("status").segments[0].0.clone();
++    assert_eq!(
++        meter(&state),
++        "▁".repeat(12),
++        "a flat meter before the first level line"
++    );
++    let (events, _) = state.inbox_dictation_probe.clone().expect("probe");
++    events
++        .send(InboxDictationEvent::Level {
++            bands: vec![0, 4, 8],
++            quiet: false,
++        })
++        .expect("send");
++    let now = std::time::Instant::now();
++    assert!(state.tick_inbox_dictation(now));
++    assert_eq!(meter(&state), "▁▄█");
++    assert!(!state.inbox_status().expect("status").segments[1]
++        .0
++        .contains("no sound"));
++    events
++        .send(InboxDictationEvent::Level {
++            bands: vec![0, 0, 0],
++            quiet: true,
++        })
++        .expect("send");
++    assert!(state.tick_inbox_dictation(now));
++    assert_eq!(meter(&state), "▁▁▁");
++    assert!(state.inbox_status().expect("status").segments[1]
++        .0
++        .contains("no sound is reaching the microphone"));
 +}
 +
 +#[test]

@@ -4,6 +4,19 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Live microphone meter while dictating: a twelve-band equalizer read from
+  the WAV the recorder is writing, with a noise floor so room hum stays low
+  and speech lights the bars. The composer and inbox show it next to the
+  elapsed time, the dictation popup draws it three rows tall, and the
+  thread-only client's `● REC` mode bar carries the same bars. All of them
+  note when nothing audible has reached the microphone for a few seconds.
+- `python3 main.py dictate --pane` prints `level` events (`bands`, `quiet`)
+  while recording, so any front end can draw the meter.
+
 ## [0.5.0] - 2026-10-08
 
 ### Added

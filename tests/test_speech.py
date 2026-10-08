@@ -202,7 +202,8 @@ class DictationFlowTests(unittest.TestCase):
         ui.task, ui.cursor = "Refactor", len("Refactor")
         ui.key("\x14")
         self.assertIsNotNone(ui.recording)
-        self.assertIn("Recording", ui.message)
+        self.assertEqual(ui.message, "")  # the live meter strip replaces the notice
+        self.assertEqual(len(ui.recording.levels()), 12)
         ui.key("x")  # typing is ignored while the microphone is open
         ui.key("\x14")
         self.assertIsNone(ui.recording)

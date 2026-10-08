@@ -163,6 +163,12 @@ Press **Ctrl+T**, speak, then **Enter** to send the transcribed task, or
 **Ctrl+T** again to edit it first. Escape discards the recording. Recording
 uses PipeWire, ALSA, PulseAudio, sox, or ffmpeg, whichever is installed.
 
+While the microphone is open, a live equalizer shows what it hears: the
+composer, the inbox, the popup, and the thread-only client's mode bar all draw
+the same bars, so you can tell at a glance that your voice is coming through.
+If nothing audible arrives for a few seconds, the meter says so, which is
+usually a muted microphone or the wrong input device.
+
 ### Dictate into a running thread
 
 The same flow works for a follow-up on any thread, not only the composer. Bind
@@ -185,7 +191,8 @@ thread-only client below needs no binding; its Ctrl+T works everywhere.
 
 `python3 main.py dictate --pane <id> [--machine <id>]` is the same engine for
 scripts: it prints JSON events and takes one line on stdin (`send`, `type`,
-or `cancel`).
+or `cancel`). While it records it prints `level` events with the meter's band
+levels (`bands`, 0 to 1) and a `quiet` flag, fifteen times a second.
 
 The first Ctrl+T, or **F10** at any time, opens the Dictation menu. No key is
 ever typed into a file:
