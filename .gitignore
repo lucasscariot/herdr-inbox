@@ -4,3 +4,6 @@ __pycache__/
 build/
 .venv/
 .DS_Store
+/target/
+*.pending-snap
+*.snap.new
