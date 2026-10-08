@@ -60,9 +60,14 @@ sha256() {
 }
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT INT TERM
+# Keep the script's own exit status: a cleanup that succeeds must never turn
+# a failure into a success.
+cleanup() { status=$?; rm -rf "$work"; exit "$status"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-say "Downloading $asset…"
+say "Downloading ${asset}..."
 download "$base/$asset" "$work/$asset" || fail "could not download $base/$asset"
 download "$base/$asset.sha256" "$work/$asset.sha256" || fail "could not download the checksum"
 expected=$(cut -d ' ' -f 1 < "$work/$asset.sha256")

@@ -84,7 +84,7 @@ fn it_installs_the_binary_for_this_platform_and_says_so() {
     let output = install(dir.path(), &releases, "Linux", "amd64", &path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{}", said(&output));
-    assert!(stdout.contains("Downloading herdr-inbox-linux-x86_64.tar.gz"), "{}", said(&output));
+    assert!(stdout.contains("Downloading herdr-inbox-linux-x86_64.tar.gz..."), "{}", said(&output));
     assert!(
         stdout.contains(&format!("Installed herdr-inbox 1.2.3 to {}/bin/herdr-inbox", dir.path().display())),
         "{}",
@@ -136,6 +136,31 @@ fn an_unsupported_platform_points_to_building_from_source() {
     );
     let output = install(dir.path(), &releases, "FreeBSD", "x86_64", &system_path());
     assert!(String::from_utf8_lossy(&output.stderr).contains("no prebuilt binary for FreeBSD"));
+}
+
+#[test]
+fn a_failure_is_never_reported_as_success_in_an_ascii_locale() {
+    // macOS's bash 3.2 in a C locale is where a non-ASCII byte after a
+    // variable once aborted the script with exit status 0.
+    let dir = tempfile::tempdir().unwrap();
+    let releases = release(dir.path(), "linux-x86_64", "1.0.0");
+    let output = Command::new("sh")
+        .arg(installer())
+        .env("LC_ALL", "C")
+        .env("HERDR_INBOX_BASE_URL", format!("file://{}", releases.display()))
+        .env("HERDR_INBOX_INSTALL_DIR", dir.path().join("bin"))
+        .env("HERDR_INBOX_OS", "Linux")
+        .env("HERDR_INBOX_ARCH", "aarch64")
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", said(&output));
+}
+
+#[test]
+fn the_script_is_plain_ascii() {
+    let script = std::fs::read(installer()).unwrap();
+    assert!(script.is_ascii(), "non-ASCII bytes break older shells in a C locale");
 }
 
 #[test]
