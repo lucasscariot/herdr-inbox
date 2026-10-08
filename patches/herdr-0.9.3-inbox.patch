@@ -13,7 +13,7 @@ index d55e4c4..f28fe9a 100644
                              if !shell.endpoint_is_active(&expired.endpoint_id) {
                                  continue;
 diff --git a/src/client/shell/actions.rs b/src/client/shell/actions.rs
-index 9d0a3bd..33da692 100644
+index 9d0a3bd..bfa7eb1 100644
 --- a/src/client/shell/actions.rs
 +++ b/src/client/shell/actions.rs
 @@ -181,6 +181,24 @@ impl ClientShellState {
@@ -25,7 +25,7 @@ index 9d0a3bd..33da692 100644
 +                    .inbox_mode
 +                    .then(|| {
 +                        ["new", "open"].into_iter().find(|action| {
-+                            let labels = self.inbox_binding_labels(action);
++                            let labels = inbox_binding_labels(&self.config, action);
 +                            command.action == crate::config::CustomCommandAction::PluginAction
 +                                && !labels.is_empty()
 +                                && labels
@@ -41,35 +41,14 @@ index 9d0a3bd..33da692 100644
                  let action = command.action.into();
                  let resolved_labels = command.bindings.labels();
                  let command_id = self.snapshot.as_deref().and_then(|snapshot| {
-@@ -304,6 +322,142 @@ impl ClientShellState {
+@@ -304,6 +322,242 @@ impl ClientShellState {
          );
      }
  
-+    fn inbox_binding_labels(&self, action: &str) -> Vec<String> {
-+        let config = crate::config::Config {
-+            keys: self.config.local_keys.clone(),
-+            ..Default::default()
-+        };
-+        config
-+            .keybinds()
-+            .custom_commands
-+            .iter()
-+            .find(|binding| binding.command == format!("lucasscariot.herdr-inbox.{action}"))
-+            .map(|binding| binding.bindings.labels())
-+            .unwrap_or_else(|| {
-+                vec![if action == "new" {
-+                    "prefix+c"
-+                } else {
-+                    "prefix+j"
-+                }
-+                .into()]
-+            })
-+    }
-+
 +    // Run the composer on Local, where the user's saved fleet profiles live,
 +    // even while the client is presenting a remote agent terminal.
 +    pub(super) fn open_inbox_action(&mut self, action: &str, outcome: &mut ClientShellInput) {
-+        let labels = self.inbox_binding_labels(action);
++        let labels = inbox_binding_labels(&self.config, action);
 +        let snapshot = if self.active_endpoint_id.is_local() {
 +            self.snapshot.as_deref()
 +        } else {
@@ -118,26 +97,147 @@ index 9d0a3bd..33da692 100644
 +            return;
 +        }
 +        self.activate_endpoint(ClientEndpointId::Local, outcome);
-+        self.pending_inbox_focus = Some((label, boot_id.clone(), deadline));
++        self.pending_inbox_focus = Some((label, boot_id, deadline));
++        self.push_method_to_endpoint(ClientEndpointId::Local, method, outcome);
++    }
++
++    /// Send a request to a specific machine, which need not be the one on screen.
++    pub(super) fn push_method_to_endpoint(
++        &mut self,
++        endpoint_id: ClientEndpointId,
++        method: crate::api::schema::Method,
++        outcome: &mut ClientShellInput,
++    ) {
++        if endpoint_id == self.active_endpoint_id {
++            self.push_endpoint_method(method, outcome);
++            return;
++        }
++        let boot_id = self
++            .endpoints
++            .iter()
++            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
++            .and_then(|endpoint| endpoint.snapshot.as_deref())
++            .map(|snapshot| snapshot.boot_id.clone());
++        let Some(boot_id) = boot_id else {
++            let label = self.thread_machine_label(&endpoint_id);
++            self.receive_endpoint_unavailable(format!("{label} is not ready"));
++            outcome.repaint = true;
++            return;
++        };
 +        let request_id = format!("client-shell:{}", self.next_request_id);
 +        self.next_request_id = self.next_request_id.saturating_add(1);
 +        self.pending_requests.insert(
 +            request_id.clone(),
 +            PendingEndpointRequest {
 +                boot_id: boot_id.clone(),
-+                method_name: "command.invoke".into(),
++                method_name: crate::api::api_method_name(&method).to_owned(),
 +                confirmation_workspace_id: None,
 +                kind: PendingEndpointKind::Generic,
 +            },
 +        );
 +        outcome.actions.push(ClientShellAction::Endpoint {
-+            endpoint_id: ClientEndpointId::Local,
++            endpoint_id,
 +            boot_id,
 +            request: Box::new(crate::api::schema::Request {
 +                id: request_id,
 +                method,
 +            }),
 +        });
++    }
++
++    fn thread_machine_label(&self, endpoint_id: &ClientEndpointId) -> String {
++        self.endpoints
++            .iter()
++            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
++            .map(|endpoint| endpoint.label.clone())
++            .unwrap_or_else(|| {
++                if endpoint_id.is_local() {
++                    "Local".to_owned()
++                } else {
++                    "Unknown machine".to_owned()
++                }
++            })
++    }
++
++    /// The inbox row under `point`, on whichever machine it belongs to.
++    pub(super) fn inbox_thread_at(&self, point: (u16, u16)) -> Option<(ClientEndpointId, String)> {
++        if !self.config.inbox_mode {
++            return None;
++        }
++        self.hits
++            .endpoint_agents
++            .iter()
++            .find(|(rect, _, _)| super::contains(*rect, point))
++            .map(|(_, endpoint_id, pane_id)| (endpoint_id.clone(), pane_id.clone()))
++            .or_else(|| {
++                self.hits
++                    .agents
++                    .iter()
++                    .find(|(rect, _)| super::contains(*rect, point))
++                    .map(|(_, pane_id)| (self.active_endpoint_id.clone(), pane_id.clone()))
++            })
++    }
++
++    // A thread is exactly one workspace (the launcher creates one per thread), so
++    // archiving closes that workspace alone. A linked worktree checkout stays on
++    // disk; Herdr's own "Delete worktree checkout" remains the way to remove it.
++    pub(super) fn archive_thread(
++        &mut self,
++        endpoint_id: ClientEndpointId,
++        pane_id: &str,
++        outcome: &mut ClientShellInput,
++    ) {
++        let snapshot = if endpoint_id == self.active_endpoint_id {
++            self.snapshot.as_deref()
++        } else {
++            self.endpoints
++                .iter()
++                .find(|endpoint| endpoint.endpoint_id == endpoint_id)
++                .and_then(|endpoint| endpoint.snapshot.as_deref())
++        };
++        let thread = snapshot.and_then(|snapshot| {
++            let agent = snapshot
++                .agents
++                .iter()
++                .find(|agent| agent.pane_id == pane_id)?;
++            let workspace = snapshot
++                .workspaces
++                .iter()
++                .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
++            Some((
++                workspace.workspace_id.clone(),
++                workspace.label.clone(),
++                super::agent_sidebar::inbox_thread_title(agent, None),
++            ))
++        });
++        let Some((workspace_id, label, title)) = thread else {
++            return;
++        };
++        if !self.config.confirm_close {
++            self.push_method_to_endpoint(
++                endpoint_id,
++                crate::api::schema::Method::WorkspaceClose(
++                    crate::api::schema::WorkspaceCloseParams {
++                        workspace_id,
++                        close_group: false,
++                    },
++                ),
++                outcome,
++            );
++            return;
++        }
++        let machine = self.thread_machine_label(&endpoint_id);
++        self.overlay = Some(ClientShellOverlay::ConfirmClose(
++            ClientConfirmCloseOverlay {
++                workspace_id,
++                tab_target: None,
++                title: "Archive thread?".to_owned(),
++                detail: format!("{label} · {machine} — {title}"),
++                endpoint_id: Some(endpoint_id),
++                close_group: false,
++            },
++        ));
++        outcome.repaint = true;
 +    }
 +
 +    pub(crate) fn tick_inbox_focus(&mut self, now: std::time::Instant) -> ClientShellInput {
@@ -184,7 +284,7 @@ index 9d0a3bd..33da692 100644
      pub(super) fn push_endpoint_method(
          &mut self,
          method: crate::api::schema::Method,
-@@ -371,6 +525,7 @@ impl ClientShellState {
+@@ -371,6 +625,7 @@ impl ClientShellState {
              _ => false,
          };
          if changes_focus {
@@ -192,11 +292,83 @@ index 9d0a3bd..33da692 100644
              outcome.repaint |= self.pending_workspace_highlight.take().is_some();
          }
          if !self.endpoint_is_online(&self.active_endpoint_id) {
+@@ -1110,3 +1365,25 @@ impl ClientShellState {
+         }
+     }
+ }
++
++/// Key labels bound to one of the plugin's actions, with the plugin's defaults as fallback.
++pub(super) fn inbox_binding_labels(config: &ClientShellConfig, action: &str) -> Vec<String> {
++    let config = crate::config::Config {
++        keys: config.local_keys.clone(),
++        ..Default::default()
++    };
++    config
++        .keybinds()
++        .custom_commands
++        .iter()
++        .find(|binding| binding.command == format!("lucasscariot.herdr-inbox.{action}"))
++        .map(|binding| binding.bindings.labels())
++        .unwrap_or_else(|| {
++            vec![if action == "new" {
++                "prefix+c"
++            } else {
++                "prefix+j"
++            }
++            .into()]
++        })
++}
 diff --git a/src/client/shell/agent_sidebar.rs b/src/client/shell/agent_sidebar.rs
-index e43ab8c..3556187 100644
+index e43ab8c..fa8c0ff 100644
 --- a/src/client/shell/agent_sidebar.rs
 +++ b/src/client/shell/agent_sidebar.rs
-@@ -113,7 +113,11 @@ pub(super) fn render_agent_panel_header(
+@@ -15,6 +15,28 @@ pub(super) struct AgentRow {
+     pub(super) status: crate::api::schema::AgentStatus,
+     pub(super) focused: bool,
+     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
++    /// Inbox mode: a status group heading drawn above this row, with the group size.
++    pub(super) section: Option<(&'static str, usize)>,
++}
++
++impl AgentRow {
++    pub(super) fn height(&self) -> usize {
++        self.rows.len().max(1) + usize::from(self.section.is_some())
++    }
++
++    /// The part of the rendered rect that belongs to the row itself, not its heading.
++    pub(super) fn body_rect(&self, rect: Rect) -> Rect {
++        if self.section.is_some() {
++            Rect::new(
++                rect.x,
++                rect.y.saturating_add(1),
++                rect.width,
++                rect.height.saturating_sub(1),
++            )
++        } else {
++            rect
++        }
++    }
+ }
+ 
+ pub(super) fn ordered_agent_pane_ids(
+@@ -79,10 +101,13 @@ pub(super) fn render_agent_panel(
+         config,
+         agent_scroll,
+         hits,
+-        |row| row.rows.len(),
++        |row| row.height(),
+         |buffer, rect, row, hits| {
+-            hits.agents.push((rect, row.pane_id.clone()));
+-            render_agent_row(buffer, rect, row, config);
++            hits.agents.push((row.body_rect(rect), row.pane_id.clone()));
++            if let Some(archive) = render_agent_row(buffer, rect, row, config) {
++                hits.inbox_archive
++                    .push((archive, None, row.pane_id.clone()));
++            }
+         },
+     );
+ }
+@@ -113,7 +138,11 @@ pub(super) fn render_agent_panel_header(
          area.x,
          area.y + 1,
          area.width,
@@ -209,7 +381,73 @@ index e43ab8c..3556187 100644
          Style::default()
              .fg(config.palette.overlay0)
              .add_modifier(Modifier::BOLD),
-@@ -292,24 +296,69 @@ pub(super) fn agent_row(
+@@ -239,10 +268,63 @@ pub(super) fn agent_rows(
+     config: &ClientShellConfig,
+     machine: Option<&str>,
+ ) -> Vec<AgentRow> {
+-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
++    let mut rows = ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
+         .into_iter()
+         .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
+-        .collect()
++        .collect::<Vec<_>>();
++    if snapshot.agent_view_label.is_none() {
++        assign_inbox_sections(rows.iter_mut(), config);
++    }
++    rows
++}
++
++/// Inbox mode groups the priority-sorted list under one heading per status run.
++pub(super) fn assign_inbox_sections<'a>(
++    rows: impl IntoIterator<Item = &'a mut AgentRow>,
++    config: &ClientShellConfig,
++) {
++    if !config.inbox_mode
++        || config.agent_panel_sort != crate::config::AgentPanelSortConfig::Priority
++    {
++        return;
++    }
++    let mut rows = rows.into_iter().collect::<Vec<_>>();
++    let mut index = 0;
++    while index < rows.len() {
++        let status = rows[index].status;
++        let run = rows[index..]
++            .iter()
++            .take_while(|row| row.status == status)
++            .count();
++        rows[index].section = Some((inbox_section_label(status), run));
++        index += run.max(1);
++    }
++}
++
++/// The task a thread was started with, as shown on its inbox row.
++pub(super) fn inbox_thread_title(
++    agent: &crate::protocol::ClientShellAgent,
++    tab_label: Option<&str>,
++) -> String {
++    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
++    let fallback = format!("New {} thread", agent.agent.as_deref().unwrap_or("agent"));
++    let title = tokens
++        .get("thread")
++        .map(String::as_str)
++        .or(agent.terminal_title_stripped.as_deref())
++        .or(tab_label)
++        .or(agent.title.as_deref())
++        .or(agent.name.as_deref())
++        .filter(|value| !value.trim().is_empty())
++        .unwrap_or(&fallback);
++    let title = match title
++        .strip_prefix('[')
++        .and_then(|value| value.split_once(']'))
++    {
++        Some((number, rest)) if number.chars().all(|c| c.is_ascii_digit()) => rest.trim(),
++        _ => title,
++    };
++    title.split_whitespace().collect::<Vec<_>>().join(" ")
+ }
+ 
+ pub(super) fn agent_row(
+@@ -292,38 +374,75 @@ pub(super) fn agent_row(
          .agent
          .as_deref()
          .and_then(crate::detect::parse_agent_label);
@@ -237,43 +475,30 @@ index e43ab8c..3556187 100644
 +            kind,
 +            style: Default::default(),
 +        };
-+        let fallback = format!("New {} thread", agent.agent.as_deref().unwrap_or("agent"));
-+        let title = tokens
-+            .get("thread")
-+            .map(String::as_str)
-+            .or(agent.terminal_title_stripped.as_deref())
-+            .or(tab_label)
-+            .or(agent.title.as_deref())
-+            .or(agent.name.as_deref())
-+            .filter(|value| !value.trim().is_empty())
-+            .unwrap_or(&fallback);
-+        let title = match title
-+            .strip_prefix('[')
-+            .and_then(|value| value.split_once(']'))
-+        {
-+            Some((number, rest)) if number.chars().all(|c| c.is_ascii_digit()) => rest.trim(),
-+            _ => title,
-+        };
-+        let mut rows = vec![
++        // Three lines per thread: project, task, then branch with machine · harness.
++        // The trailing empty line is the gap before the next thread.
++        vec![
 +            vec![text(ResolvedTokenKind::Workspace(workspace.label.clone()))],
-+            vec![text(ResolvedTokenKind::TerminalTitle(
-+                title.split_whitespace().collect::<Vec<_>>().join(" "),
-+            ))],
-+        ];
-+        if let Some(branch) = workspace
-+            .branch
-+            .as_deref()
-+            .filter(|branch| !branch.is_empty())
-+        {
-+            rows.push(vec![text(ResolvedTokenKind::Custom(format!("↳ {branch}")))]);
-+        }
-+        rows.push(vec![text(ResolvedTokenKind::Custom(format!(
-+            "{} · {}",
-+            machine.unwrap_or("Local"),
-+            agent.agent.as_deref().unwrap_or("agent")
-+        )))]);
-+        rows.push(vec![]);
-+        rows
++            vec![text(ResolvedTokenKind::TerminalTitle(inbox_thread_title(
++                agent, tab_label,
++            )))],
++            vec![
++                text(ResolvedTokenKind::Custom(
++                    workspace.branch.clone().unwrap_or_default(),
++                )),
++                // Local is the default and goes unsaid; other machines are called out.
++                text(ResolvedTokenKind::Custom(
++                    machine
++                        .filter(|machine| *machine != "Local")
++                        .unwrap_or_default()
++                        .to_owned(),
++                )),
++                text(ResolvedTokenKind::Custom(
++                    agent.agent.as_deref().unwrap_or("agent").to_owned(),
++                )),
++            ],
++            vec![],
++        ]
 +    } else {
 +        crate::ui::sidebar_agent_rows(
 +            &config.agents,
@@ -297,82 +522,276 @@ index e43ab8c..3556187 100644
      Some(AgentRow {
          pane_id: agent.pane_id.clone(),
          status: agent.agent_status,
-@@ -324,6 +373,10 @@ pub(super) fn render_agent_row(
+         focused: agent.focused,
+         rows,
++        section: None,
+     })
+ }
+ 
++/// Returns the rect of the row's archive affordance when it drew one (inbox mode only).
+ pub(super) fn render_agent_row(
+     buffer: &mut Buffer,
+     rect: Rect,
      row: &AgentRow,
      config: &ClientShellConfig,
- ) {
+-) {
++) -> Option<Rect> {
 +    if config.inbox_mode {
-+        render_inbox_row(buffer, rect, row, config);
-+        return;
++        return render_inbox_row(buffer, rect, row, config);
 +    }
      let palette = &config.palette;
      let row_style = if row.focused {
          Style::default().bg(palette.active_row_bg)
-@@ -373,6 +426,64 @@ pub(super) fn render_agent_row(
+@@ -371,6 +490,249 @@ pub(super) fn render_agent_row(
+             buffer,
+         );
      }
- }
- 
-+fn render_inbox_row(buffer: &mut Buffer, rect: Rect, row: &AgentRow, config: &ClientShellConfig) {
-+    use crate::api::schema::AgentStatus;
-+    use crate::ui::ResolvedTokenKind;
++    None
++}
++
++fn render_inbox_row(
++    buffer: &mut Buffer,
++    rect: Rect,
++    row: &AgentRow,
++    config: &ClientShellConfig,
++) -> Option<Rect> {
++    use crate::ui::{ResolvedToken, ResolvedTokenKind};
 +    let palette = &config.palette;
++    let color = inbox_status_color(row.status, palette);
++    let mut rect = rect;
++    if let Some((label, count)) = row.section {
++        if rect.height == 0 {
++            return None;
++        }
++        let width = rect.width.saturating_sub(3);
++        put_text(
++            buffer,
++            rect.x + 2,
++            rect.y,
++            width,
++            label,
++            Style::default().fg(color).add_modifier(Modifier::BOLD),
++        );
++        let label_width = display_width(label) as u16;
++        if width > label_width + 2 {
++            put_text(
++                buffer,
++                rect.x + 3 + label_width,
++                rect.y,
++                width - label_width - 1,
++                &count.to_string(),
++                Style::default().fg(palette.overlay0),
++            );
++        }
++        rect = Rect::new(
++            rect.x,
++            rect.y + 1,
++            rect.width,
++            rect.height.saturating_sub(1),
++        );
++    }
 +    let background = if row.focused {
 +        Style::default().bg(palette.active_row_bg)
 +    } else {
 +        Style::default()
 +    };
-+    let status = match row.status {
-+        AgentStatus::Blocked => "Input",
-+        AgentStatus::Done => "Ready",
-+        AgentStatus::Working => "Working",
-+        AgentStatus::Idle | AgentStatus::Unknown => "Waiting",
-+    };
-+    for (index, tokens) in row.rows.iter().take(rect.height as usize).enumerate() {
-+        let text = tokens
-+            .first()
++    let text_at = |tokens: &[ResolvedToken], index: usize| -> String {
++        tokens
++            .get(index)
 +            .map(|token| match &token.kind {
 +                ResolvedTokenKind::Workspace(value)
 +                | ResolvedTokenKind::TerminalTitle(value)
-+                | ResolvedTokenKind::Custom(value) => value.as_str(),
-+                _ => "",
++                | ResolvedTokenKind::Custom(value) => value.clone(),
++                _ => String::new(),
 +            })
-+            .unwrap_or("");
-+        let style = if index == 1 {
-+            Style::default()
-+                .fg(palette.text)
-+                .add_modifier(Modifier::BOLD)
-+        } else {
-+            Style::default().fg(palette.overlay0)
-+        };
++            .unwrap_or_default()
++    };
++    let mut archive = None;
++    for (index, tokens) in row.rows.iter().take(rect.height as usize).enumerate() {
 +        let line = Rect::new(rect.x, rect.y + index as u16, rect.width, 1);
-+        Paragraph::new("").style(background).render(line, buffer);
-+        let width = if index == 0 {
-+            rect.width.saturating_sub(status.len() as u16 + 5)
-+        } else {
-+            rect.width.saturating_sub(4)
-+        };
-+        Paragraph::new(crate::ui::truncate_end(text, width as usize))
-+            .style(background.patch(style))
-+            .render(Rect::new(line.x + 2, line.y, width, 1), buffer);
-+        if index == 0 && rect.width > status.len() as u16 + 4 {
-+            Paragraph::new(status)
-+                .style(background.fg(status_color(row.status, palette)))
-+                .render(
-+                    Rect::new(
-+                        line.x + line.width - status.len() as u16 - 2,
-+                        line.y,
-+                        status.len() as u16,
-+                        1,
-+                    ),
-+                    buffer,
-+                );
++        if tokens.is_empty() {
++            // The gap line between threads stays unpainted.
++            continue;
 +        }
++        buffer.set_style(line, background);
++        put_text(buffer, line.x, line.y, 1, "▎", background.fg(color));
++        let x = line.x + 2;
++        // Rail, one space, text, one space of right margin.
++        let available = line.width.saturating_sub(3);
++        match index {
++            0 => {
++                let badge = format!(
++                    "{} {}",
++                    inbox_status_glyph(row.status),
++                    inbox_status_label(row.status)
++                );
++                let badge_width = display_width(&badge) as u16;
++                let text_width = if available > badge_width + 2 {
++                    available - badge_width - 2
++                } else {
++                    available
++                };
++                put_text(
++                    buffer,
++                    x,
++                    line.y,
++                    text_width,
++                    &crate::ui::truncate_end(&text_at(tokens, 0), text_width as usize),
++                    background.fg(palette.subtext0).add_modifier(Modifier::BOLD),
++                );
++                if available > badge_width + 2 {
++                    put_text(
++                        buffer,
++                        line.right().saturating_sub(1 + badge_width),
++                        line.y,
++                        badge_width,
++                        &badge,
++                        background.fg(color).add_modifier(Modifier::BOLD),
++                    );
++                }
++            }
++            1 => put_text(
++                buffer,
++                x,
++                line.y,
++                available,
++                &crate::ui::truncate_end(&text_at(tokens, 0), available as usize),
++                background.fg(palette.text).add_modifier(Modifier::BOLD),
++            ),
++            _ => {
++                let mut available = available;
++                if row.focused {
++                    let width = display_width(INBOX_ARCHIVE_LABEL) as u16;
++                    if available > width + 2 {
++                        let hit =
++                            Rect::new(line.right().saturating_sub(1 + width), line.y, width, 1);
++                        put_text(
++                            buffer,
++                            hit.x,
++                            hit.y,
++                            hit.width,
++                            INBOX_ARCHIVE_LABEL,
++                            background.fg(palette.overlay1),
++                        );
++                        archive = Some(hit);
++                        available -= width + 2;
++                    }
++                }
++                let branch = text_at(tokens, 0);
++                let machine = text_at(tokens, 1);
++                let harness = text_at(tokens, 2);
++                let branch = if branch.is_empty() {
++                    String::new()
++                } else {
++                    format!("⎇ {branch}")
++                };
++                // Keep the branch whole; drop the machine, then the harness, to fit.
++                let joined = |parts: &[&str]| {
++                    parts
++                        .iter()
++                        .filter(|part| !part.is_empty())
++                        .copied()
++                        .collect::<Vec<_>>()
++                        .join(" · ")
++                };
++                let (branch, rest) = [
++                    joined(&[&machine, &harness]),
++                    joined(&[&harness]),
++                    String::new(),
++                ]
++                .into_iter()
++                .map(|rest| {
++                    if branch.is_empty() || rest.is_empty() {
++                        (branch.clone(), rest)
++                    } else {
++                        (branch.clone(), format!(" · {rest}"))
++                    }
++                })
++                .find(|(branch, rest)| {
++                    display_width(branch) + display_width(rest) <= available as usize
++                })
++                .unwrap_or_else(|| {
++                    (
++                        crate::ui::truncate_end(&branch, available as usize),
++                        String::new(),
++                    )
++                });
++                let branch_width = display_width(&branch) as u16;
++                put_text(
++                    buffer,
++                    x,
++                    line.y,
++                    branch_width,
++                    &branch,
++                    background.fg(palette.mauve),
++                );
++                put_text(
++                    buffer,
++                    x + branch_width,
++                    line.y,
++                    display_width(&rest) as u16,
++                    &rest,
++                    background.fg(palette.overlay0),
++                );
++            }
++        }
++    }
++    archive
++}
++
++pub(super) const INBOX_ARCHIVE_LABEL: &str = "archive";
++
++/// Short badge on each inbox row; matches the plugin's own inbox vocabulary.
++pub(super) fn inbox_status_label(status: crate::api::schema::AgentStatus) -> &'static str {
++    use crate::api::schema::AgentStatus;
++    match status {
++        AgentStatus::Blocked => "Input",
++        AgentStatus::Done => "Ready",
++        AgentStatus::Working => "Working",
++        AgentStatus::Idle => "Idle",
++        AgentStatus::Unknown => "Unknown",
 +    }
 +}
 +
++fn inbox_section_label(status: crate::api::schema::AgentStatus) -> &'static str {
++    use crate::api::schema::AgentStatus;
++    match status {
++        AgentStatus::Blocked => "needs input",
++        AgentStatus::Done => "ready",
++        AgentStatus::Working => "working",
++        AgentStatus::Idle => "idle",
++        AgentStatus::Unknown => "unknown",
++    }
++}
++
++fn inbox_status_glyph(status: crate::api::schema::AgentStatus) -> &'static str {
++    use crate::api::schema::AgentStatus;
++    match status {
++        AgentStatus::Blocked => "●",
++        AgentStatus::Done => "✓",
++        AgentStatus::Working => "◐",
++        AgentStatus::Idle => "○",
++        AgentStatus::Unknown => "·",
++    }
++}
++
++// Idle threads are the quiet majority, so they take a muted tone and the
++// states that need a look (input, ready, working) carry the colour.
++pub(super) fn inbox_status_color(
++    status: crate::api::schema::AgentStatus,
++    palette: &Palette,
++) -> ratatui::style::Color {
++    use crate::api::schema::AgentStatus;
++    match status {
++        AgentStatus::Blocked => palette.red,
++        AgentStatus::Done => palette.teal,
++        AgentStatus::Working => palette.yellow,
++        AgentStatus::Idle => palette.overlay1,
++        AgentStatus::Unknown => palette.overlay0,
++    }
+ }
+ 
  fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
-     for (offset, character) in text.chars().take(width as usize).enumerate() {
-         if let Some(cell) = buffer.cell_mut((x + offset as u16, y)) {
 diff --git a/src/client/shell/composition.rs b/src/client/shell/composition.rs
 index b7ab4a9..a7884ba 100644
 --- a/src/client/shell/composition.rs
@@ -419,6 +838,130 @@ index bfa1fb2..3f31cb5 100644
          let tab_height = u16::from(show_tab_bar);
          let (tab_bar, pane_surface) = match self.tab_bar_position {
              TabBarPositionConfig::Top => (
+diff --git a/src/client/shell/context_menu.rs b/src/client/shell/context_menu.rs
+index b57bc84..61ae14d 100644
+--- a/src/client/shell/context_menu.rs
++++ b/src/client/shell/context_menu.rs
+@@ -75,6 +75,10 @@ impl ClientContextMenuOverlay {
+                 ]);
+                 items
+             }
++            ClientContextMenuTarget::Thread { .. } => vec![
++                item("Open thread", Action::OpenThread),
++                item("Archive thread", Action::ArchiveThread),
++            ],
+         }
+     }
+ }
+@@ -213,10 +217,44 @@ impl ClientShellState {
+                 action,
+                 outcome,
+             ),
++            ClientContextMenuTarget::Thread {
++                endpoint_id,
++                pane_id,
++            } => match action {
++                ClientContextMenuAction::OpenThread => {
++                    self.focus_or_activate(
++                        endpoint_id,
++                        ClientEndpointFocusTarget::Pane(pane_id),
++                        outcome,
++                    );
++                }
++                ClientContextMenuAction::ArchiveThread => {
++                    self.archive_thread(endpoint_id, &pane_id, outcome);
++                }
++                _ => {}
++            },
+         }
+         outcome.repaint = true;
+     }
+ 
++    pub(super) fn open_thread_context_menu(
++        &mut self,
++        endpoint_id: ClientEndpointId,
++        pane_id: String,
++        x: u16,
++        y: u16,
++    ) {
++        self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
++            target: ClientContextMenuTarget::Thread {
++                endpoint_id,
++                pane_id,
++            },
++            x,
++            y,
++            highlighted: 0,
++        }));
++    }
++
+     fn activate_workspace_context_action(
+         &mut self,
+         workspace_id: String,
+diff --git a/src/client/shell/endpoint_agents.rs b/src/client/shell/endpoint_agents.rs
+index b56b41f..55121b8 100644
+--- a/src/client/shell/endpoint_agents.rs
++++ b/src/client/shell/endpoint_agents.rs
+@@ -70,9 +70,16 @@ pub(super) fn render_expanded(
+         config,
+         agent_scroll,
+         hits,
+-        |row| row.agent.rows.len(),
++        |row| row.agent.height(),
+         |buffer, rect, row, hits| {
+-            super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config);
++            let archive = super::agent_sidebar::render_agent_row(buffer, rect, &row.agent, config);
++            if let Some(archive) = archive {
++                hits.inbox_archive.push((
++                    archive,
++                    Some(row.endpoint_id.clone()),
++                    row.agent.pane_id.clone(),
++                ));
++            }
+             if row.stale {
+                 buffer.set_style(
+                     rect,
+@@ -81,8 +88,11 @@ pub(super) fn render_expanded(
+                         .add_modifier(Modifier::DIM),
+                 );
+             }
+-            hits.endpoint_agents
+-                .push((rect, row.endpoint_id.clone(), row.agent.pane_id.clone()));
++            hits.endpoint_agents.push((
++                row.agent.body_rect(rect),
++                row.endpoint_id.clone(),
++                row.agent.pane_id.clone(),
++            ));
+         },
+     );
+ }
+@@ -106,7 +116,7 @@ impl ClientShellState {
+         };
+         let heights = rows
+             .iter()
+-            .map(|row| row.agent.rows.len().max(1).min(u16::MAX as usize) as u16)
++            .map(|row| row.agent.height().min(u16::MAX as usize) as u16)
+             .collect::<Vec<_>>();
+         let mut gaps = vec![self.config.agents.row_gap; rows.len()];
+         if let Some(last) = gaps.last_mut() {
+@@ -156,7 +166,7 @@ fn agent_rows(
+         .flatten()
+         .collect::<HashMap<_, _>>();
+ 
+-    super::aggregate_navigation::aggregate_agent_rows(
++    let mut rows = super::aggregate_navigation::aggregate_agent_rows(
+         endpoints,
+         active_endpoint_id,
+         config.agent_panel_sort,
+@@ -173,5 +183,7 @@ fn agent_rows(
+             agent,
+         })
+     })
+-    .collect()
++    .collect::<Vec<_>>();
++    super::agent_sidebar::assign_inbox_sections(rows.iter_mut().map(|row| &mut row.agent), config);
++    rows
+ }
 diff --git a/src/client/shell/endpoint_navigation.rs b/src/client/shell/endpoint_navigation.rs
 index a1f7ac2..d6faca4 100644
 --- a/src/client/shell/endpoint_navigation.rs
@@ -475,10 +1018,22 @@ index 9698248..f2a48fc 100644
          crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
      hits.sidebar_section_divider =
 diff --git a/src/client/shell/mouse.rs b/src/client/shell/mouse.rs
-index f2df294..c1b6d6c 100644
+index f2df294..d272f0c 100644
 --- a/src/client/shell/mouse.rs
 +++ b/src/client/shell/mouse.rs
-@@ -2008,6 +2008,10 @@ impl ClientShellState {
+@@ -1805,6 +1805,11 @@ impl ClientShellState {
+                 if !self.config.mouse_capture {
+                     return;
+                 }
++                if let Some((endpoint_id, pane_id)) = self.inbox_thread_at(point) {
++                    self.open_thread_context_menu(endpoint_id, pane_id, mouse.column, mouse.row);
++                    outcome.repaint = true;
++                    return;
++                }
+                 let workspace_id = (!self.sidebar_collapsed)
+                     .then(|| self.active_endpoint_workspace_at(point))
+                     .flatten();
+@@ -2008,6 +2013,10 @@ impl ClientShellState {
                      outcome.repaint = true;
                      return;
                  }
@@ -489,8 +1044,63 @@ index f2df294..c1b6d6c 100644
                  if super::contains(self.hits.new_workspace, point) {
                      self.record_binding(
                          crate::input::KeybindMatch::Action(
+@@ -2112,6 +2121,23 @@ impl ClientShellState {
+                     self.tab_press = Some(tab_press);
+                     return;
+                 }
++                let archive = self
++                    .hits
++                    .inbox_archive
++                    .iter()
++                    .find(|(rect, _, _)| super::contains(*rect, point))
++                    .map(|(_, endpoint_id, pane_id)| {
++                        (
++                            endpoint_id
++                                .clone()
++                                .unwrap_or_else(|| self.active_endpoint_id.clone()),
++                            pane_id.clone(),
++                        )
++                    });
++                if let Some((endpoint_id, pane_id)) = archive {
++                    self.archive_thread(endpoint_id, &pane_id, outcome);
++                    return;
++                }
+                 if self.handle_endpoint_agent_click(point, outcome) {
+                     return;
+                 }
+diff --git a/src/client/shell/overlay_input.rs b/src/client/shell/overlay_input.rs
+index 10bd4a4..32a87fd 100644
+--- a/src/client/shell/overlay_input.rs
++++ b/src/client/shell/overlay_input.rs
+@@ -1035,10 +1035,15 @@ impl ClientShellState {
+         } else {
+             crate::api::schema::Method::WorkspaceClose(crate::api::schema::WorkspaceCloseParams {
+                 workspace_id: confirm.workspace_id,
+-                close_group: true,
++                close_group: confirm.close_group,
+             })
+         };
+-        self.push_endpoint_method(method, outcome);
++        match confirm.endpoint_id {
++            Some(endpoint_id) if endpoint_id != self.active_endpoint_id => {
++                self.push_method_to_endpoint(endpoint_id, method, outcome);
++            }
++            _ => self.push_endpoint_method(method, outcome),
++        }
+     }
+ 
+     pub(super) fn open_confirm_close_overlay(&mut self, workspace_id: String) {
+@@ -1119,6 +1124,8 @@ impl ClientShellState {
+                     "Close workspace?".to_owned()
+                 },
+                 detail: format!("{} — {scope}", workspace.label),
++                endpoint_id: None,
++                close_group: true,
+             },
+         ));
+         true
 diff --git a/src/client/shell/render.rs b/src/client/shell/render.rs
-index 248216c..5d90737 100644
+index 248216c..0c4ea98 100644
 --- a/src/client/shell/render.rs
 +++ b/src/client/shell/render.rs
 @@ -35,8 +35,7 @@ pub(super) fn render_mode_bar(
@@ -548,15 +1158,16 @@ index 248216c..5d90737 100644
      let prefix = keybinds.primary_prefix_label();
      let prefix_rhs = |bindings: &crate::config::ActionKeybinds| {
          bindings
-@@ -327,6 +335,7 @@ pub(super) fn render_shell(
+@@ -327,6 +335,8 @@ pub(super) fn render_shell(
          hits.workspace_scrollbar = Rect::default();
          hits.agent_scrollbar = Rect::default();
          hits.agent_sort_toggle = Rect::default();
 +        hits.inbox_new_thread = Rect::default();
++        hits.inbox_archive.clear();
          hits.new_workspace = Rect::default();
          hits.machines.clear();
          hits.workspaces.clear();
-@@ -375,3 +384,62 @@ pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &s
+@@ -375,3 +385,91 @@ pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &s
  pub(super) fn display_width(text: &str) -> u16 {
      UnicodeWidthStr::width(text).min(u16::MAX as usize) as u16
  }
@@ -568,22 +1179,40 @@ index 248216c..5d90737 100644
 +    config: &ClientShellConfig,
 +    hits: &mut ShellHitMap,
 +) -> Rect {
-+    hits.inbox_new_thread = Rect::new(
++    let palette = &config.palette;
++    // A filled, full-width button one row below the top edge, with a key hint.
++    let button = Rect::new(
 +        area.x + 1,
-+        area.y,
++        area.y.saturating_add(1),
 +        area.width.saturating_sub(3),
-+        u16::from(area.height > 0),
++        u16::from(area.height > 1),
 +    );
-+    put_text(
-+        buffer,
-+        hits.inbox_new_thread.x,
-+        area.y,
-+        hits.inbox_new_thread.width,
-+        "+ New thread",
-+        Style::default()
-+            .fg(config.palette.accent)
-+            .add_modifier(Modifier::BOLD),
-+    );
++    hits.inbox_new_thread = button;
++    if !button.is_empty() {
++        let surface = Style::default().bg(palette.surface0);
++        buffer.set_style(button, surface);
++        let label = "+  New thread";
++        put_text(
++            buffer,
++            button.x + 1,
++            button.y,
++            button.width.saturating_sub(2),
++            label,
++            surface.fg(palette.accent).add_modifier(Modifier::BOLD),
++        );
++        let hint = inbox_new_thread_hint(config);
++        let hint_width = display_width(&hint);
++        if button.width > display_width(label) + hint_width + 4 {
++            put_text(
++                buffer,
++                button.right().saturating_sub(1 + hint_width),
++                button.y,
++                hint_width,
++                &hint,
++                surface.fg(palette.overlay0),
++            );
++        }
++    }
 +    hits.global_launcher = Rect::new(
 +        area.x + 1,
 +        area.bottom().saturating_sub(1),
@@ -596,7 +1225,7 @@ index 248216c..5d90737 100644
 +        hits.global_launcher.y,
 +        hits.global_launcher.width,
 +        "menu",
-+        Style::default().fg(config.palette.overlay0),
++        Style::default().fg(palette.overlay0),
 +    );
 +    hits.sidebar_toggle = Rect::new(
 +        area.right().saturating_sub(2),
@@ -610,14 +1239,25 @@ index 248216c..5d90737 100644
 +        hits.sidebar_toggle.y,
 +        hits.sidebar_toggle.width,
 +        "«",
-+        Style::default().fg(config.palette.overlay0),
++        Style::default().fg(palette.overlay0),
 +    );
 +    Rect::new(
 +        area.x,
-+        area.y.saturating_add(2),
++        area.y.saturating_add(3),
 +        area.width.saturating_sub(1),
-+        area.height.saturating_sub(3),
++        area.height.saturating_sub(4),
 +    )
++}
++
++fn inbox_new_thread_hint(config: &ClientShellConfig) -> String {
++    let label = super::actions::inbox_binding_labels(config, "new")
++        .into_iter()
++        .next()
++        .unwrap_or_default();
++    match label.strip_prefix("prefix+") {
++        Some(rest) => format!("{} {rest}", config.keybinds.primary_prefix_label()),
++        None => label,
++    }
 +}
 diff --git a/src/client/shell/sidebar.rs b/src/client/shell/sidebar.rs
 index f94f6bd..eda37a0 100644
@@ -636,7 +1276,7 @@ index f94f6bd..eda37a0 100644
          crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
      hits.sidebar_section_divider =
 diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
-index c170c9b..1e7c129 100644
+index c170c9b..d8f58c8 100644
 --- a/src/client/shell/state.rs
 +++ b/src/client/shell/state.rs
 @@ -13,6 +13,7 @@ pub(crate) enum ClientShellKeybindingSource {
@@ -647,15 +1287,48 @@ index c170c9b..1e7c129 100644
      pub(super) sidebar_width: u16,
      pub(super) sidebar_min_width: u16,
      pub(super) sidebar_max_width: u16,
-@@ -103,6 +104,7 @@ pub(super) struct ShellHitMap {
+@@ -103,6 +104,9 @@ pub(super) struct ShellHitMap {
      pub(super) sidebar_divider: Rect,
      pub(super) sidebar_section_divider: Rect,
      pub(super) sidebar_toggle: Rect,
 +    pub(super) inbox_new_thread: Rect,
++    /// Archive affordances on inbox rows: `None` targets the active endpoint.
++    pub(super) inbox_archive: Vec<(Rect, Option<ClientEndpointId>, String)>,
      pub(super) new_workspace: Rect,
      pub(super) new_tab: Rect,
      pub(super) tab_scroll_left: Rect,
-@@ -920,6 +922,7 @@ pub(crate) struct ClientShellState {
+@@ -525,6 +529,8 @@ pub(super) enum ClientContextMenuAction {
+     Zoom,
+     ToggleRightClickPassthrough,
+     ClosePane,
++    OpenThread,
++    ArchiveThread,
+ }
+ 
+ #[derive(Debug)]
+@@ -547,6 +553,11 @@ pub(super) enum ClientContextMenuTarget {
+         has_manual_label: bool,
+         right_click_passthrough: bool,
+     },
++    /// An inbox row: one agent pane on one machine.
++    Thread {
++        endpoint_id: ClientEndpointId,
++        pane_id: String,
++    },
+ }
+ 
+ #[derive(Debug)]
+@@ -574,6 +585,9 @@ pub(super) struct ClientConfirmCloseOverlay {
+     pub(super) tab_target: Option<ClientTabCloseConfirmation>,
+     pub(super) title: String,
+     pub(super) detail: String,
++    /// The machine that owns the workspace; `None` means the active endpoint.
++    pub(super) endpoint_id: Option<ClientEndpointId>,
++    pub(super) close_group: bool,
+ }
+ 
+ #[derive(Debug)]
+@@ -920,6 +934,7 @@ pub(crate) struct ClientShellState {
      pub(super) popup_pending_deadline: Option<std::time::Instant>,
      pub(super) next_request_id: u64,
      pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
@@ -663,7 +1336,7 @@ index c170c9b..1e7c129 100644
      pub(super) pending_integration_installs: usize,
      pub(super) pending_notifications: Vec<ClientPendingNotification>,
      pub(super) visible_notification: Option<ClientVisibleNotification>,
-@@ -1085,6 +1088,7 @@ impl ClientShellState {
+@@ -1085,6 +1100,7 @@ impl ClientShellState {
              popup_pending_deadline: None,
              next_request_id: 1,
              pending_requests: HashMap::new(),
@@ -672,10 +1345,10 @@ index c170c9b..1e7c129 100644
              pending_notifications: Vec::new(),
              visible_notification: None,
 diff --git a/src/client/shell/tests/endpoints.rs b/src/client/shell/tests/endpoints.rs
-index f327f8c..555e32a 100644
+index f327f8c..c43f212 100644
 --- a/src/client/shell/tests/endpoints.rs
 +++ b/src/client/shell/tests/endpoints.rs
-@@ -2591,3 +2591,203 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
+@@ -2591,3 +2591,362 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
          }] if activated == &endpoint_id && workspace_id == "ws_1"
      ));
  }
@@ -720,7 +1393,7 @@ index f327f8c..555e32a 100644
 +        .iter()
 +        .map(|cell| cell.symbol.as_str())
 +        .collect::<String>();
-+    assert!(text.contains("+ New thread"));
++    assert!(text.contains("+  New thread"));
 +    assert!(!text.contains("machines"));
 +}
 +
@@ -879,3 +1552,175 @@ index f327f8c..555e32a 100644
 +        ClientShellAction::Endpoint { endpoint_id, request, .. }
 +        if endpoint_id.is_local() && matches!(&request.method, crate::api::schema::Method::PaneFocus(params) if params.pane_id == "pane_1"))));
 +}
++
++fn frame_text(frame: &crate::protocol::FrameData) -> String {
++    frame
++        .cells
++        .iter()
++        .map(|cell| cell.symbol.as_str())
++        .collect::<String>()
++}
++
++#[test]
++fn inbox_rows_carry_status_badges_and_group_headings() {
++    let (mut state, remote_id) = state_with_remote();
++    state.config.inbox_mode = true;
++    state.config.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
++    let mut local = snapshot();
++    local.agents.push(agent(
++        "local-worker",
++        crate::api::schema::AgentStatus::Blocked,
++        1,
++    ));
++    state.set_snapshot(Box::new(local));
++    let mut remote = snapshot();
++    remote.boot_id = "remote-boot".into();
++    remote.agents.push(agent(
++        "remote-worker",
++        crate::api::schema::AgentStatus::Working,
++        1,
++    ));
++    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
++    let text = frame_text(&state.compose(120, 40).expect("inbox frame"));
++    assert!(text.contains("+  New thread"));
++    assert!(text.contains("needs input 1"), "{text}");
++    assert!(text.contains("● Input"), "{text}");
++    assert!(text.contains("working 1"), "{text}");
++    assert!(text.contains("◐ Working"), "{text}");
++    assert!(text.contains("⎇ main · Build · pi"), "{text}");
++    assert!(text.contains("⎇ main · pi"), "{text}");
++    assert!(!text.contains("Local · pi"), "{text}");
++    assert!(!text.contains("Waiting"));
++    // Only the thread on screen offers the inline archive action.
++    assert_eq!(state.hits.inbox_archive.len(), 1);
++    assert!(state.hits.inbox_archive[0]
++        .1
++        .as_ref()
++        .is_none_or(|endpoint_id| endpoint_id.is_local()));
++}
++
++#[test]
++fn inbox_right_click_archives_a_remote_thread_on_its_own_machine() {
++    let (mut state, remote_id) = state_with_remote();
++    state.config.inbox_mode = true;
++    let mut remote = snapshot();
++    remote.boot_id = "remote-boot".into();
++    remote.agents.push(agent(
++        "remote-worker",
++        crate::api::schema::AgentStatus::Done,
++        1,
++    ));
++    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
++    state.compose(120, 40).expect("inbox frame");
++    let (hit, _, _) = state
++        .hits
++        .endpoint_agents
++        .iter()
++        .find(|(_, id, _)| id == &remote_id)
++        .cloned()
++        .expect("remote thread row");
++    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Right),
++        column: hit.x + 1,
++        row: hit.y + 1,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert!(matches!(
++        &state.overlay,
++        Some(ClientShellOverlay::ContextMenu(menu))
++            if matches!(&menu.target, ClientContextMenuTarget::Thread { endpoint_id, pane_id }
++                if endpoint_id == &remote_id && pane_id == "pane_1")
++    ));
++    state.compose(120, 40).expect("menu frame");
++    let (archive_row, _) = state
++        .hits
++        .context_menu_rows
++        .iter()
++        .find(|(_, index)| *index == 1)
++        .copied()
++        .expect("archive item");
++    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: archive_row.x,
++        row: archive_row.y,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert!(matches!(
++        &state.overlay,
++        Some(ClientShellOverlay::ConfirmClose(confirm))
++            if confirm.title == "Archive thread?"
++                && confirm.endpoint_id.as_ref() == Some(&remote_id)
++                && !confirm.close_group
++    ));
++    let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
++        crate::input::TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE),
++    )]);
++    assert!(state.overlay.is_none());
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { endpoint_id, boot_id, request }
++            if endpoint_id == &remote_id
++                && boot_id == "remote-boot"
++                && matches!(&request.method, crate::api::schema::Method::WorkspaceClose(params)
++                    if params.workspace_id == "ws_1" && !params.close_group))));
++}
++
++#[test]
++fn inbox_archive_button_closes_only_the_focused_threads_workspace() {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.config.inbox_mode = true;
++    let mut local = snapshot();
++    local
++        .agents
++        .push(agent("worker", crate::api::schema::AgentStatus::Done, 1));
++    state.set_snapshot(Box::new(local));
++    state.set_pane_surface(surface());
++    state.set_endpoint_methods(Some(vec!["workspace.close".into()]));
++    state.compose(120, 40).expect("local inbox frame");
++    let (hit, _, _) = state.hits.inbox_archive[0].clone();
++    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: hit.x,
++        row: hit.y,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert!(matches!(
++        &state.overlay,
++        Some(ClientShellOverlay::ConfirmClose(confirm))
++            if confirm.title == "Archive thread?" && confirm.detail.starts_with("client-shell · Local")
++    ));
++    let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
++        crate::input::TerminalKey::new(KeyCode::Enter, KeyModifiers::NONE),
++    )]);
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { request, .. }
++            if matches!(&request.method, crate::api::schema::Method::WorkspaceClose(params)
++                if params.workspace_id == "ws_1" && !params.close_group))));
++
++    // Without close confirmation the button archives immediately.
++    state.config.confirm_close = false;
++    state.compose(120, 40).expect("local inbox frame");
++    let (hit, _, _) = state.hits.inbox_archive[0].clone();
++    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: hit.x,
++        row: hit.y,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert!(state.overlay.is_none());
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { request, .. }
++            if matches!(&request.method, crate::api::schema::Method::WorkspaceClose(_)))));
++}
+diff --git a/src/client/shell/tests/graphics.rs b/src/client/shell/tests/graphics.rs
+index e54301a..b916a8b 100644
+--- a/src/client/shell/tests/graphics.rs
++++ b/src/client/shell/tests/graphics.rs
+@@ -261,6 +261,8 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
+             tab_target: None,
+             title: "close".into(),
+             detail: "confirm".into(),
++            endpoint_id: None,
++            close_group: true,
+         }),
+         ClientShellOverlay::Help(ClientHelpOverlay {
+             query: TextEditor::default(),

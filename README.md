@@ -271,8 +271,18 @@ Except for demo mode, run these inside Herdr so they have a session socket.
 
 Plugins cannot remove Herdr's built-in Machines block. `patches/` carries an
 opt-in patch for Herdr 0.9.3 that adds a `HERDR_INBOX_MODE=1` client mode with
-a full-height agent sidebar and a New thread button, hiding machine and
-workspace navigation and the tab bar. Build it with Rust, `just`, and Zig:
+a full-height thread sidebar and a New thread button, hiding machine and
+workspace navigation and the tab bar.
+
+Each row shows the project with a status badge, the task, and the branch with
+the harness (and the machine, for threads off Local). Sorted by priority, the
+list is grouped under "needs input", "ready", "working", and "idle" headings.
+Right-click a row for "Archive thread", or click "archive" on the thread that
+is open: this closes the thread's workspace on its machine and keeps a linked
+worktree checkout on disk. Archiving asks first unless Herdr's
+`ui.confirm_close` is off.
+
+Build it with Rust, `just`, and Zig:
 
 ```sh
 python3 scripts/build-client.py --zig /path/to/zig
