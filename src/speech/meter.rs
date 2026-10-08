@@ -171,7 +171,7 @@ impl Meter {
             }
             return &self.levels;
         }
-        let peak = data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs()).max().unwrap_or(0);
+        let peak = data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b).unsigned_abs()).max().unwrap_or(0);
         if f32::from(peak) / 32768.0 > QUIET_PEAK {
             self.loud_at = now;
         }
@@ -184,9 +184,11 @@ impl Meter {
         }
         let samples: Vec<f64> = self
             .tail
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .zip(&self.window)
-            .map(|(b, w)| f64::from(i16::from_le_bytes([b[0], b[1]])) * w)
+            .map(|(b, w)| f64::from(i16::from_le_bytes(*b)) * w)
             .collect();
         let spectrum = fft(&samples);
         for (index, (start, stop)) in self.bins.clone().into_iter().enumerate() {
