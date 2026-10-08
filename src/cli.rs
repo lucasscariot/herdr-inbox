@@ -5,11 +5,13 @@ use std::path::PathBuf;
 pub const USAGE: &str = "\
 herdr-inbox — one inbox for every coding agent you run in Herdr
 
-Usage: herdr-inbox [--session NAME] [--herdr PATH]
+Usage: herdr-inbox [--session NAME] [--herdr PATH] [--config PATH]
 
 Options:
   --session NAME   Use a named Herdr session instead of the default one
   --herdr PATH     The herdr binary to run (default: herdr on PATH)
+  --config PATH    Read this config file instead of
+                   ~/.config/herdr-inbox/config.toml
   -h, --help       Show this help
   -V, --version    Show the version
 
@@ -22,6 +24,7 @@ Keys:
 pub struct Options {
     pub session: Option<String>,
     pub herdr: PathBuf,
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +35,7 @@ pub enum Command {
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
-    let mut options = Options { session: None, herdr: PathBuf::from("herdr") };
+    let mut options = Options { session: None, herdr: PathBuf::from("herdr"), config: None };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -51,6 +54,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Command, String> 
             "-V" | "--version" => return Ok(Command::Version),
             "--session" => options.session = Some(value("--session")?),
             "--herdr" => options.herdr = PathBuf::from(value("--herdr")?),
+            "--config" => options.config = Some(PathBuf::from(value("--config")?)),
             other => return Err(format!("unknown argument {other:?}; see herdr-inbox --help")),
         }
     }
@@ -67,14 +71,18 @@ mod tests {
 
     #[test]
     fn no_arguments_runs_against_the_default_session() {
-        assert_eq!(parse_strs(&[]), Ok(Command::Run(Options { session: None, herdr: "herdr".into() })));
+        assert_eq!(parse_strs(&[]), Ok(Command::Run(Options { session: None, herdr: "herdr".into(), config: None })));
     }
 
     #[test]
     fn session_and_herdr_accept_both_spellings() {
-        let expected = Ok(Command::Run(Options { session: Some("work".into()), herdr: "/opt/herdr".into() }));
-        assert_eq!(parse_strs(&["--session", "work", "--herdr", "/opt/herdr"]), expected);
-        assert_eq!(parse_strs(&["--session=work", "--herdr=/opt/herdr"]), expected);
+        let expected = Ok(Command::Run(Options {
+            session: Some("work".into()),
+            herdr: "/opt/herdr".into(),
+            config: Some("/c.toml".into()),
+        }));
+        assert_eq!(parse_strs(&["--session", "work", "--herdr", "/opt/herdr", "--config", "/c.toml"]), expected);
+        assert_eq!(parse_strs(&["--session=work", "--herdr=/opt/herdr", "--config=/c.toml"]), expected);
     }
 
     #[test]

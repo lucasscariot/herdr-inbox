@@ -290,9 +290,14 @@ pub fn harness_label(agent: &AgentInfo) -> String {
     if let Some(display) = agent.display_agent.as_deref().filter(|d| !d.trim().is_empty()) {
         return display.trim().to_string();
     }
-    let Some(kind) = agent.agent.as_deref().filter(|k| !k.trim().is_empty()) else {
-        return "Agent".to_string();
-    };
+    match agent.agent.as_deref().filter(|k| !k.trim().is_empty()) {
+        Some(kind) => harness_label_for(kind),
+        None => "Agent".to_string(),
+    }
+}
+
+/// The display spelling of an agent kind: "Claude", "OpenCode".
+pub fn harness_label_for(kind: &str) -> String {
     match kind {
         "claude" => "Claude".into(),
         "codex" => "Codex".into(),

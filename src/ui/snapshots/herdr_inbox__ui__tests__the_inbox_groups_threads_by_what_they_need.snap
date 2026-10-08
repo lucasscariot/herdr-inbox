@@ -4,6 +4,7 @@ expression: "text(&render(&app, at(0)))"
 ---
  herdr inbox                     │
  1 needs input · 1 ready         │
+  +  New thread               n  │
                                  │
  NEEDS INPUT  1                  │
 ▎cockpit                 ● input │
@@ -12,8 +13,8 @@ expression: "text(&render(&app, at(0)))"
                                  │
  READY  1                        │
 ▎site                    ✓ ready │
-▎Review navigation               │
-▎⎇ feat/a-very-long-branch-name… │          Opening Fix the login redirect loop on mobile…
+▎Review navigation               │          Opening Fix the login redirect loop on mobile…
+▎⎇ feat/a-very-long-branch-name… │
                                  │
  WORKING  1                      │
 ▎api                   ◐ working │
@@ -24,5 +25,4 @@ expression: "text(&render(&app, at(0)))"
 ▎scratch                  ○ idle │
 ▎New Pi thread                   │
 ▎Pi                              │
-                                 │
-  THREADS  ↵ open  j/k move  x archive  tab agent  q quit
+  THREADS  ↵ open  j/k move  n new  x archive  tab agent  q quit

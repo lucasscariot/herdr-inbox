@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use super::{App, Connection, Effect, Focus, StreamState};
+use super::{App, Connection, Effect, Field, Focus, StreamState};
 use crate::herdr::terminal::{Control, MouseAction, MouseButton as PaneButton, ScrollDirection};
 use crate::keys;
 
@@ -32,7 +32,135 @@ pub(super) fn key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut V
     match app.focus {
         Focus::Terminal => terminal_key(app, key, now, effects),
         Focus::List => list_key(app, key, now, effects),
+        Focus::Composer => composer_key(app, key, now, effects),
     }
+}
+
+/// Leaves the composer, back to the agent if one is open.
+fn close_composer(app: &mut App) {
+    app.composer.picker = None;
+    app.focus = if app.open.is_some() { Focus::Terminal } else { Focus::List };
+}
+
+fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    if app.composer.picker.is_some() {
+        return picker_key(app, key);
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match key.code {
+        KeyCode::Esc => return close_composer(app),
+        KeyCode::Char('c') if ctrl => {
+            if app.composer.task.text().is_empty() {
+                close_composer(app);
+            } else {
+                app.composer.task.clear();
+            }
+            return;
+        }
+        KeyCode::Char('s') if ctrl => return app.send(true, now, effects),
+        KeyCode::Enter if ctrl => return app.send(true, now, effects),
+        KeyCode::Tab => return app.with_composer(|c, ctx| c.next_field(ctx, true)),
+        KeyCode::BackTab => return app.with_composer(|c, ctx| c.next_field(ctx, false)),
+        KeyCode::F(5) => return app.discover(true, now, effects),
+        KeyCode::F(n) => {
+            if let Some(field) = Field::from_key(n) {
+                app.composer.open_picker(field, "");
+            }
+            return;
+        }
+        _ => {}
+    }
+    if app.composer.field != Field::Task {
+        return field_key(app, key);
+    }
+    let editor = &mut app.composer.task;
+    match key.code {
+        KeyCode::Enter if shift || alt => editor.insert("\n"),
+        KeyCode::Enter => app.send(false, now, effects),
+        KeyCode::Char('a') if ctrl => editor.home(),
+        KeyCode::Char('e') if ctrl => editor.end(),
+        KeyCode::Char('u') if ctrl => editor.clear(),
+        KeyCode::Char('w') if ctrl => editor.delete_word(),
+        KeyCode::Backspace if alt || ctrl => editor.delete_word(),
+        KeyCode::Char(c) if !ctrl => {
+            let mut buffer = [0; 4];
+            editor.insert(c.encode_utf8(&mut buffer));
+        }
+        KeyCode::Backspace => editor.backspace(),
+        KeyCode::Delete => editor.delete(),
+        KeyCode::Left => editor.left(),
+        KeyCode::Right => editor.right(),
+        KeyCode::Home => editor.home(),
+        KeyCode::End => editor.end(),
+        KeyCode::Up => {
+            editor.up();
+        }
+        KeyCode::Down => {
+            let moved = editor.down();
+            // Past the last line, the fields begin.
+            if !moved {
+                app.with_composer(|c, ctx| c.next_field(ctx, true));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Keys on a field row: move between fields, or open its picker.
+fn field_key(app: &mut App, key: KeyEvent) {
+    let field = app.composer.field;
+    match key.code {
+        KeyCode::Up => app.with_composer(|c, ctx| c.next_field(ctx, false)),
+        KeyCode::Down => app.with_composer(|c, ctx| c.next_field(ctx, true)),
+        KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => app.composer.open_picker(field, ""),
+        // Typing on a field starts filtering its choices.
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.composer.open_picker(field, &c.to_string())
+        }
+        _ => {}
+    }
+}
+
+fn picker_key(app: &mut App, key: KeyEvent) {
+    let Some(picker) = app.composer.picker.clone() else {
+        return;
+    };
+    let choices = app.composer.choices(&app.composer_context(), picker.field, &picker.query);
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let mut picker = picker;
+    match key.code {
+        KeyCode::Esc => {
+            app.composer.close_picker();
+            return;
+        }
+        KeyCode::Enter | KeyCode::Tab => {
+            if let Some(choice) = choices.get(picker.selected).filter(|c| c.enabled) {
+                let pick = choice.pick.clone();
+                app.composer.close_picker();
+                app.with_composer(|c, ctx| c.apply(ctx, pick));
+            }
+            return;
+        }
+        KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+        KeyCode::Char('p') if ctrl => picker.selected = picker.selected.saturating_sub(1),
+        KeyCode::Down => picker.selected += 1,
+        KeyCode::Char('n') if ctrl => picker.selected += 1,
+        KeyCode::Backspace => {
+            picker.query.pop();
+            picker.selected = 0;
+        }
+        KeyCode::Char(c) if !ctrl => {
+            picker.query.push(c);
+            picker.selected = 0;
+        }
+        _ => return,
+    }
+    // Re-rank for the new query and keep the selection on the list.
+    let count = app.composer.choices(&app.composer_context(), picker.field, &picker.query).len();
+    picker.selected = picker.selected.min(count.saturating_sub(1));
+    app.composer.picker = Some(picker);
 }
 
 fn is_ctrl_c(key: KeyEvent) -> bool {
@@ -111,6 +239,7 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
             app.confirm_archive = app.cursor.clone();
         }
+        KeyCode::Char('n') => app.open_composer(now, effects),
         // With saved machines the list stays up without a local server; `s`
         // starts one.
         KeyCode::Char('s') if app.local().connection == Connection::NoServer => app.start_local_server(now, effects),
@@ -136,6 +265,14 @@ fn select(app: &mut App, index: usize) {
 }
 
 pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
+    if app.focus == Focus::Composer {
+        match &mut app.composer.picker {
+            Some(picker) => picker.query.push_str(text.lines().next().unwrap_or("")),
+            None if app.composer.field == Field::Task => app.composer.task.insert(text),
+            None => {}
+        }
+        return;
+    }
     if app.focus != Focus::Terminal {
         return;
     }
@@ -149,6 +286,15 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
 
 pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     let (x, y) = (mouse.column, mouse.row);
+    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+        && app.layout.on_new_button(x, y)
+        && !app.needs_server_screen()
+    {
+        return app.open_composer(now, effects);
+    }
+    if app.focus == Focus::Composer && app.layout.in_terminal(x, y) {
+        return;
+    }
     if app.layout.in_list(x, y) {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {

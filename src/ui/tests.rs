@@ -407,3 +407,131 @@ fn a_notice_takes_the_place_of_the_machine_strip() {
     let last = text(&render(&app, at(1))).lines().last().unwrap().to_string();
     assert!(last.ends_with("Archived “x”") && !last.contains("Mac Studio"), "{last}");
 }
+
+mod composer {
+    use super::*;
+    use crate::discovery::{Catalog, CheckoutEntry, Choice as ModelChoice, Inventory, Project};
+    use ratatui::crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use std::collections::BTreeMap;
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.update(
+            Input::Key(KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(1),
+        );
+    }
+
+    fn composing(width: u16, height: u16) -> App {
+        let mut app = loaded(width, height);
+        key(&mut app, KeyCode::Char('n'));
+        let inventory = Inventory {
+            projects: vec![Project {
+                name: "cockpit".into(),
+                path: "/w/cockpit".into(),
+                branch: "main".into(),
+                checkouts: vec![
+                    CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false },
+                    CheckoutEntry { path: "/h/wt/fix".into(), branch: "fix".into(), linked: true },
+                ],
+            }],
+            harnesses: vec!["claude".into()],
+            models: BTreeMap::from([(
+                "claude".to_string(),
+                Catalog {
+                    choices: vec![ModelChoice { id: "opus".into(), label: "Opus".into() }],
+                    selectable: true,
+                    default: "opus".into(),
+                    thinking_flag: "--effort".into(),
+                    thinking: vec!["high".into()],
+                    ..Catalog::default()
+                },
+            )]),
+            models_at: 0,
+        };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        for c in "Fix the login redirect loop".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        app
+    }
+
+    #[test]
+    fn the_composer_replaces_the_agent_and_lists_every_choice() {
+        let app = composing(110, 30);
+        insta::assert_snapshot!(text(&render(&app, at(1))));
+    }
+
+    #[test]
+    fn the_cursor_sits_at_the_end_of_the_task() {
+        let app = composing(110, 30);
+        let mut terminal = render(&app, at(1));
+        let (x, y) = find(&terminal, "Fix the login redirect loop");
+        terminal.backend_mut().assert_cursor_position((x + "Fix the login redirect loop".len() as u16, y));
+    }
+
+    #[test]
+    fn a_picker_floats_under_its_field_with_the_query_cursor() {
+        let mut app = composing(110, 30);
+        key(&mut app, KeyCode::F(9));
+        key(&mut app, KeyCode::Char('f'));
+        let mut terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        assert!(screen.contains(" Workspace "), "{screen}");
+        assert!(screen.contains("› f"), "{screen}");
+        assert!(screen.contains("New worktree named f"), "{screen}");
+        let (x, y) = find(&terminal, "› f");
+        terminal.backend_mut().assert_cursor_position((x + 3, y));
+    }
+
+    #[test]
+    fn launches_and_discovery_errors_are_listed() {
+        let mut app = composing(110, 34);
+        key(&mut app, KeyCode::Enter);
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Err("python3: command not found".into()) }, at(2));
+        let screen = text(&render(&app, at(2)));
+        assert!(screen.contains("✗ Local: python3: command not found"), "{screen}");
+        assert!(screen.contains("LAUNCHES"), "{screen}");
+        assert!(screen.contains("⟳ cockpit · Claude  Fix the login redirect loop"), "{screen}");
+    }
+
+    #[test]
+    fn a_send_error_shows_under_the_task() {
+        let mut app = loaded(110, 30);
+        key(&mut app, KeyCode::Char('n'));
+        key(&mut app, KeyCode::Enter);
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("Write a task first."), "{screen}");
+    }
+
+    #[test]
+    fn the_new_thread_button_sits_in_the_sidebar_and_opens_the_composer() {
+        let mut app = loaded(100, 24);
+        let screen = text(&render(&app, at(0)));
+        assert!(screen.lines().nth(2).unwrap().contains("+  New thread"), "{screen}");
+        let button = app.layout.new_button;
+        app.update(
+            Input::Mouse(ratatui::crossterm::event::MouseEvent {
+                kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+                column: button.x + 3,
+                row: button.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            at(1),
+        );
+        assert_eq!(app.focus, crate::app::Focus::Composer);
+    }
+
+    #[test]
+    fn tiny_windows_render_the_composer_without_panicking() {
+        for (w, h) in [(30, 6), (60, 10), (44, 16)] {
+            let mut app = composing(w, h);
+            key(&mut app, KeyCode::F(4));
+            let _ = render(&app, at(1));
+        }
+    }
+}
