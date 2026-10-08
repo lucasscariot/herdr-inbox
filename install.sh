@@ -67,7 +67,9 @@ download "$base/$asset" "$work/$asset" || fail "could not download $base/$asset"
 download "$base/$asset.sha256" "$work/$asset.sha256" || fail "could not download the checksum"
 expected=$(cut -d ' ' -f 1 < "$work/$asset.sha256")
 actual=$(sha256 "$work/$asset")
-[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset: nothing was installed"
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+  fail "checksum mismatch for $asset: nothing was installed"
+fi
 
 tar -xzf "$work/$asset" -C "$work"
 [ -f "$work/herdr-inbox" ] || fail "the archive has no herdr-inbox binary"

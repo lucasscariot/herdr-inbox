@@ -60,6 +60,16 @@ fn install(dir: &Path, releases: &Path, os: &str, arch: &str, path: &str) -> Out
         .unwrap()
 }
 
+/// Everything the script said, for assertion messages.
+fn said(output: &Output) -> String {
+    format!(
+        "status {:?}\n--- stdout\n{}--- stderr\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 fn system_path() -> String {
     std::env::var("PATH").unwrap_or_default()
 }
@@ -71,7 +81,7 @@ fn it_installs_the_binary_for_this_platform_and_says_so() {
     let path = format!("{}:{}", dir.path().join("bin").display(), system_path());
     let output = install(dir.path(), &releases, "Linux", "amd64", &path);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{}", said(&output));
     assert!(stdout.contains("Downloading herdr-inbox-linux-x86_64.tar.gz"), "{stdout}");
     assert!(
         stdout.contains(&format!("Installed herdr-inbox 1.2.3 to {}/bin/herdr-inbox", dir.path().display())),
@@ -174,7 +184,7 @@ fn an_existing_binary_is_replaced_and_path_and_herdr_are_checked() {
     }
     let output = install(dir.path(), &releases, "Linux", "x86_64", &tools.display().to_string());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{}", said(&output));
     assert!(stdout.contains("is not on your PATH"), "{stdout}");
     assert!(stdout.contains("Herdr 0.9.2 or newer, which is not installed yet"), "{stdout}");
     let version = Command::new(dir.path().join("bin/herdr-inbox")).arg("--version").output().unwrap();
