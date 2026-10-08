@@ -132,7 +132,7 @@ def popup_request(pane_id, machine_id="local"):
         raise HerdrError("Focus an agent pane first, then dictate.")
     return {
         "plugin_id": PLUGIN_ID,
-        "entrypoint": "dictate",
+        "entrypoint": "dictation",
         "placement": "popup",
         "focus": True,
         "width": POPUP_WIDTH,

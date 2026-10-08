@@ -44,7 +44,7 @@ def main():
     command.add_argument("--title", default="", help="Thread title to show while recording")
     how = command.add_mutually_exclusive_group()
     how.add_argument("--open", action="store_true", help="Open the dictation popup over the focused pane (the dictate action)")
-    how.add_argument("--popup", action="store_true", help="Run the dictation popup itself (the dictate pane)")
+    how.add_argument("--popup", action="store_true", help="Run the dictation popup itself (the dictation pane)")
     args = parser.parse_args()
     if os.environ.get("HERDR_ENV") != "1" and not getattr(args, "demo", False):
         parser.error("Run this inside Herdr. For a UI preview use: python3 main.py ui --demo")

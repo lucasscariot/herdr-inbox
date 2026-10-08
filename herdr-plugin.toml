@@ -50,7 +50,7 @@ placement = "tab"
 command = ["python3", "main.py", "ui", "--view", "inbox"]
 
 [[panes]]
-id = "dictate"
+id = "dictation"
 title = "Dictate"
 placement = "popup"
 width = 64

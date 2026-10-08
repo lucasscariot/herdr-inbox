@@ -140,7 +140,7 @@ class DictateTests(unittest.TestCase):
         dictate.open_popup(herdr, "w1:p2")
         method, params = herdr.calls[-1]
         self.assertEqual(method, "plugin.pane.open")
-        self.assertEqual((params["plugin_id"], params["entrypoint"], params["placement"], params["focus"]), ("lucasscariot.herdr-inbox", "dictate", "popup", True))
+        self.assertEqual((params["plugin_id"], params["entrypoint"], params["placement"], params["focus"]), ("lucasscariot.herdr-inbox", "dictation", "popup", True))
         self.assertEqual(params["env"], {"HERDR_INBOX_PANE": "w1:p2", "HERDR_INBOX_MACHINE": "local"})
         with self.assertRaisesRegex(HerdrError, "Focus an agent pane"):
             dictate.open_popup(herdr, "")
