@@ -104,6 +104,18 @@ impl Activity {
         }
     }
 
+    /// A thread that appeared while the inbox was running: its age starts now.
+    pub fn appear(&mut self, id: &str, status: AgentStatus, now: SystemTime) {
+        self.observe(id, status, now);
+        if let Some(entry) = self.entries.get_mut(id) {
+            entry.changed_at.get_or_insert(now);
+        }
+    }
+
+    pub fn knows(&self, id: &str) -> bool {
+        self.entries.contains_key(id)
+    }
+
     /// The user opened this thread: a finished thread stops asking for attention.
     pub fn mark_seen(&mut self, id: &str) {
         if let Some(entry) = self.entries.get_mut(id) {
@@ -511,6 +523,16 @@ mod tests {
         activity.observe("a", AgentStatus::Done, at(2));
         assert_eq!(activity.effective("a", AgentStatus::Done), AgentStatus::Done);
         activity.mark_seen("unknown-thread");
+    }
+
+    #[test]
+    fn a_thread_that_appears_later_gets_an_age_immediately() {
+        let mut activity = Activity::default();
+        activity.appear("new", AgentStatus::Working, at(5));
+        assert!(activity.knows("new"));
+        assert_eq!(activity.changed_at("new"), Some(at(5)));
+        activity.appear("new", AgentStatus::Working, at(9));
+        assert_eq!(activity.changed_at("new"), Some(at(5)), "appearing again keeps the first time");
     }
 
     #[test]
