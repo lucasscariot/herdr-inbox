@@ -48,7 +48,9 @@ fn release(dir: &Path, platform: &str, version: &str) -> PathBuf {
 }
 
 fn install(dir: &Path, releases: &Path, os: &str, arch: &str, path: &str) -> Output {
+    // `-x` traces each step to stderr, which every assertion prints.
     Command::new("sh")
+        .arg("-x")
         .arg(installer())
         .env("HERDR_INBOX_BASE_URL", format!("file://{}", releases.display()))
         .env("HERDR_INBOX_INSTALL_DIR", dir.join("bin"))
@@ -82,12 +84,12 @@ fn it_installs_the_binary_for_this_platform_and_says_so() {
     let output = install(dir.path(), &releases, "Linux", "amd64", &path);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{}", said(&output));
-    assert!(stdout.contains("Downloading herdr-inbox-linux-x86_64.tar.gz"), "{stdout}");
+    assert!(stdout.contains("Downloading herdr-inbox-linux-x86_64.tar.gz"), "{}", said(&output));
     assert!(
         stdout.contains(&format!("Installed herdr-inbox 1.2.3 to {}/bin/herdr-inbox", dir.path().display())),
-        "{stdout}"
+        "{}", said(&output)
     );
-    assert!(!stdout.contains("not on your PATH"), "{stdout}");
+    assert!(!stdout.contains("not on your PATH"), "{}", said(&output));
     let binary = dir.path().join("bin/herdr-inbox");
     let version = Command::new(&binary).arg("--version").output().unwrap();
     assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "herdr-inbox 1.2.3");
@@ -111,7 +113,7 @@ fn a_tampered_download_installs_nothing_and_keeps_the_old_binary() {
     std::fs::create_dir_all(dir.path().join("bin")).unwrap();
     std::fs::write(dir.path().join("bin/herdr-inbox"), "old").unwrap();
     let output = install(dir.path(), &releases, "Linux", "x86_64", &system_path());
-    assert!(!output.status.success());
+    assert!(!output.status.success(), "{}", said(&output));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("checksum mismatch"),
         "{}",
@@ -125,7 +127,7 @@ fn an_unsupported_platform_points_to_building_from_source() {
     let dir = tempfile::tempdir().unwrap();
     let releases = release(dir.path(), "linux-x86_64", "1.0.0");
     let output = install(dir.path(), &releases, "Linux", "riscv64", &system_path());
-    assert!(!output.status.success());
+    assert!(!output.status.success(), "{}", said(&output));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("no prebuilt binary for riscv64") && stderr.contains("cargo install --locked --git"),
@@ -140,7 +142,7 @@ fn a_missing_release_fails_cleanly() {
     let dir = tempfile::tempdir().unwrap();
     let releases = release(dir.path(), "linux-x86_64", "1.0.0");
     let output = install(dir.path(), &releases, "Linux", "aarch64", &system_path());
-    assert!(!output.status.success());
+    assert!(!output.status.success(), "{}", said(&output));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("could not download"),
         "{}",
@@ -185,8 +187,8 @@ fn an_existing_binary_is_replaced_and_path_and_herdr_are_checked() {
     let output = install(dir.path(), &releases, "Linux", "x86_64", &tools.display().to_string());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{}", said(&output));
-    assert!(stdout.contains("is not on your PATH"), "{stdout}");
-    assert!(stdout.contains("Herdr 0.9.2 or newer, which is not installed yet"), "{stdout}");
+    assert!(stdout.contains("is not on your PATH"), "{}", said(&output));
+    assert!(stdout.contains("Herdr 0.9.2 or newer, which is not installed yet"), "{}", said(&output));
     let version = Command::new(dir.path().join("bin/herdr-inbox")).arg("--version").output().unwrap();
     assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "herdr-inbox 3.0.0");
 }
