@@ -2,6 +2,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -23,6 +24,12 @@ class FakeRecording:
 
     def elapsed(self):
         return 3
+
+    def levels(self):
+        return [0.25, 0.5, 1.0]
+
+    def quiet(self):
+        return False
 
     def stop(self):
         self.stopped = True
@@ -105,6 +112,26 @@ class DictateTests(unittest.TestCase):
             self.assertEqual(events[-1], {"event": "cancelled"})
             self.assertTrue(FakeRecording.instances[0].cancelled)
             self.assertEqual(herdr.calls, [])
+
+    def test_a_polled_stdin_streams_meter_levels_until_the_command_arrives(self):
+        read_end, write_end = os.pipe()
+        timer = threading.Timer(0.25, lambda: (os.write(write_end, b"send\n"), os.close(write_end)))
+        timer.start()
+        herdr = FakeHerdr()
+        session = dictate.Session(herdr, self.store, self.machine, "w1:p2", "Fix login")
+        out = io.StringIO()
+        with open(read_end, "r") as stdin:
+            code = dictate.headless(session, stdin=stdin, stdout=out)
+        timer.join()
+        events = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual(code, 0)
+        kinds = [event["event"] for event in events]
+        self.assertEqual(kinds[0], "recording")
+        self.assertEqual(kinds[-2:], ["transcribing", "done"])
+        levels = [event for event in events if event["event"] == "level"]
+        self.assertGreaterEqual(len(levels), 2)
+        self.assertEqual(levels[0], {"event": "level", "bands": [0.25, 0.5, 1.0], "quiet": False})
+        self.assertEqual(herdr.calls, [("prompt", "mac", "w1:p2", "fix the login redirect")])
 
     def test_missing_transcription_service_fails_before_recording(self):
         with patch("inbox.speech.available_backends", return_value=[]):

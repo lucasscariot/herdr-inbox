@@ -8,9 +8,10 @@ without submitting so it can be edited in place, and Esc discards it.
 Two front ends drive one ``Session``:
 
 - ``main.py dictate --pane ID [--machine ID]`` is headless. It prints one JSON
-  event per line on stdout and takes one command line on stdin (``send``,
-  ``type`` or ``cancel``; EOF cancels). The inbox client runs it for its
-  global Ctrl+T, on whichever machine the focused thread lives.
+  event per line on stdout (``level`` events carry the live meter while it
+  records) and takes one command line on stdin (``send``, ``type`` or
+  ``cancel``; EOF cancels). The inbox client runs it for its global Ctrl+T, on
+  whichever machine the focused thread lives.
 - ``main.py dictate --popup`` is a small prompt for Herdr's popup placement.
   ``main.py dictate --open`` opens it over the focused pane; that is what the
   ``dictate`` plugin action runs, so any Herdr client can bind a key to it.
@@ -19,10 +20,11 @@ Two front ends drive one ``Session``:
 import curses
 import json
 import os
+import select
 import sys
 import time
 
-from . import speech
+from . import meter, speech
 from .herdr import HerdrError, Machine, local_machine
 from .text import ellipsis
 
@@ -61,6 +63,12 @@ class Session:
     def elapsed(self):
         return self.recording.elapsed() if self.recording else 0
 
+    def levels(self):
+        return self.recording.levels() if self.recording else []
+
+    def quiet(self):
+        return self.recording.quiet() if self.recording else False
+
     def finish(self, mode):
         """Stop recording and transcribe; ``send`` submits the text as a prompt, ``type`` types it unsent."""
         if mode not in MODES:
@@ -96,6 +104,20 @@ class Session:
 
 # ----- headless front end ------------------------------------------------------
 
+def await_command(stdin, tick, interval=1 / meter.FPS):
+    """The first line on stdin, calling ``tick`` every ``interval`` while waiting when stdin can be polled."""
+    try:
+        descriptor = stdin.fileno()
+        select.select([descriptor], [], [], 0)
+    except (AttributeError, OSError, ValueError):
+        return (stdin.readline() or "").strip() or "cancel"
+    while True:
+        ready, _, _ = select.select([descriptor], [], [], interval)
+        if ready:
+            return (stdin.readline() or "").strip() or "cancel"
+        tick()
+
+
 def headless(session, stdin=sys.stdin, stdout=sys.stdout):
     """Record until stdin says ``send``, ``type`` or ``cancel``; report JSON events; return an exit code."""
 
@@ -109,7 +131,7 @@ def headless(session, stdin=sys.stdin, stdout=sys.stdout):
         emit(event="error", message=str(error))
         return 1
     emit(event="recording", target=session.title)
-    command = (stdin.readline() or "").strip() or "cancel"
+    command = await_command(stdin, lambda: emit(event="level", bands=[round(level, 2) for level in session.levels()], quiet=session.quiet()))
     if command not in MODES:
         session.cancel()
         emit(event="cancelled")
@@ -162,25 +184,42 @@ def popup(screen, session):
     curses.raw()
     curses.curs_set(0)
     curses.set_escdelay(30)
-    screen.timeout(100)
+    screen.timeout(int(1000 / meter.FPS))
     warn = ok = dim = 0
+    tones = (0, 0, 0)
     if curses.has_colors():
         curses.start_color()
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_YELLOW, -1)
         curses.init_pair(2, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_RED, -1)
         warn, ok, dim = curses.color_pair(1) | curses.A_BOLD, curses.color_pair(2) | curses.A_BOLD, curses.A_DIM
+        tones = (curses.color_pair(2), curses.color_pair(1), curses.color_pair(3))
 
-    def draw(status, style, hint):
+    def put(row, column, text, attribute=0, width=None):
+        height, columns = screen.getmaxyx()
+        if 0 <= row < height and 0 <= column < columns - 1:
+            try:
+                screen.addnstr(row, column, text, min(width if width is not None else columns, columns - column - 1), attribute)
+            except curses.error:
+                pass
+
+    def draw(status, style, hint, levels=None):
         screen.erase()
         height, width = screen.getmaxyx()
-        lines = [("Dictating to " + ellipsis(session.title, max(8, width - 16)), curses.A_BOLD), (status, style), (hint, dim)]
-        for row, (text, attribute) in enumerate(lines):
-            if row < height:
-                try:
-                    screen.addnstr(row + (1 if height > 4 else 0), 2, text, max(1, width - 3), attribute)
-                except curses.error:
-                    pass
+        put(0, 2, "Dictating to " + ellipsis(session.title, max(8, width - 16)), curses.A_BOLD)
+        if levels is None:
+            put(1, 2, status, style)
+            put(2, 2, hint, dim)
+        else:
+            rows = max(1, min(3, height - 3))
+            for offset, runs in enumerate(meter.bars(levels, width - 4, rows)):
+                column = 2
+                for text, tone in runs:
+                    put(1 + offset, column, text, tones[tone])
+                    column += len(text)
+            put(1 + rows, 2, status, style)
+            put(2 + rows, 2, hint, dim)
         screen.refresh()
 
     def wait_for_key():
@@ -199,7 +238,10 @@ def popup(screen, session):
     mode = None
     while mode is None:
         seconds = int(session.elapsed())
-        draw("● Recording  %d:%02d" % divmod(seconds, 60), warn, "Enter send   Ctrl+T type without sending   Esc discard")
+        status = "● Recording  %d:%02d" % divmod(seconds, 60)
+        if session.quiet():
+            status += "   no sound is reaching the microphone"
+        draw(status, warn, "Enter send   Ctrl+T type without sending   Esc discard", session.levels())
         try:
             key = screen.get_wch()
         except curses.error:

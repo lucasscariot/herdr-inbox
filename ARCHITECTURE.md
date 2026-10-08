@@ -16,6 +16,7 @@ inbox/opencode.py    OpenCode 2 session API calls
 inbox/relay.py       self-contained event watcher (runs locally and on remote hosts)
 inbox/live.py        one supervised relay link per machine, feeding a queue
 inbox/speech.py      dictation: recorders, transcription services, local tools
+inbox/meter.py       live microphone levels read from the growing WAV, equalizer rendering
 inbox/dictate.py     dictation into a running thread: headless engine and popup
 inbox/presets.py     named harness/model/thinking combinations
 inbox/store.py       config, preferences, presets, credentials, journals
@@ -46,7 +47,10 @@ drains on every loop iteration. The UI rebuilds rows only for machines that
 changed.
 
 **Dictation.** `speech.Recording` captures 16 kHz mono WAV with the first
-available recorder. `speech.transcribe` picks the first usable backend: a
+available recorder. Every recorder streams to disk, so `meter.Meter` tails the
+file for live band levels instead of opening the microphone twice; the UIs
+poll it fifteen times a second and the headless engine prints it as `level`
+events for the client. `speech.transcribe` picks the first usable backend: a
 configured command, a detected local tool, then hosted services by key.
 Credentials saved from the Dictation menu live in `credentials.json` with
 mode 0600 and override `config.json`.

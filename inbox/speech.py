@@ -1,6 +1,7 @@
 """Dictation: record from the microphone, then transcribe through a connected service.
 
-Recording uses whatever is installed (PipeWire, ALSA, sox, ffmpeg). Transcription
+Recording uses whatever is installed (PipeWire, ALSA, sox, ffmpeg); every
+recorder streams the WAV to disk so ``meter`` can show live levels from it. Transcription
 goes to the service the user connected from the Dictation menu, to keys in
 config.json or the environment, or to a local whisper.cpp build. Nothing here
 blocks the UI: recording is a child process and transcription runs in a worker.
@@ -21,6 +22,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from . import meter
+
 SAMPLE_RATE = 16000
 
 
@@ -34,7 +37,7 @@ RECORDERS = (
     ("arecord", lambda path: ["arecord", "-q", "-f", "S16_LE", "-r", str(SAMPLE_RATE), "-c", "1", path]),
     ("parecord", lambda path: ["parecord", "--rate=" + str(SAMPLE_RATE), "--channels=1", "--format=s16le", "--file-format=wav", path]),
     ("rec", lambda path: ["rec", "-q", "-r", str(SAMPLE_RATE), "-c", "1", "-b", "16", path]),
-    ("ffmpeg", lambda path: ["ffmpeg", "-loglevel", "error", "-y", "-f", "avfoundation" if os.uname().sysname == "Darwin" else "pulse", "-i", ":0" if os.uname().sysname == "Darwin" else "default", "-ac", "1", "-ar", str(SAMPLE_RATE), path]),
+    ("ffmpeg", lambda path: ["ffmpeg", "-loglevel", "error", "-y", "-f", "avfoundation" if os.uname().sysname == "Darwin" else "pulse", "-i", ":0" if os.uname().sysname == "Darwin" else "default", "-ac", "1", "-ar", str(SAMPLE_RATE), "-flush_packets", "1", path]),
 )
 
 # Hosted services. ``verify`` is a cheap authenticated GET used to check a pasted key.
@@ -106,6 +109,7 @@ class Recording:
         self.path = os.path.join(tempfile.gettempdir(), "herdr-inbox-" + uuid.uuid4().hex + ".wav")
         self.process = None
         self.started = None
+        self.meter = meter.Meter(self.path)
 
     def start(self):
         argv = recorder_command(self.path)
@@ -120,6 +124,14 @@ class Recording:
 
     def elapsed(self):
         return time.monotonic() - self.started if self.started else 0
+
+    def levels(self):
+        """Current band levels (0..1) read from the file the recorder is writing."""
+        return self.meter.update()
+
+    def quiet(self):
+        """True when nothing audible has reached the microphone for a few seconds."""
+        return self.meter.quiet()
 
     def stop(self):
         """Stop the recorder gracefully so the WAV header is finalized, then return the file."""
