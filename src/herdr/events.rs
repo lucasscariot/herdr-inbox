@@ -46,10 +46,7 @@ pub fn lifecycle_subscriptions() -> Vec<Value> {
 }
 
 pub fn status_subscriptions<'a>(pane_ids: impl IntoIterator<Item = &'a str>) -> Vec<Value> {
-    pane_ids
-        .into_iter()
-        .map(|pane_id| json!({"type": "pane.agent_status_changed", "pane_id": pane_id}))
-        .collect()
+    pane_ids.into_iter().map(|pane_id| json!({"type": "pane.agent_status_changed", "pane_id": pane_id})).collect()
 }
 
 /// Herdr sends lifecycle names with underscores (`pane_closed`) and
@@ -62,8 +59,8 @@ fn normalize_name(name: &str) -> String {
 }
 
 pub fn parse_event(line: &str) -> Result<Option<Event>, ApiError> {
-    let value: Value = serde_json::from_str(line.trim())
-        .map_err(|err| ApiError::Protocol(format!("invalid event JSON ({err})")))?;
+    let value: Value =
+        serde_json::from_str(line.trim()).map_err(|err| ApiError::Protocol(format!("invalid event JSON ({err})")))?;
     if value.get("error").is_some() {
         return parse_response(line).map(|_| None);
     }
@@ -73,8 +70,7 @@ pub fn parse_event(line: &str) -> Result<Option<Event>, ApiError> {
     let name = normalize_name(name);
     if name == "pane.agent_status_changed" {
         let data = value.get("data").cloned().unwrap_or(Value::Null);
-        let change = serde_json::from_value(data)
-            .map_err(|err| ApiError::Protocol(format!("{name}: {err}")))?;
+        let change = serde_json::from_value(data).map_err(|err| ApiError::Protocol(format!("{name}: {err}")))?;
         return Ok(Some(Event::Status(change)));
     }
     Ok(Some(Event::Lifecycle(name)))
@@ -203,12 +199,30 @@ mod tests {
         // Herdr rejects the whole subscription when one entry is invalid, so the
         // list must stay within the schema's Subscription enum (Herdr 0.9.3).
         const ACCEPTED: &[&str] = &[
-            "workspace.created", "workspace.updated", "workspace.metadata_updated",
-            "workspace.renamed", "workspace.moved", "workspace.reordered", "workspace.closed",
-            "workspace.focused", "worktree.created", "worktree.opened", "worktree.removed",
-            "tab.created", "tab.closed", "tab.focused", "tab.renamed", "tab.moved",
-            "pane.created", "pane.closed", "pane.updated", "pane.focused", "pane.moved",
-            "pane.exited", "pane.agent_detected", "layout.updated",
+            "workspace.created",
+            "workspace.updated",
+            "workspace.metadata_updated",
+            "workspace.renamed",
+            "workspace.moved",
+            "workspace.reordered",
+            "workspace.closed",
+            "workspace.focused",
+            "worktree.created",
+            "worktree.opened",
+            "worktree.removed",
+            "tab.created",
+            "tab.closed",
+            "tab.focused",
+            "tab.renamed",
+            "tab.moved",
+            "pane.created",
+            "pane.closed",
+            "pane.updated",
+            "pane.focused",
+            "pane.moved",
+            "pane.exited",
+            "pane.agent_detected",
+            "layout.updated",
         ];
         for kind in LIFECYCLE {
             assert!(ACCEPTED.contains(kind), "{kind} is not a Herdr subscription type");
@@ -220,7 +234,10 @@ mod tests {
         let server = FakeServer::start_raw(|request, stream| {
             write_line(stream, &json!({"id": request["id"], "result": {"type": "subscription_started"}}));
             write_line(stream, &json!({"event": "pane_created", "data": {}}));
-            write_line(stream, &json!({"event": "pane.agent_status_changed", "data": {"pane_id": "w1:p1", "agent_status": "working"}}));
+            write_line(
+                stream,
+                &json!({"event": "pane.agent_status_changed", "data": {"pane_id": "w1:p1", "agent_status": "working"}}),
+            );
         });
         let mut subscription = Subscription::open(server.path(), lifecycle_subscriptions()).unwrap();
         assert_eq!(subscription.next_event().unwrap(), Some(Event::Lifecycle("pane.created".into())));
@@ -234,7 +251,10 @@ mod tests {
     #[test]
     fn a_rejected_subscription_reports_the_server_error() {
         let server = FakeServer::start_raw(|request, stream| {
-            write_line(stream, &json!({"id": request["id"], "error": {"code": "pane_not_found", "message": "no such pane"}}));
+            write_line(
+                stream,
+                &json!({"id": request["id"], "error": {"code": "pane_not_found", "message": "no such pane"}}),
+            );
         });
         let err = Subscription::open(server.path(), status_subscriptions(["w9:p9"])).err().unwrap();
         assert_eq!(err.code(), Some("pane_not_found"));
@@ -245,10 +265,7 @@ mod tests {
         let server = FakeServer::start_raw(|request, stream| {
             write_line(stream, &json!({"id": request["id"], "result": {"type": "ok"}}));
         });
-        assert!(matches!(
-            Subscription::open(server.path(), lifecycle_subscriptions()),
-            Err(ApiError::Protocol(_))
-        ));
+        assert!(matches!(Subscription::open(server.path(), lifecycle_subscriptions()), Err(ApiError::Protocol(_))));
     }
 
     #[test]

@@ -1,0 +1,28 @@
+---
+source: src/ui/tests.rs
+expression: "text(&render(&app, at(0)))"
+---
+ herdr inbox                     │
+ 1 needs input · 1 ready         │
+                                 │
+ NEEDS INPUT  1                  │
+▎cockpit                 ● input │
+▎Fix the login redirect loop on… │
+▎⎇ fix-login-redirect · Claude   │
+                                 │
+ READY  1                        │
+▎site                    ✓ ready │
+▎Review navigation               │
+▎⎇ feat/a-very-long-branch-name… │          Opening Fix the login redirect loop on mobile…
+                                 │
+ WORKING  1                      │
+▎api                   ◐ working │
+▎Add invoice export              │
+▎⎇ main · Codex                  │
+                                 │
+ IDLE  1                         │
+▎scratch                  ○ idle │
+▎New Pi thread                   │
+▎Pi                              │
+                                 │
+  THREADS  ↵ open  j/k move  x archive  tab agent  q quit

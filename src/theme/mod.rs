@@ -36,7 +36,7 @@ pub const DEFAULT_THEME: &str = "catppuccin";
 
 impl Default for Palette {
     fn default() -> Self {
-        builtin::builtin(DEFAULT_THEME).unwrap_or_else(|| unreachable_palette())
+        builtin::builtin(DEFAULT_THEME).unwrap_or_else(unreachable_palette)
     }
 }
 
@@ -95,11 +95,9 @@ pub fn parse_color(value: &str) -> Option<Color> {
         let digit = |s: &str| u8::from_str_radix(s, 16).ok();
         return match hex.len() {
             6 if hex.is_ascii() => Some(Color::Rgb(digit(&hex[0..2])?, digit(&hex[2..4])?, digit(&hex[4..6])?)),
-            3 if hex.is_ascii() => Some(Color::Rgb(
-                digit(&hex[0..1])? * 17,
-                digit(&hex[1..2])? * 17,
-                digit(&hex[2..3])? * 17,
-            )),
+            3 if hex.is_ascii() => {
+                Some(Color::Rgb(digit(&hex[0..1])? * 17, digit(&hex[1..2])? * 17, digit(&hex[2..3])? * 17))
+            }
             _ => None,
         };
     }
@@ -168,10 +166,7 @@ pub fn from_herdr_config(text: &str) -> Palette {
     } else {
         config.theme.name.as_deref()
     };
-    let mut palette = name
-        .and_then(canonical_name)
-        .and_then(builtin::builtin)
-        .unwrap_or_default();
+    let mut palette = name.and_then(canonical_name).and_then(builtin::builtin).unwrap_or_default();
     if let Some(accent) = config.ui.accent.as_deref().and_then(parse_color) {
         palette.accent = accent;
     }
@@ -182,9 +177,7 @@ pub fn from_herdr_config(text: &str) -> Palette {
 }
 
 pub fn load(herdr_config: &Path) -> Palette {
-    std::fs::read_to_string(herdr_config)
-        .map(|text| from_herdr_config(&text))
-        .unwrap_or_default()
+    std::fs::read_to_string(herdr_config).map(|text| from_herdr_config(&text)).unwrap_or_default()
 }
 
 impl Palette {
@@ -295,7 +288,8 @@ unknown_token = "#ffffff"
 
     #[test]
     fn auto_switch_follows_the_dark_theme() {
-        let palette = from_herdr_config("[theme]\nname = \"catppuccin-latte\"\nauto_switch = true\ndark_name = \"dracula\"");
+        let palette =
+            from_herdr_config("[theme]\nname = \"catppuccin-latte\"\nauto_switch = true\ndark_name = \"dracula\"");
         assert_eq!(palette, builtin::builtin("dracula").unwrap());
     }
 }

@@ -20,11 +20,7 @@ pub fn checkout(path: &Path) -> Option<Checkout> {
         let dot_git = current.join(".git");
         if let Some((git_dir, common_dir)) = git_dirs(&dot_git) {
             let repo = repo_name(&common_dir)?;
-            return Some(Checkout {
-                repo,
-                branch: read_branch(&git_dir),
-                root: current.to_path_buf(),
-            });
+            return Some(Checkout { repo, branch: read_branch(&git_dir), root: current.to_path_buf() });
         }
         dir = current.parent();
     }

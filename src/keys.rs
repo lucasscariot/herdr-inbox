@@ -32,11 +32,7 @@ fn csi_letter(letter: char, mods: KeyModifiers, application: bool) -> Vec<u8> {
 
 fn csi_tilde(number: u8, mods: KeyModifiers) -> Vec<u8> {
     let param = modifier_param(mods);
-    if param > 1 {
-        format!("\x1b[{number};{param}~").into_bytes()
-    } else {
-        format!("\x1b[{number}~").into_bytes()
-    }
+    if param > 1 { format!("\x1b[{number};{param}~").into_bytes() } else { format!("\x1b[{number}~").into_bytes() }
 }
 
 fn alt(mut bytes: Vec<u8>, mods: KeyModifiers) -> Vec<u8> {

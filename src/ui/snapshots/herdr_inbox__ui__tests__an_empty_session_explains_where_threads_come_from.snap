@@ -1,0 +1,24 @@
+---
+source: src/ui/tests.rs
+expression: "text(&render(&app, at(0)))"
+---
+ herdr inbox                     │
+ 0 threads                       │
+                                 │
+ No agent threads yet.           │
+ Start one in Herdr; it shows up │
+ here.                           │
+                                 │
+                                 │
+                                 │
+                                 │       Agent threads you start in Herdr appear on the left.
+                                 │
+                                 │
+                                 │
+                                 │
+                                 │
+                                 │
+                                 │
+                                 │
+                                 │
+  THREADS  ↵ open  j/k move  x archive  tab agent  q quit

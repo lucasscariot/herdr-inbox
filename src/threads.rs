@@ -92,14 +92,7 @@ impl Activity {
                 entry.seen_done = false;
             }
             None => {
-                self.entries.insert(
-                    id.to_string(),
-                    Entry {
-                        status,
-                        changed_at: None,
-                        seen_done: false,
-                    },
-                );
+                self.entries.insert(id.to_string(), Entry { status, changed_at: None, seen_done: false });
             }
         }
     }
@@ -118,10 +111,10 @@ impl Activity {
 
     /// The user opened this thread: a finished thread stops asking for attention.
     pub fn mark_seen(&mut self, id: &str) {
-        if let Some(entry) = self.entries.get_mut(id) {
-            if entry.status == AgentStatus::Done {
-                entry.seen_done = true;
-            }
+        if let Some(entry) = self.entries.get_mut(id)
+            && entry.status == AgentStatus::Done
+        {
+            entry.seen_done = true;
         }
     }
 
@@ -203,10 +196,7 @@ fn thread(
 }
 
 fn basename(path: &str) -> Option<String> {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string)
+    Path::new(path).file_name().and_then(|name| name.to_str()).map(str::to_string)
 }
 
 /// The best human title Herdr knows for a thread.
@@ -229,12 +219,12 @@ pub fn title(agent: &AgentInfo, tab: Option<&TabInfo>, harness: &str) -> String 
 /// Strips a leading `[3] ` counter and surrounding whitespace.
 fn clean_title(raw: &str) -> String {
     let raw = raw.trim();
-    if let Some(rest) = raw.strip_prefix('[') {
-        if let Some((count, tail)) = rest.split_once(']') {
-            if !count.is_empty() && count.chars().all(|c| c.is_ascii_digit()) {
-                return tail.trim().to_string();
-            }
-        }
+    if let Some(rest) = raw.strip_prefix('[')
+        && let Some((count, tail)) = rest.split_once(']')
+        && !count.is_empty()
+        && count.chars().all(|c| c.is_ascii_digit())
+    {
+        return tail.trim().to_string();
     }
     raw.to_string()
 }
@@ -244,10 +234,11 @@ fn is_meaningful(title: &str, agent: &AgentInfo) -> bool {
     if title.is_empty() {
         return false;
     }
-    if let Some((user_host, _)) = title.split_once(':') {
-        if user_host.contains('@') && !user_host.contains(' ') {
-            return false;
-        }
+    if let Some((user_host, _)) = title.split_once(':')
+        && user_host.contains('@')
+        && !user_host.contains(' ')
+    {
+        return false;
     }
     let lower = title.to_lowercase();
     let names = [agent.agent.as_deref(), agent.display_agent.as_deref()];
@@ -354,10 +345,11 @@ mod tests {
 
     #[test]
     fn groups_follow_attention_order() {
-        let order: Vec<Group> = [AgentStatus::Unknown, AgentStatus::Idle, AgentStatus::Working, AgentStatus::Done, AgentStatus::Blocked]
-            .into_iter()
-            .map(Group::of)
-            .collect();
+        let order: Vec<Group> =
+            [AgentStatus::Unknown, AgentStatus::Idle, AgentStatus::Working, AgentStatus::Done, AgentStatus::Blocked]
+                .into_iter()
+                .map(Group::of)
+                .collect();
         let mut sorted = order.clone();
         sorted.sort();
         assert_eq!(sorted, Group::ALL.to_vec());
@@ -476,8 +468,11 @@ mod tests {
         snapshot.workspaces.push(WorkspaceInfo { workspace_id: "w3".into(), label: "notes".into(), worktree: None });
         snapshot.agents.push(agent("w4:p1", AgentStatus::Idle));
         let checkout = |path: &Path| {
-            (path == Path::new("/w/api/src"))
-                .then(|| Checkout { repo: "api".into(), branch: Some("main".into()), root: "/w/api".into() })
+            (path == Path::new("/w/api/src")).then(|| Checkout {
+                repo: "api".into(),
+                branch: Some("main".into()),
+                root: "/w/api".into(),
+            })
         };
         let threads = build(&snapshot, &Activity::default(), &checkout);
         let by_pane = |pane: &str| threads.iter().find(|t| t.pane_id == pane).unwrap().clone();
@@ -575,7 +570,16 @@ mod tests {
         let ids: Vec<&str> = threads.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(
             ids,
-            ["blocked", "done", "working-new", "working-old", "working-unknown-high", "working-unknown-low", "idle", "unknown"]
+            [
+                "blocked",
+                "done",
+                "working-new",
+                "working-old",
+                "working-unknown-high",
+                "working-unknown-low",
+                "idle",
+                "unknown"
+            ]
         );
     }
 

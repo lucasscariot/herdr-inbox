@@ -169,8 +169,7 @@ mod tests {
 
     #[test]
     fn workspace_worktree_is_optional() {
-        let plain: WorkspaceInfo =
-            serde_json::from_value(json!({"workspace_id": "w1", "label": "lucas"})).unwrap();
+        let plain: WorkspaceInfo = serde_json::from_value(json!({"workspace_id": "w1", "label": "lucas"})).unwrap();
         assert_eq!(plain.worktree, None);
         let linked: WorkspaceInfo = serde_json::from_value(json!({
             "workspace_id": "w2",

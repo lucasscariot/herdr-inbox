@@ -62,18 +62,13 @@ pub(crate) fn connect(socket: &Path) -> Result<UnixStream, ApiError> {
 
 /// Turns one response line into its `result` object or the server's error.
 pub(crate) fn parse_response(line: &str) -> Result<Value, ApiError> {
-    let mut value: Value = serde_json::from_str(line.trim())
-        .map_err(|err| ApiError::Protocol(format!("invalid JSON ({err})")))?;
+    let mut value: Value =
+        serde_json::from_str(line.trim()).map_err(|err| ApiError::Protocol(format!("invalid JSON ({err})")))?;
     if let Some(error) = value.get("error") {
         let code = error.get("code").and_then(Value::as_str).unwrap_or("error");
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("Herdr returned an error without a message");
-        return Err(ApiError::Server {
-            code: code.to_string(),
-            message: message.to_string(),
-        });
+        let message =
+            error.get("message").and_then(Value::as_str).unwrap_or("Herdr returned an error without a message");
+        return Err(ApiError::Server { code: code.to_string(), message: message.to_string() });
     }
     match value.get_mut("result") {
         Some(result) => Ok(result.take()),
@@ -83,10 +78,7 @@ pub(crate) fn parse_response(line: &str) -> Result<Value, ApiError> {
 
 impl Api {
     pub fn new(socket: impl Into<PathBuf>) -> Self {
-        Self {
-            socket: socket.into(),
-            timeout: DEFAULT_TIMEOUT,
-        }
+        Self { socket: socket.into(), timeout: DEFAULT_TIMEOUT }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -136,11 +128,7 @@ impl Api {
 
     /// Closes one workspace. A linked worktree stays on disk.
     pub fn workspace_close(&self, workspace_id: &str) -> Result<(), ApiError> {
-        self.call(
-            "workspace.close",
-            json!({"workspace_id": workspace_id, "close_group": false}),
-        )
-        .map(|_| ())
+        self.call("workspace.close", json!({"workspace_id": workspace_id, "close_group": false})).map(|_| ())
     }
 }
 
@@ -153,8 +141,7 @@ mod tests {
     fn parse_response_returns_result_or_server_error() {
         let ok = parse_response(r#"{"id":"1","result":{"type":"pong","version":"0.9.3"}}"#).unwrap();
         assert_eq!(ok["version"], "0.9.3");
-        let err = parse_response(r#"{"id":"1","error":{"code":"pane_not_found","message":"no pane w9"}}"#)
-            .unwrap_err();
+        let err = parse_response(r#"{"id":"1","error":{"code":"pane_not_found","message":"no pane w9"}}"#).unwrap_err();
         assert_eq!(err.code(), Some("pane_not_found"));
         assert_eq!(err.to_string(), "no pane w9");
     }

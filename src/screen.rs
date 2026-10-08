@@ -8,6 +8,16 @@ use ratatui::style::{Color, Modifier, Style};
 use crate::herdr::terminal::Frame;
 use crate::keys::Modes;
 
+thread_local! {
+    static RECOVERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the current thread is inside the emulator, where a panic is caught
+/// and the screen reset. The panic hook uses it to keep the UI on screen.
+pub fn recovering() -> bool {
+    RECOVERING.with(std::cell::Cell::get)
+}
+
 /// vt100 underflows on a wrap in a screen narrower or shorter than two cells.
 const MIN_SIZE: u16 = 2;
 
@@ -22,10 +32,7 @@ pub struct Screen {
 
 impl Screen {
     pub fn new(cols: u16, rows: u16) -> Self {
-        Self {
-            parser: parser(cols, rows),
-            seq: None,
-        }
+        Self { parser: parser(cols, rows), seq: None }
     }
 
     /// Applies one frame. A full frame starts from a blank screen so no state
@@ -38,7 +45,9 @@ impl Screen {
             self.parser.screen_mut().set_size(rows, cols);
         }
         let emulator = &mut self.parser;
+        RECOVERING.with(|flag| flag.set(true));
         let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| emulator.process(&frame.bytes)));
+        RECOVERING.with(|flag| flag.set(false));
         if processed.is_err() {
             // A frame the emulator cannot handle must not take the inbox down;
             // the next full frame repaints the screen.
@@ -60,10 +69,7 @@ impl Screen {
 
     pub fn modes(&self) -> Modes {
         let screen = self.parser.screen();
-        Modes {
-            application_cursor: screen.application_cursor(),
-            bracketed_paste: screen.bracketed_paste(),
-        }
+        Modes { application_cursor: screen.application_cursor(), bracketed_paste: screen.bracketed_paste() }
     }
 
     /// Whether the application asked for mouse events.
@@ -158,10 +164,7 @@ fn style(cell: &vt100::Cell) -> Style {
     if cell.inverse() {
         modifier |= Modifier::REVERSED;
     }
-    Style::new()
-        .fg(color(cell.fgcolor()))
-        .bg(color(cell.bgcolor()))
-        .add_modifier(modifier)
+    Style::new().fg(color(cell.fgcolor())).bg(color(cell.bgcolor())).add_modifier(modifier)
 }
 
 #[cfg(test)]

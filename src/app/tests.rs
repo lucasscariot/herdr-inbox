@@ -34,10 +34,7 @@ fn agent(pane: &str, status: AgentStatus, title: &str) -> AgentInfo {
 }
 
 fn snapshot(agents: Vec<AgentInfo>) -> Input {
-    Input::Snapshot(SessionSnapshot {
-        agents,
-        ..SessionSnapshot::default()
-    })
+    Input::Snapshot(SessionSnapshot { agents, ..SessionSnapshot::default() })
 }
 
 fn app() -> App {
@@ -111,13 +108,16 @@ fn the_cursor_follows_its_thread_when_the_order_changes() {
     let (mut app, _) = loaded();
     app.update(press(KeyCode::Char('j')), at(1));
     assert_eq!(app.cursor.as_deref(), Some("w2:p1"));
-    app.update(Input::Status(AgentStatusChange {
-        pane_id: "w2:p1".into(),
-        agent_status: AgentStatus::Blocked,
-        agent: None,
-        display_agent: None,
-        title: None,
-    }), at(2));
+    app.update(
+        Input::Status(AgentStatusChange {
+            pane_id: "w2:p1".into(),
+            agent_status: AgentStatus::Blocked,
+            agent: None,
+            display_agent: None,
+            title: None,
+        }),
+        at(2),
+    );
     assert_eq!(ids(&app)[0], "w2:p1", "the newest blocked thread moves to the top");
     assert_eq!(app.cursor.as_deref(), Some("w2:p1"));
 }
@@ -201,7 +201,11 @@ fn keys_in_the_terminal_go_to_the_agent_except_tab() {
     let effects = app.update(press_with(KeyCode::BackTab, KeyModifiers::SHIFT), at(1));
     assert_eq!(effects, vec![Effect::Send { generation: 1, control: Control::Input(b"\x1b[Z".to_vec()) }]);
     let effects = app.update(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), at(1));
-    assert_eq!(effects, vec![Effect::Send { generation: 1, control: Control::Input(vec![3]) }], "Ctrl+C interrupts the agent, not the inbox");
+    assert_eq!(
+        effects,
+        vec![Effect::Send { generation: 1, control: Control::Input(vec![3]) }],
+        "Ctrl+C interrupts the agent, not the inbox"
+    );
     assert!(app.update(press(KeyCode::Tab), at(1)).is_empty());
     assert_eq!(app.focus, Focus::List);
 }
@@ -246,12 +250,15 @@ fn frames_from_a_released_session_are_ignored() {
 fn a_taken_over_stream_can_be_taken_back_with_enter() {
     let (mut app, _) = loaded();
     app.update(press(KeyCode::Enter), at(1));
-    app.update(Input::Terminal { generation: 1, message: Message::Closed { reason: Some("taken over".into()) } }, at(2));
-    assert_eq!(app.open.as_ref().unwrap().stream, StreamState::Closed { reason: Some("taken over".into()) });
-    assert_eq!(app.notice.as_ref().unwrap().kind, NoticeKind::Error);
+    app.update(Input::Terminal { generation: 1, message: Message::Closed { reason: Some(TAKEN_OVER.into()) } }, at(2));
+    assert_eq!(app.open.as_ref().unwrap().stream, StreamState::Closed { reason: Some(TAKEN_OVER.into()) });
+    assert!(app.notice.is_none(), "the terminal area explains it; no second message");
     assert!(app.update(press(KeyCode::Char('x')), at(2)).is_empty(), "typing into a closed stream does nothing");
     let effects = app.update(press(KeyCode::Enter), at(2));
-    assert_eq!(effects, vec![Effect::Detach, Effect::Attach { generation: 2, pane_id: "w1:p1".into(), cols: 79, rows: 39 }]);
+    assert_eq!(
+        effects,
+        vec![Effect::Detach, Effect::Attach { generation: 2, pane_id: "w1:p1".into(), cols: 79, rows: 39 }]
+    );
 }
 
 #[test]
@@ -308,10 +315,43 @@ fn without_a_server_enter_starts_one_and_q_quits() {
     app.update(Input::Connection(Connection::NoServer), at(0));
     assert_eq!(app.update(press(KeyCode::Char('j')), at(0)), vec![]);
     assert_eq!(app.update(press(KeyCode::Enter), at(0)), vec![Effect::StartServer]);
-    assert_eq!(app.connection, Connection::Starting);
+    assert_eq!(app.connection, Connection::Starting(at(0)));
     let mut app = self::app();
     app.update(Input::Connection(Connection::NoServer), at(0));
     assert_eq!(app.update(press(KeyCode::Char('q')), at(0)), vec![Effect::Quit]);
+}
+
+#[test]
+fn a_starting_server_is_given_time_before_giving_up() {
+    let mut app = app();
+    app.update(Input::Connection(Connection::NoServer), at(0));
+    app.update(press(KeyCode::Enter), at(0));
+    app.update(Input::Connection(Connection::NoServer), at(9));
+    assert_eq!(app.connection, Connection::Starting(at(0)), "still booting");
+    assert!(app.update(press(KeyCode::Enter), at(9)).is_empty(), "no second server");
+    app.update(Input::Connection(Connection::NoServer), at(10));
+    assert_eq!(app.connection, Connection::NoServer);
+    assert_eq!(app.notice.as_ref().unwrap().kind, NoticeKind::Error);
+    assert_eq!(app.update(press(KeyCode::Enter), at(11)), vec![Effect::StartServer], "the user can try again");
+    assert!(app.notice.is_none(), "trying again clears the failure");
+}
+
+#[test]
+fn a_started_server_takes_over_from_the_starting_screen() {
+    let mut app = app();
+    app.update(Input::Connection(Connection::NoServer), at(0));
+    app.update(press(KeyCode::Enter), at(0));
+    app.update(snapshot(vec![agent("w1:p1", AgentStatus::Idle, "Login")]), at(2));
+    assert_eq!(app.connection, Connection::Live);
+    assert_eq!(app.threads.len(), 1);
+}
+
+#[test]
+fn q_quits_while_a_server_starts() {
+    let mut app = app();
+    app.update(Input::Connection(Connection::NoServer), at(0));
+    app.update(press(KeyCode::Enter), at(0));
+    assert_eq!(app.update(press(KeyCode::Char('q')), at(1)), vec![Effect::Quit]);
 }
 
 #[test]
@@ -346,13 +386,16 @@ fn resizing_without_an_open_thread_only_updates_the_layout() {
 #[test]
 fn status_changes_update_status_title_and_age() {
     let (mut app, _) = loaded();
-    app.update(Input::Status(AgentStatusChange {
-        pane_id: "w3:p1".into(),
-        agent_status: AgentStatus::Working,
-        agent: Some("codex".into()),
-        display_agent: None,
-        title: Some("ignored while a terminal title exists".into()),
-    }), at(5));
+    app.update(
+        Input::Status(AgentStatusChange {
+            pane_id: "w3:p1".into(),
+            agent_status: AgentStatus::Working,
+            agent: Some("codex".into()),
+            display_agent: None,
+            title: Some("ignored while a terminal title exists".into()),
+        }),
+        at(5),
+    );
     let thread = app.thread("w3:p1").unwrap();
     assert_eq!(thread.status, AgentStatus::Working);
     assert_eq!(thread.harness, "Codex");
@@ -477,7 +520,13 @@ fn the_wheel_scrolls_the_pane_and_clicks_reach_apps_that_want_them() {
         app.update(mouse(MouseEventKind::Down(MouseButton::Left), x, y), at(1)),
         vec![Effect::Send {
             generation: 1,
-            control: Control::Mouse { action: MouseAction::Down, button: PaneButton::Left, column: 4, row: 2, modifiers: 0 },
+            control: Control::Mouse {
+                action: MouseAction::Down,
+                button: PaneButton::Left,
+                column: 4,
+                row: 2,
+                modifiers: 0
+            },
         }]
     );
 }
@@ -495,14 +544,20 @@ fn mouse_modifiers_use_herdr_bits() {
     let effects = app.update(Input::Mouse(event), at(1));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::Send { control: Control::Mouse { action: MouseAction::Drag, button: PaneButton::Right, modifiers: 5, .. }, .. }]
+        [Effect::Send {
+            control: Control::Mouse { action: MouseAction::Drag, button: PaneButton::Right, modifiers: 5, .. },
+            ..
+        }]
     ));
     event.modifiers = KeyModifiers::CONTROL;
     event.kind = MouseEventKind::Up(MouseButton::Middle);
     let effects = app.update(Input::Mouse(event), at(1));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::Send { control: Control::Mouse { action: MouseAction::Up, button: PaneButton::Middle, modifiers: 2, .. }, .. }]
+        [Effect::Send {
+            control: Control::Mouse { action: MouseAction::Up, button: PaneButton::Middle, modifiers: 2, .. },
+            ..
+        }]
     ));
 }
 

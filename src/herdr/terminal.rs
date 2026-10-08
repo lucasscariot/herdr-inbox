@@ -31,11 +31,7 @@ pub struct HerdrCommand {
 
 impl HerdrCommand {
     pub fn new(program: impl Into<PathBuf>) -> Self {
-        Self {
-            program: program.into(),
-            prefix: Vec::new(),
-            env: Vec::new(),
-        }
+        Self { program: program.into(), prefix: Vec::new(), env: Vec::new() }
     }
 
     pub fn command(&self) -> Command {
@@ -76,7 +72,9 @@ pub struct Frame {
 pub enum Message {
     Frame(Frame),
     /// The stream ended. `reason` is Herdr's, or the subprocess's last error line.
-    Closed { reason: Option<String> },
+    Closed {
+        reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,25 +105,12 @@ enum Record {
 pub fn parse_line(line: &str) -> Result<Option<Message>, String> {
     let record: Record = serde_json::from_str(line.trim()).map_err(|err| format!("invalid record: {err}"))?;
     match record {
-        Record::Frame {
-            seq,
-            width,
-            height,
-            full,
-            encoding,
-            bytes,
-        } => {
+        Record::Frame { seq, width, height, full, encoding, bytes } => {
             if let Some(encoding) = encoding.filter(|e| e != "ansi") {
                 return Err(format!("unsupported frame encoding {encoding:?}"));
             }
             let bytes = BASE64.decode(bytes).map_err(|err| format!("invalid frame bytes: {err}"))?;
-            Ok(Some(Message::Frame(Frame {
-                seq,
-                width,
-                height,
-                full,
-                bytes,
-            })))
+            Ok(Some(Message::Frame(Frame { seq, width, height, full, bytes })))
         }
         Record::Closed { reason } => Ok(Some(Message::Closed { reason })),
         Record::Other => Ok(None),
@@ -158,13 +143,7 @@ pub enum Control {
     Input(Vec<u8>),
     Resize { cols: u16, rows: u16 },
     Scroll { direction: ScrollDirection, lines: u16 },
-    Mouse {
-        action: MouseAction,
-        button: MouseButton,
-        column: u16,
-        row: u16,
-        modifiers: u8,
-    },
+    Mouse { action: MouseAction, button: MouseButton, column: u16, row: u16, modifiers: u8 },
     Release,
 }
 
@@ -184,13 +163,7 @@ pub fn encode(command: &Control) -> Option<String> {
             "direction": match direction { ScrollDirection::Up => "up", ScrollDirection::Down => "down" },
             "lines": lines,
         }),
-        Control::Mouse {
-            action,
-            button,
-            column,
-            row,
-            modifiers,
-        } => json!({
+        Control::Mouse { action, button, column, row, modifiers } => json!({
             "type": "terminal.mouse",
             "action": match action {
                 MouseAction::Down => "down",
@@ -401,13 +374,22 @@ mod tests {
     #[test]
     fn resize_scroll_mouse_and_release_match_herdr_field_names() {
         let parse = |c: &Control| serde_json::from_str::<Value>(&encode(c).unwrap()).unwrap();
-        assert_eq!(parse(&Control::Resize { cols: 120, rows: 40 }), json!({"type": "terminal.resize", "cols": 120, "rows": 40}));
+        assert_eq!(
+            parse(&Control::Resize { cols: 120, rows: 40 }),
+            json!({"type": "terminal.resize", "cols": 120, "rows": 40})
+        );
         assert_eq!(
             parse(&Control::Scroll { direction: ScrollDirection::Down, lines: 3 }),
             json!({"type": "terminal.scroll", "direction": "down", "lines": 3})
         );
         assert_eq!(
-            parse(&Control::Mouse { action: MouseAction::Drag, button: MouseButton::Right, column: 4, row: 2, modifiers: 2 }),
+            parse(&Control::Mouse {
+                action: MouseAction::Drag,
+                button: MouseButton::Right,
+                column: 4,
+                row: 2,
+                modifiers: 2
+            }),
             json!({"type": "terminal.mouse", "action": "drag", "button": "right", "column": 4, "row": 2, "modifiers": 2})
         );
         assert_eq!(parse(&Control::Release), json!({"type": "terminal.release"}));
@@ -439,6 +421,25 @@ mod tests {
         HerdrCommand::new(script)
     }
 
+    /// Spawns, retrying while another test thread's fork still holds the
+    /// freshly written script open (ETXTBSY), a race only tests that write
+    /// executables can hit.
+    fn spawn(
+        herdr: &HerdrCommand,
+        target: &str,
+        (cols, rows): (u16, u16),
+        on_message: impl Fn(Message) + Send + Clone + 'static,
+    ) -> Session {
+        for _ in 0..50 {
+            match Session::spawn(herdr, target, cols, rows, on_message.clone()) {
+                Ok(session) => return session,
+                Err(err) if err.raw_os_error() == Some(26) => thread::sleep(Duration::from_millis(10)),
+                Err(err) => panic!("spawn failed: {err}"),
+            }
+        }
+        panic!("the fake herdr script stayed busy");
+    }
+
     fn collect(rx: &mpsc::Receiver<Message>) -> Vec<Message> {
         let mut messages = Vec::new();
         while let Ok(message) = rx.recv_timeout(Duration::from_secs(3)) {
@@ -457,10 +458,9 @@ mod tests {
         let stdout = format!("{}\n{}\n", frame_line(1, true, b"A"), frame_line(2, false, b"B"));
         let herdr = fake_herdr(dir.path(), &stdout, "", 0);
         let (tx, rx) = mpsc::channel();
-        let mut session = Session::spawn(&herdr, "w1:p1", 90, 20, move |m| {
+        let mut session = spawn(&herdr, "w1:p1", (90, 20), move |m| {
             let _ = tx.send(m);
-        })
-        .unwrap();
+        });
         session.send(&Control::Input(b"ls\r".to_vec())).unwrap();
         session.release();
         let messages = collect(&rx);
@@ -481,10 +481,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let herdr = fake_herdr(dir.path(), "", "herdr: pane w9:p9 not found", 1);
         let (tx, rx) = mpsc::channel();
-        let mut session = Session::spawn(&herdr, "w9:p9", 80, 24, move |m| {
+        let mut session = spawn(&herdr, "w9:p9", (80, 24), move |m| {
             let _ = tx.send(m);
-        })
-        .unwrap();
+        });
         session.release();
         assert_eq!(collect(&rx), vec![Message::Closed { reason: Some("pane w9:p9 not found".into()) }]);
     }
@@ -494,10 +493,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let herdr = fake_herdr(dir.path(), "{\"type\":\"terminal.closed\",\"reason\":\"taken over\"}\n", "noise", 0);
         let (tx, rx) = mpsc::channel();
-        let mut session = Session::spawn(&herdr, "w1:p1", 80, 24, move |m| {
+        let mut session = spawn(&herdr, "w1:p1", (80, 24), move |m| {
             let _ = tx.send(m);
-        })
-        .unwrap();
+        });
         session.release();
         assert_eq!(collect(&rx), vec![Message::Closed { reason: Some("taken over".into()) }]);
     }
@@ -506,7 +504,7 @@ mod tests {
     fn sending_after_release_is_an_error_not_a_panic() {
         let dir = tempfile::tempdir().unwrap();
         let herdr = fake_herdr(dir.path(), "", "", 0);
-        let mut session = Session::spawn(&herdr, "w1:p1", 80, 24, |_| {}).unwrap();
+        let mut session = spawn(&herdr, "w1:p1", (80, 24), |_| {});
         session.release();
         assert!(session.send(&Control::Input(b"x".to_vec())).is_err());
     }

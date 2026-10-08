@@ -18,6 +18,8 @@ use crate::threads::{self, Activity, Thread, ThreadId};
 pub use layout::{Layout, Row, RowKind};
 
 const NOTICE_TTL: Duration = Duration::from_secs(4);
+/// How long a server the user asked for may take to answer.
+const START_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -33,16 +35,21 @@ pub enum Connection {
     NoServer,
     /// The server answered once but the link is down; the runtime retries.
     Lost(String),
-    /// A server is being started on the user's request.
-    Starting,
+    /// A server is being started on the user's request, since the given time.
+    Starting(SystemTime),
 }
+
+/// Herdr's close reason when another client takes a pane over.
+pub const TAKEN_OVER: &str = "terminal attach taken over";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamState {
     Attaching,
     Live,
-    /// The stream ended. `taken_over` when another client took the pane.
-    Closed { reason: Option<String> },
+    /// The stream ended, with Herdr's reason when it gave one.
+    Closed {
+        reason: Option<String>,
+    },
 }
 
 pub struct OpenThread {
@@ -79,8 +86,15 @@ pub enum Effect {
         rows: u16,
     },
     /// Forward to the session of `generation`.
-    Send { generation: u64, control: Control },
-    Archive { thread: ThreadId, workspace_id: String, title: String },
+    Send {
+        generation: u64,
+        control: Control,
+    },
+    Archive {
+        thread: ThreadId,
+        workspace_id: String,
+        title: String,
+    },
     StartServer,
     Quit,
 }
@@ -99,6 +113,9 @@ pub enum Input {
     Tick,
 }
 
+/// Finds the git checkout of a path; injected so tests need no repositories.
+pub type CheckoutReader = Box<dyn Fn(&std::path::Path) -> Option<crate::git::Checkout>>;
+
 pub struct App {
     pub threads: Vec<Thread>,
     /// The highlighted thread in the list, tracked by identity so it survives
@@ -114,15 +131,11 @@ pub struct App {
     activity: Activity,
     snapshot: Option<SessionSnapshot>,
     next_generation: u64,
-    checkout: Box<dyn Fn(&std::path::Path) -> Option<crate::git::Checkout>>,
+    checkout: CheckoutReader,
 }
 
 impl App {
-    pub fn new(
-        width: u16,
-        height: u16,
-        checkout: Box<dyn Fn(&std::path::Path) -> Option<crate::git::Checkout>>,
-    ) -> Self {
+    pub fn new(width: u16, height: u16, checkout: CheckoutReader) -> Self {
         Self {
             threads: Vec::new(),
             cursor: None,
@@ -144,12 +157,12 @@ impl App {
         match input {
             Input::Snapshot(snapshot) => self.on_snapshot(snapshot, now, &mut effects),
             Input::Status(change) => self.on_status(change, now),
-            Input::Connection(connection) => self.on_connection(connection, &mut effects),
+            Input::Connection(connection) => self.on_connection(connection, now, &mut effects),
             Input::Key(key) => input::key(self, key, now, &mut effects),
             Input::Paste(text) => input::paste(self, &text, &mut effects),
             Input::Mouse(mouse) => input::mouse(self, mouse, now, &mut effects),
             Input::Resize { width, height } => self.on_resize(width, height, &mut effects),
-            Input::Terminal { generation, message } => self.on_terminal(generation, message, now),
+            Input::Terminal { generation, message } => self.on_terminal(generation, message),
             Input::Archived { title, result } => match result {
                 Ok(()) => self.notify(format!("Archived “{title}”"), NoticeKind::Info, now),
                 Err(err) => self.notify(format!("Could not archive “{title}”: {err}"), NoticeKind::Error, now),
@@ -174,14 +187,17 @@ impl App {
     }
 
     pub fn notify(&mut self, text: impl Into<String>, kind: NoticeKind, now: SystemTime) {
-        self.notice = Some(Notice {
-            text: text.into(),
-            kind,
-            until: now + NOTICE_TTL,
-        });
+        self.notice = Some(Notice { text: text.into(), kind, until: now + NOTICE_TTL });
     }
 
-    fn on_connection(&mut self, connection: Connection, effects: &mut Vec<Effect>) {
+    fn on_connection(&mut self, connection: Connection, now: SystemTime, effects: &mut Vec<Effect>) {
+        // While a requested server boots, "no server yet" is expected.
+        if let (Connection::Starting(since), Connection::NoServer) = (&self.connection, &connection) {
+            if now.duration_since(*since).unwrap_or_default() < START_TIMEOUT {
+                return;
+            }
+            self.notify("Herdr did not start. Try `herdr server` in a shell to see why.", NoticeKind::Error, now);
+        }
         let lost = !matches!(connection, Connection::Live | Connection::Connecting);
         self.connection = connection;
         if lost {
@@ -212,24 +228,25 @@ impl App {
         self.snapshot = Some(snapshot);
         self.rebuild(now);
 
-        if let Some(open) = &self.open {
-            if !live.contains(&open.id) {
-                self.open = None;
-                effects.push(Effect::Detach);
-                if self.focus == Focus::Terminal {
-                    self.focus = Focus::List;
-                }
-                self.notify("The thread you had open ended", NoticeKind::Info, now);
+        if let Some(open) = &self.open
+            && !live.contains(&open.id)
+        {
+            self.open = None;
+            effects.push(Effect::Detach);
+            if self.focus == Focus::Terminal {
+                self.focus = Focus::List;
             }
+            self.notify("The thread you had open ended", NoticeKind::Info, now);
         }
         if self.confirm_archive.as_ref().is_some_and(|id| !live.contains(id)) {
             self.confirm_archive = None;
         }
         self.fix_cursor();
-        if first && self.open.is_none() {
-            if let Some(id) = self.cursor.clone() {
-                self.open_thread(&id, now, effects);
-            }
+        if first
+            && self.open.is_none()
+            && let Some(id) = self.cursor.clone()
+        {
+            self.open_thread(&id, now, effects);
         }
     }
 
@@ -273,9 +290,7 @@ impl App {
         }
         let previous = self.layout.cursor_index();
         self.cursor = match previous {
-            Some(index) if !self.threads.is_empty() => {
-                Some(self.threads[index.min(self.threads.len() - 1)].id.clone())
-            }
+            Some(index) if !self.threads.is_empty() => Some(self.threads[index.min(self.threads.len() - 1)].id.clone()),
             _ => self.threads.first().map(|t| t.id.clone()),
         };
     }
@@ -284,17 +299,17 @@ impl App {
         let before = self.layout.terminal_size();
         self.layout.resize(width, height);
         let after = self.layout.terminal_size();
-        if before != after {
-            if let Some(open) = &self.open {
-                effects.push(Effect::Send {
-                    generation: open.generation,
-                    control: Control::Resize { cols: after.0, rows: after.1 },
-                });
-            }
+        if before != after
+            && let Some(open) = &self.open
+        {
+            effects.push(Effect::Send {
+                generation: open.generation,
+                control: Control::Resize { cols: after.0, rows: after.1 },
+            });
         }
     }
 
-    fn on_terminal(&mut self, generation: u64, message: Message, now: SystemTime) {
+    fn on_terminal(&mut self, generation: u64, message: Message) {
         let Some(open) = self.open.as_mut().filter(|o| o.generation == generation) else {
             return;
         };
@@ -303,12 +318,7 @@ impl App {
                 open.screen.apply(&frame);
                 open.stream = StreamState::Live;
             }
-            Message::Closed { reason } => {
-                open.stream = StreamState::Closed { reason: reason.clone() };
-                if let Some(reason) = reason {
-                    self.notify(reason, NoticeKind::Error, now);
-                }
-            }
+            Message::Closed { reason } => open.stream = StreamState::Closed { reason },
         }
     }
 
@@ -320,10 +330,8 @@ impl App {
         let pane_id = thread.pane_id.clone();
         // Re-opening the open thread is a no-op, unless its stream ended (for
         // instance because another client took it over): then it re-attaches.
-        let already_streaming = self
-            .open
-            .as_ref()
-            .is_some_and(|o| o.id == id && !matches!(o.stream, StreamState::Closed { .. }));
+        let already_streaming =
+            self.open.as_ref().is_some_and(|o| o.id == id && !matches!(o.stream, StreamState::Closed { .. }));
         if already_streaming {
             self.mark_seen(id, now);
             return;
@@ -341,12 +349,7 @@ impl App {
             screen: Screen::new(cols, rows),
             stream: StreamState::Attaching,
         });
-        effects.push(Effect::Attach {
-            generation,
-            pane_id,
-            cols,
-            rows,
-        });
+        effects.push(Effect::Attach { generation, pane_id, cols, rows });
         self.mark_seen(id, now);
     }
 

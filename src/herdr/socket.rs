@@ -51,10 +51,7 @@ pub fn config_dir(env: &SocketEnv) -> Result<PathBuf, SocketError> {
     if let Some(xdg) = &env.xdg_config_home {
         return Ok(xdg.join("herdr"));
     }
-    env.home
-        .as_ref()
-        .map(|home| home.join(".config").join("herdr"))
-        .ok_or(SocketError::NoConfigDir)
+    env.home.as_ref().map(|home| home.join(".config").join("herdr")).ok_or(SocketError::NoConfigDir)
 }
 
 pub fn resolve(explicit_session: Option<&str>, env: &SocketEnv) -> Result<Endpoint, SocketError> {
@@ -62,34 +59,22 @@ pub fn resolve(explicit_session: Option<&str>, env: &SocketEnv) -> Result<Endpoi
         return session_endpoint(session, env);
     }
     if let Some(path) = &env.socket_path {
-        return Ok(Endpoint {
-            api_socket: path.clone(),
-            session: session_from_socket(path),
-        });
+        return Ok(Endpoint { api_socket: path.clone(), session: session_from_socket(path) });
     }
     // Herdr silently ignores an invalid HERDR_SESSION, so do the same.
     if let Some(session) = env.session.as_deref().filter(|s| validate_session(s).is_ok()) {
         return session_endpoint(session, env);
     }
-    Ok(Endpoint {
-        api_socket: config_dir(env)?.join("herdr.sock"),
-        session: None,
-    })
+    Ok(Endpoint { api_socket: config_dir(env)?.join("herdr.sock"), session: None })
 }
 
 fn session_endpoint(session: &str, env: &SocketEnv) -> Result<Endpoint, SocketError> {
     validate_session(session)?;
     if session == "default" {
-        return Ok(Endpoint {
-            api_socket: config_dir(env)?.join("herdr.sock"),
-            session: None,
-        });
+        return Ok(Endpoint { api_socket: config_dir(env)?.join("herdr.sock"), session: None });
     }
     Ok(Endpoint {
-        api_socket: config_dir(env)?
-            .join("sessions")
-            .join(session)
-            .join("herdr.sock"),
+        api_socket: config_dir(env)?.join("sessions").join(session).join("herdr.sock"),
         session: Some(session.to_string()),
     })
 }
@@ -99,14 +84,8 @@ fn validate_session(session: &str) -> Result<(), SocketError> {
         && session.len() <= MAX_SESSION_NAME_LEN
         && session != "."
         && session != ".."
-        && session
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    if valid {
-        Ok(())
-    } else {
-        Err(SocketError::InvalidSession(session.to_string()))
-    }
+        && session.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if valid { Ok(()) } else { Err(SocketError::InvalidSession(session.to_string())) }
 }
 
 /// `…/sessions/<name>/herdr.sock` names a session; anything else is either the
@@ -125,10 +104,7 @@ mod tests {
     use super::*;
 
     fn env() -> SocketEnv {
-        SocketEnv {
-            home: Some(PathBuf::from("/home/u")),
-            ..SocketEnv::default()
-        }
+        SocketEnv { home: Some(PathBuf::from("/home/u")), ..SocketEnv::default() }
     }
 
     #[test]
@@ -140,14 +116,8 @@ mod tests {
 
     #[test]
     fn xdg_config_home_wins_over_home() {
-        let env = SocketEnv {
-            xdg_config_home: Some(PathBuf::from("/xdg")),
-            ..env()
-        };
-        assert_eq!(
-            resolve(None, &env).unwrap().api_socket,
-            PathBuf::from("/xdg/herdr/herdr.sock")
-        );
+        let env = SocketEnv { xdg_config_home: Some(PathBuf::from("/xdg")), ..env() };
+        assert_eq!(resolve(None, &env).unwrap().api_socket, PathBuf::from("/xdg/herdr/herdr.sock"));
     }
 
     #[test]
@@ -158,10 +128,7 @@ mod tests {
             ..env()
         };
         let endpoint = resolve(Some("work"), &env).unwrap();
-        assert_eq!(
-            endpoint.api_socket,
-            PathBuf::from("/home/u/.config/herdr/sessions/work/herdr.sock")
-        );
+        assert_eq!(endpoint.api_socket, PathBuf::from("/home/u/.config/herdr/sessions/work/herdr.sock"));
         assert_eq!(endpoint.session.as_deref(), Some("work"));
     }
 
@@ -188,19 +155,13 @@ mod tests {
 
     #[test]
     fn socket_path_with_another_file_name_names_no_session() {
-        let env = SocketEnv {
-            socket_path: Some(PathBuf::from("/x/sessions/a/custom.sock")),
-            ..env()
-        };
+        let env = SocketEnv { socket_path: Some(PathBuf::from("/x/sessions/a/custom.sock")), ..env() };
         assert_eq!(resolve(None, &env).unwrap().session, None);
     }
 
     #[test]
     fn session_env_is_used_when_nothing_else_is_set() {
-        let env = SocketEnv {
-            session: Some("night".into()),
-            ..env()
-        };
+        let env = SocketEnv { session: Some("night".into()), ..env() };
         assert_eq!(
             resolve(None, &env).unwrap().api_socket,
             PathBuf::from("/home/u/.config/herdr/sessions/night/herdr.sock")
@@ -230,10 +191,7 @@ mod tests {
 
     #[test]
     fn an_invalid_session_env_falls_back_to_the_default_like_herdr() {
-        let env = SocketEnv {
-            session: Some("../evil".into()),
-            ..env()
-        };
+        let env = SocketEnv { session: Some("../evil".into()), ..env() };
         let endpoint = resolve(None, &env).unwrap();
         assert_eq!(endpoint.api_socket, PathBuf::from("/home/u/.config/herdr/herdr.sock"));
         assert_eq!(endpoint.session, None);

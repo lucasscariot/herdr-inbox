@@ -66,12 +66,7 @@ impl FakeServer {
                 }
             });
         }
-        Self {
-            _dir: dir,
-            path,
-            requests,
-            stop,
-        }
+        Self { _dir: dir, path, requests, stop }
     }
 
     pub fn path(&self) -> &Path {
@@ -80,18 +75,6 @@ impl FakeServer {
 
     pub fn requests(&self) -> Vec<Value> {
         self.requests.lock().expect("requests lock").clone()
-    }
-
-    /// Waits until at least `count` requests arrived, for asynchronous callers.
-    pub fn wait_for_requests(&self, count: usize, timeout: Duration) -> Vec<Value> {
-        let deadline = std::time::Instant::now() + timeout;
-        loop {
-            let requests = self.requests();
-            if requests.len() >= count || std::time::Instant::now() > deadline {
-                return requests;
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
     }
 }
 

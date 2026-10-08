@@ -8,6 +8,19 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Added
 
+- `herdr-inbox`, a standalone Rust client for Herdr. A live thread list grouped
+  by what each agent needs, the selected agent's terminal next to it, fully
+  interactive, and archiving. It talks to the running Herdr server through the
+  JSON API and `herdr terminal session control` only, and follows the Herdr
+  theme. Plain `herdr` keeps working beside it.
+
+### Changed
+
+- The Python plugin moved to `legacy/`. Link it from there
+  (`herdr plugin link legacy`) until the standalone client replaces it.
+
+### Added (legacy plugin)
+
 - Live microphone meter while dictating: a twelve-band equalizer read from
   the WAV the recorder is writing, with a noise floor so room hum stays low
   and speech lights the bars. The composer and inbox show it next to the

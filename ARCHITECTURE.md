@@ -1,0 +1,56 @@
+# Architecture
+
+Herdr Inbox is a single Rust binary. It owns no agent state: everything it
+shows comes from a Herdr server, and everything it does goes through Herdr's
+public interfaces.
+
+```
+ crossterm events ──┐
+ link (Herdr API) ──┼──► App::update(input) ──► effects ──► runtime
+ terminal session ──┘          │                              │
+                               ▼                              ├─ herdr terminal session control
+                          ui::draw(&App)                      ├─ workspace.close
+                                                              └─ herdr server
+```
+
+## Modules
+
+| Module | Role |
+| --- | --- |
+| `herdr::socket` | Resolves the server's socket like the `herdr` CLI: `--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default. |
+| `herdr::api` | JSON socket API. One request per connection, because Herdr answers the first line and closes. |
+| `herdr::events` | `events.subscribe` streams. Each subscription owns its connection; Herdr resets one that receives anything else. |
+| `herdr::terminal` | Runs `herdr terminal session control <pane> --takeover` and speaks its JSON lines: base64 ANSI frames out, input/resize/scroll/mouse/release in. |
+| `link` | Keeps one server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots, a 30 s resync, reconnection with backoff. |
+| `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
+| `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
+| `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
+| `keys` | Encodes key presses as xterm bytes for the pane, honouring its cursor-key and bracketed-paste modes. |
+| `git` | Reads repository name and branch from `.git` files, without running git. |
+| `theme` | Herdr's built-in palettes and `config.toml` overrides. |
+| `ui` | Pure drawing from `&App`. |
+| `runtime` | Terminal setup, the event loop, effect execution. |
+
+## Rules that keep it honest
+
+- **No polling for status.** Herdr only reports status transitions through
+  per-pane `pane.agent_status_changed` subscriptions. The link subscribes to
+  every agent pane on one connection and swaps it atomically: new
+  subscription first, then the old one closes. Herdr sends each pane's
+  current status when a subscription starts, so nothing falls between a
+  snapshot and its subscription.
+- **A refused subscription is not a lost server.** If a pane closes between a
+  snapshot and the subscribe, Herdr rejects the whole request; the link keeps
+  the connection and refreshes again.
+- **Generations.** Every attachment to a pane has a generation. Frames and
+  close messages from an older attachment are ignored, so switching threads
+  quickly never paints the wrong pane.
+- **Threads are tracked by identity.** The cursor follows its thread when the
+  list reorders, and lands on a neighbour when the thread disappears.
+- **Seen is local.** Herdr marks a finished pane seen when one of its own
+  windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
+  own record: opening a finished thread, or watching it finish, shows it as
+  idle until its status changes again.
+- **The emulator cannot crash the app.** vt100 panics on some edge cases (a
+  wrap in a one-row screen); the screen keeps at least 2×2 cells, catches a
+  panic while parsing, and resets until the next full frame.

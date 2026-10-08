@@ -12,9 +12,15 @@ pub const HEADER_LINES: u16 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
-    Heading { group: Group, count: usize },
+    Heading {
+        group: Group,
+        count: usize,
+    },
     /// Line `line` (0..THREAD_LINES) of the thread at `index`.
-    Thread { index: usize, line: u16 },
+    Thread {
+        index: usize,
+        line: u16,
+    },
     Blank,
 }
 
@@ -85,11 +91,7 @@ impl Layout {
         self.rows = rows(threads);
         self.cursor_index = cursor.and_then(|id| threads.iter().position(|t| t.id == id));
         if let Some(index) = self.cursor_index {
-            let first = self
-                .rows
-                .iter()
-                .position(|row| row.kind == RowKind::Thread { index, line: 0 })
-                .unwrap_or(0);
+            let first = self.rows.iter().position(|row| row.kind == RowKind::Thread { index, line: 0 }).unwrap_or(0);
             // Show the group heading with the first thread of a group.
             let first = match first.checked_sub(1).map(|i| self.rows[i].kind) {
                 Some(RowKind::Heading { .. }) => first - 1,

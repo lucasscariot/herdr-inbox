@@ -6,7 +6,9 @@
 
 use std::time::SystemTime;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use super::{App, Connection, Effect, Focus, StreamState};
 use crate::herdr::terminal::{Control, MouseAction, MouseButton as PaneButton, ScrollDirection};
@@ -19,9 +21,15 @@ pub(super) fn key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut V
     if key.kind == KeyEventKind::Release {
         return;
     }
-    if matches!(app.connection, Connection::NoServer) {
-        no_server_key(app, key, effects);
-        return;
+    match app.connection {
+        Connection::NoServer => return no_server_key(app, key, now, effects),
+        Connection::Starting(_) => {
+            if key.code == KeyCode::Char('q') || is_ctrl_c(key) {
+                effects.push(Effect::Quit);
+            }
+            return;
+        }
+        _ => {}
     }
     match app.focus {
         Focus::Terminal => terminal_key(app, key, now, effects),
@@ -29,14 +37,19 @@ pub(super) fn key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut V
     }
 }
 
-fn no_server_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
+fn is_ctrl_c(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn no_server_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     match key.code {
         KeyCode::Enter => {
-            app.connection = Connection::Starting;
+            app.connection = Connection::Starting(now);
+            app.notice = None;
             effects.push(Effect::StartServer);
         }
         KeyCode::Char('q') | KeyCode::Esc => effects.push(Effect::Quit),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => effects.push(Effect::Quit),
+        _ if is_ctrl_c(key) => effects.push(Effect::Quit),
         _ => {}
     }
 }
@@ -62,10 +75,7 @@ fn terminal_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
         }
         StreamState::Attaching | StreamState::Live => {
             if let Some(bytes) = keys::encode(key, open.screen.modes()) {
-                effects.push(Effect::Send {
-                    generation: open.generation,
-                    control: Control::Input(bytes),
-                });
+                effects.push(Effect::Send { generation: open.generation, control: Control::Input(bytes) });
             }
         }
     }
@@ -73,14 +83,14 @@ fn terminal_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
 
 fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     if let Some(id) = app.confirm_archive.take() {
-        if matches!(key.code, KeyCode::Enter | KeyCode::Char('y')) {
-            if let Some(thread) = app.thread(&id) {
-                effects.push(Effect::Archive {
-                    thread: thread.id.clone(),
-                    workspace_id: thread.workspace_id.clone(),
-                    title: thread.title.clone(),
-                });
-            }
+        if matches!(key.code, KeyCode::Enter | KeyCode::Char('y'))
+            && let Some(thread) = app.thread(&id)
+        {
+            effects.push(Effect::Archive {
+                thread: thread.id.clone(),
+                workspace_id: thread.workspace_id.clone(),
+                title: thread.title.clone(),
+            });
         }
         return;
     }
@@ -98,10 +108,8 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
                 app.focus = Focus::Terminal;
             }
         }
-        KeyCode::Tab | KeyCode::Esc => {
-            if app.open.is_some() {
-                app.focus = Focus::Terminal;
-            }
+        KeyCode::Tab | KeyCode::Esc if app.open.is_some() => {
+            app.focus = Focus::Terminal;
         }
         KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
             app.confirm_archive = app.cursor.clone();
@@ -177,7 +185,9 @@ pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: 
             app.confirm_archive = None;
             wants_mouse.then(|| pane_mouse(MouseAction::Down, button, column, row, mouse.modifiers))
         }
-        MouseEventKind::Up(button) => wants_mouse.then(|| pane_mouse(MouseAction::Up, button, column, row, mouse.modifiers)),
+        MouseEventKind::Up(button) => {
+            wants_mouse.then(|| pane_mouse(MouseAction::Up, button, column, row, mouse.modifiers))
+        }
         MouseEventKind::Drag(button) => {
             wants_mouse.then(|| pane_mouse(MouseAction::Drag, button, column, row, mouse.modifiers))
         }
@@ -196,7 +206,7 @@ fn pane_mouse(action: MouseAction, button: MouseButton, column: u16, row: u16, m
     };
     // Herdr's modifier bits: Shift = 1, Ctrl = 2, Alt = 4.
     let modifiers = u8::from(mods.contains(KeyModifiers::SHIFT))
-        | 2 * u8::from(mods.contains(KeyModifiers::CONTROL))
-        | 4 * u8::from(mods.contains(KeyModifiers::ALT));
+        | (2 * u8::from(mods.contains(KeyModifiers::CONTROL)))
+        | (4 * u8::from(mods.contains(KeyModifiers::ALT)));
     Control::Mouse { action, button, column, row, modifiers }
 }
