@@ -80,12 +80,14 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         if matches!(key.code, KeyCode::Enter | KeyCode::Char('y'))
             && let Some(thread) = app.thread(&id)
         {
-            effects.push(Effect::Archive {
+            let effect = Effect::Archive {
                 machine: thread.machine_id.clone(),
                 thread: thread.id.clone(),
                 workspace_id: thread.workspace_id.clone(),
                 title: thread.title.clone(),
-            });
+            };
+            app.archiving.insert(id);
+            effects.push(effect);
         }
         return;
     }

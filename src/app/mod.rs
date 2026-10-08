@@ -171,6 +171,8 @@ pub struct App {
     /// The thread that was open when its machine dropped, to re-open when the
     /// machine comes back.
     resume: Option<ThreadId>,
+    /// Threads the user asked to archive, so their disappearance is expected.
+    archiving: HashSet<ThreadId>,
 }
 
 impl App {
@@ -200,6 +202,7 @@ impl App {
             next_generation: 1,
             auto_opened: false,
             resume: None,
+            archiving: HashSet::new(),
         }
     }
 
@@ -345,15 +348,16 @@ impl App {
         self.activity.retain(&live);
         self.rebuild();
 
-        if let Some(open) = &self.open
-            && !live.contains(&open.id)
-        {
-            self.open = None;
+        if let Some(open) = self.open.take_if(|o| !live.contains(&o.id)) {
             effects.push(Effect::Detach);
             if self.focus == Focus::Terminal {
                 self.focus = Focus::List;
             }
-            self.notify("The thread you had open ended", NoticeKind::Info, now);
+            // A thread the user archived is expected to go; its own notice
+            // says so, and must not be replaced by this one.
+            if !self.archiving.remove(&open.id) {
+                self.notify("The thread you had open ended", NoticeKind::Info, now);
+            }
         }
         if self.confirm_archive.as_ref().is_some_and(|c| !live.contains(c)) {
             self.confirm_archive = None;

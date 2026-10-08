@@ -327,6 +327,41 @@ fn archiving_asks_first_and_cancels_on_anything_else() {
 }
 
 #[test]
+fn archiving_the_open_thread_reports_the_archive_whichever_message_comes_first() {
+    for archived_first in [true, false] {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Enter), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        app.update(press(KeyCode::Char('x')), at(1));
+        app.update(press(KeyCode::Char('y')), at(1));
+        let archived = Input::Archived { title: "Login".into(), result: Ok(()) };
+        let gone =
+            snapshot(vec![agent("w2:p1", AgentStatus::Working, "Build"), agent("w3:p1", AgentStatus::Idle, "Docs")]);
+        if archived_first {
+            app.update(archived, at(2));
+            app.update(gone, at(2));
+        } else {
+            app.update(gone, at(2));
+            app.update(archived, at(2));
+        }
+        assert_eq!(
+            app.notice.as_ref().map(|n| n.text.as_str()),
+            Some("Archived “Login”"),
+            "archived first: {archived_first}"
+        );
+        assert!(app.open.is_none());
+    }
+}
+
+#[test]
+fn a_thread_that_ends_on_its_own_is_still_reported() {
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::Enter), at(1));
+    app.update(snapshot(vec![agent("w2:p1", AgentStatus::Working, "Build")]), at(2));
+    assert_eq!(app.notice.as_ref().map(|n| n.text.as_str()), Some("The thread you had open ended"));
+}
+
+#[test]
 fn a_pending_archive_is_dropped_when_its_thread_ends() {
     let (mut app, _) = loaded();
     app.update(press(KeyCode::Char('x')), at(1));
