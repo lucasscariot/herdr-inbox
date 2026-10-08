@@ -153,5 +153,9 @@ class Herdr:
             args += ["--base", base]
         return self.call(machine, *args, timeout=60)
 
+    def send_text(self, machine, pane_id, text):
+        """Type text into a pane without submitting it, so it can be edited there."""
+        return self.call(machine, "pane", "send-text", pane_id, text)
+
     def prompt(self, machine, pane_id, text, timeout_ms=15000):
         return self.call(machine, "agent", "prompt", pane_id, text, "--wait", "--until", "working", "--until", "blocked", "--timeout", str(timeout_ms), timeout=timeout_ms // 1000 + 10)

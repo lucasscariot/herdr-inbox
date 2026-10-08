@@ -9,7 +9,7 @@
 
 id = "lucasscariot.herdr-inbox"
 name = "Herdr Inbox"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.9.1"
 description = "Start agent threads on any project, harness, machine, or worktree. Keep every agent in one live inbox."
 platforms = ["linux", "macos"]
@@ -27,6 +27,15 @@ title = "Agent inbox"
 contexts = ["global", "workspace", "pane"]
 command = ["python3", "main.py", "open", "--view", "inbox"]
 
+# Dictate into the focused agent pane from any Herdr client: bind a key to this
+# action (for example ctrl+t) and it opens a small popup that records, then
+# Enter sends the transcript to that agent and Ctrl+T types it for editing.
+[[actions]]
+id = "dictate"
+title = "Dictate to this agent"
+contexts = ["pane", "global"]
+command = ["python3", "main.py", "dictate", "--open"]
+
 # Panes are what the actions open; `herdr plugin pane open --plugin lucasscariot.herdr-inbox --entrypoint launcher` works too.
 [[panes]]
 id = "launcher"
@@ -39,3 +48,11 @@ id = "inbox"
 title = "Agent inbox"
 placement = "tab"
 command = ["python3", "main.py", "ui", "--view", "inbox"]
+
+[[panes]]
+id = "dictate"
+title = "Dictate"
+placement = "popup"
+width = 64
+height = 7
+command = ["python3", "main.py", "dictate", "--popup"]

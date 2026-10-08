@@ -4,10 +4,18 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-08
 
 ### Added
 
+- `dictate` action and `python3 main.py dictate`: record a follow-up for any
+  running thread, then Enter submits it through Herdr's prompt transport,
+  Ctrl+T types it unsent, and Esc discards it. Bind the action to `ctrl+t` for
+  the stock client; the thread-only client handles Ctrl+T everywhere, including
+  threads on saved machines.
+- Thread-only client: Tab moves between the thread list and the terminal, j/k
+  walk the threads, Enter opens, Backspace archives, and a `THREADS` mode bar
+  shows the keys. Shift+Tab and the composer's own Tab are untouched.
 - Thread-only client: archive a thread from its sidebar row. Right-click any
   row for "Archive thread", or click "archive" on the thread that is open. It
   closes that thread's workspace on whichever machine owns it, keeps a linked
@@ -54,5 +62,5 @@ First public release.
 - Fuzzy ranking in every picker; word-aware wrapping in the task box.
 - Remote SSH calls share one control socket per machine.
 
-[Unreleased]: https://github.com/lucasscariot/herdr-inbox/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/lucasscariot/herdr-inbox/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lucasscariot/herdr-inbox/releases/tag/v0.4.0

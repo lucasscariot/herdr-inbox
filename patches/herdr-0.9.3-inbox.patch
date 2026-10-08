@@ -1,17 +1,30 @@
 diff --git a/src/client/mod.rs b/src/client/mod.rs
-index d55e4c4..f28fe9a 100644
+index d55e4c4..0667aa8 100644
 --- a/src/client/mod.rs
 +++ b/src/client/mod.rs
-@@ -2234,6 +2234,9 @@ async fn run_client_loop(
+@@ -2234,6 +2234,10 @@ async fn run_client_loop(
                      let (effects, outcome, frame) = {
                          let shell = state.shell.as_mut().expect("checked shell mode");
                          let mut outcome = shell.tick_selection_autoscroll(now);
 +                        let inbox_focus = shell.tick_inbox_focus(now);
 +                        outcome.actions.extend(inbox_focus.actions);
 +                        outcome.repaint |= inbox_focus.repaint;
++                        outcome.repaint |= shell.tick_inbox_dictation(now);
                          for expired in expired_endpoints {
                              if !shell.endpoint_is_active(&expired.endpoint_id) {
                                  continue;
+diff --git a/src/client/shell.rs b/src/client/shell.rs
+index 2d18044..ec82310 100644
+--- a/src/client/shell.rs
++++ b/src/client/shell.rs
+@@ -19,6 +19,7 @@ mod endpoints;
+ pub(super) use endpoints::*;
+ mod global_menu;
+ mod graphics;
++mod inbox_keys;
+ mod input;
+ mod input_source;
+ mod link_hover;
 diff --git a/src/client/shell/actions.rs b/src/client/shell/actions.rs
 index 9d0a3bd..bfa7eb1 100644
 --- a/src/client/shell/actions.rs
@@ -319,15 +332,17 @@ index 9d0a3bd..bfa7eb1 100644
 +        })
 +}
 diff --git a/src/client/shell/agent_sidebar.rs b/src/client/shell/agent_sidebar.rs
-index e43ab8c..fa8c0ff 100644
+index e43ab8c..8ab9908 100644
 --- a/src/client/shell/agent_sidebar.rs
 +++ b/src/client/shell/agent_sidebar.rs
-@@ -15,6 +15,28 @@ pub(super) struct AgentRow {
+@@ -15,6 +15,30 @@ pub(super) struct AgentRow {
      pub(super) status: crate::api::schema::AgentStatus,
      pub(super) focused: bool,
      pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
 +    /// Inbox mode: a status group heading drawn above this row, with the group size.
 +    pub(super) section: Option<(&'static str, usize)>,
++    /// Inbox mode while the list has keyboard focus: whether this row is the cursor.
++    pub(super) cursor: Option<bool>,
 +}
 +
 +impl AgentRow {
@@ -351,7 +366,29 @@ index e43ab8c..fa8c0ff 100644
  }
  
  pub(super) fn ordered_agent_pane_ids(
-@@ -79,10 +101,13 @@ pub(super) fn render_agent_panel(
+@@ -56,6 +80,7 @@ pub(super) fn render_agent_panel(
+     config: &ClientShellConfig,
+     agent_scroll: &mut usize,
+     hits: &mut ShellHitMap,
++    cursor: Option<&str>,
+ ) {
+     if !render_agent_panel_header(
+         buffer,
+@@ -67,7 +92,12 @@ pub(super) fn render_agent_panel(
+         return;
+     }
+ 
+-    let rows = agent_rows(snapshot, config, None);
++    let mut rows = agent_rows(snapshot, config, None);
++    if let Some(cursor) = cursor {
++        for row in &mut rows {
++            row.cursor = Some(row.pane_id == cursor);
++        }
++    }
+     render_agent_list(
+         buffer,
+         area,
+@@ -79,10 +109,13 @@ pub(super) fn render_agent_panel(
          config,
          agent_scroll,
          hits,
@@ -368,7 +405,7 @@ index e43ab8c..fa8c0ff 100644
          },
      );
  }
-@@ -113,7 +138,11 @@ pub(super) fn render_agent_panel_header(
+@@ -113,7 +146,11 @@ pub(super) fn render_agent_panel_header(
          area.x,
          area.y + 1,
          area.width,
@@ -381,7 +418,7 @@ index e43ab8c..fa8c0ff 100644
          Style::default()
              .fg(config.palette.overlay0)
              .add_modifier(Modifier::BOLD),
-@@ -239,10 +268,63 @@ pub(super) fn agent_rows(
+@@ -239,10 +276,63 @@ pub(super) fn agent_rows(
      config: &ClientShellConfig,
      machine: Option<&str>,
  ) -> Vec<AgentRow> {
@@ -447,7 +484,7 @@ index e43ab8c..fa8c0ff 100644
  }
  
  pub(super) fn agent_row(
-@@ -292,38 +374,75 @@ pub(super) fn agent_row(
+@@ -292,38 +382,76 @@ pub(super) fn agent_row(
          .agent
          .as_deref()
          .and_then(crate::detect::parse_agent_label);
@@ -525,6 +562,7 @@ index e43ab8c..fa8c0ff 100644
          focused: agent.focused,
          rows,
 +        section: None,
++        cursor: None,
      })
  }
  
@@ -542,7 +580,7 @@ index e43ab8c..fa8c0ff 100644
      let palette = &config.palette;
      let row_style = if row.focused {
          Style::default().bg(palette.active_row_bg)
-@@ -371,6 +490,249 @@ pub(super) fn render_agent_row(
+@@ -371,6 +499,256 @@ pub(super) fn render_agent_row(
              buffer,
          );
      }
@@ -590,10 +628,17 @@ index e43ab8c..fa8c0ff 100644
 +            rect.height.saturating_sub(1),
 +        );
 +    }
-+    let background = if row.focused {
++    // With the list focused the cursor carries the highlight; the open thread keeps an accent title.
++    let highlighted = row.cursor.unwrap_or(row.focused);
++    let background = if highlighted {
 +        Style::default().bg(palette.active_row_bg)
 +    } else {
 +        Style::default()
++    };
++    let title_color = if row.focused && row.cursor == Some(false) {
++        palette.accent
++    } else {
++        palette.text
 +    };
 +    let text_at = |tokens: &[ResolvedToken], index: usize| -> String {
 +        tokens
@@ -656,11 +701,11 @@ index e43ab8c..fa8c0ff 100644
 +                line.y,
 +                available,
 +                &crate::ui::truncate_end(&text_at(tokens, 0), available as usize),
-+                background.fg(palette.text).add_modifier(Modifier::BOLD),
++                background.fg(title_color).add_modifier(Modifier::BOLD),
 +            ),
 +            _ => {
 +                let mut available = available;
-+                if row.focused {
++                if highlighted {
 +                    let width = display_width(INBOX_ARCHIVE_LABEL) as u16;
 +                    if available > width + 2 {
 +                        let hit =
@@ -793,26 +838,71 @@ index e43ab8c..fa8c0ff 100644
  
  fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
 diff --git a/src/client/shell/composition.rs b/src/client/shell/composition.rs
-index b7ab4a9..a7884ba 100644
+index b7ab4a9..10f3b23 100644
 --- a/src/client/shell/composition.rs
 +++ b/src/client/shell/composition.rs
-@@ -132,8 +132,7 @@ impl ClientShellState {
+@@ -54,6 +54,13 @@ impl ClientShellState {
+                 && self.endpoint_status(&self.active_endpoint_id)
+                     == Some(ClientEndpointStatus::Online)
+         });
++        // Disjoint field borrows: the render state takes &mut scroll fields alongside this.
++        let inbox_cursor = if self.inbox_focus == super::inbox_keys::InboxFocus::Threads {
++            self.inbox_cursor.as_ref()
++        } else {
++            None
++        };
++        let inbox_status = self.inbox_status();
+         let mut render_state = render::ShellRenderState {
+             machine_diagnostics: &self.machine_diagnostics,
+             endpoints: &self.endpoints,
+@@ -77,6 +84,7 @@ impl ClientShellState {
+             reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
+             dragged_workspace_id: None,
+             workspace_drop_indicator_row: None,
++            inbox_cursor,
+         };
+         if let Some(snapshot) = local_snapshot {
+             render::render_sidebar(
+@@ -132,8 +140,8 @@ impl ClientShellState {
              None,
              self.endpoint_error.as_deref(),
              false,
 -            &self.config.keybinds,
 -            &self.config.palette,
 +            &self.config,
++            inbox_status.as_ref(),
          );
          if let Some(notice) = &self.visible_endpoint_notice {
              self.hits.notification_toast = endpoint_notices::render_notice(
-@@ -328,8 +327,7 @@ impl ClientShellState {
+@@ -204,6 +212,12 @@ impl ClientShellState {
+             ),
+             _ => (None, None),
+         };
++        let inbox_cursor = if self.inbox_focus == super::inbox_keys::InboxFocus::Threads {
++            self.inbox_cursor.as_ref()
++        } else {
++            None
++        };
++        let inbox_status = self.inbox_status();
+         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
+         self.hits = render::render_shell(
+             &mut buffer,
+@@ -233,6 +247,7 @@ impl ClientShellState {
+                 reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
+                 dragged_workspace_id,
+                 workspace_drop_indicator_row,
++                inbox_cursor,
+             },
+         );
+         self.hits.panes = surface
+@@ -328,8 +343,8 @@ impl ClientShellState {
                  self.copy_mode.as_ref(),
                  self.endpoint_error.as_deref(),
                  snapshot.update_available.is_some(),
 -                &self.config.keybinds,
 -                &self.config.palette,
 +                &self.config,
++                inbox_status.as_ref(),
              )
          };
          if mode_bar == Some(layout.tab_bar) {
@@ -899,10 +989,33 @@ index b57bc84..61ae14d 100644
          &mut self,
          workspace_id: String,
 diff --git a/src/client/shell/endpoint_agents.rs b/src/client/shell/endpoint_agents.rs
-index b56b41f..55121b8 100644
+index b56b41f..d45df12 100644
 --- a/src/client/shell/endpoint_agents.rs
 +++ b/src/client/shell/endpoint_agents.rs
-@@ -70,9 +70,16 @@ pub(super) fn render_expanded(
+@@ -51,6 +51,7 @@ pub(super) fn render_expanded(
+     config: &ClientShellConfig,
+     agent_scroll: &mut usize,
+     hits: &mut ShellHitMap,
++    cursor: Option<&(ClientEndpointId, String)>,
+ ) {
+     if !super::agent_sidebar::render_agent_panel_header(
+         buffer,
+@@ -61,7 +62,13 @@ pub(super) fn render_expanded(
+     ) {
+         return;
+     }
+-    let rows = agent_rows(endpoints, active_endpoint_id, config);
++    let mut rows = agent_rows(endpoints, active_endpoint_id, config);
++    if let Some((cursor_endpoint, cursor_pane)) = cursor {
++        for row in &mut rows {
++            row.agent.cursor =
++                Some(&row.endpoint_id == cursor_endpoint && &row.agent.pane_id == cursor_pane);
++        }
++    }
+     super::agent_sidebar::render_agent_list(
+         buffer,
+         area,
+@@ -70,9 +77,16 @@ pub(super) fn render_expanded(
          config,
          agent_scroll,
          hits,
@@ -921,7 +1034,7 @@ index b56b41f..55121b8 100644
              if row.stale {
                  buffer.set_style(
                      rect,
-@@ -81,8 +88,11 @@ pub(super) fn render_expanded(
+@@ -81,8 +95,11 @@ pub(super) fn render_expanded(
                          .add_modifier(Modifier::DIM),
                  );
              }
@@ -935,7 +1048,7 @@ index b56b41f..55121b8 100644
          },
      );
  }
-@@ -106,7 +116,7 @@ impl ClientShellState {
+@@ -106,7 +123,7 @@ impl ClientShellState {
          };
          let heights = rows
              .iter()
@@ -944,7 +1057,7 @@ index b56b41f..55121b8 100644
              .collect::<Vec<_>>();
          let mut gaps = vec![self.config.agents.row_gap; rows.len()];
          if let Some(last) = gaps.last_mut() {
-@@ -156,7 +166,7 @@ fn agent_rows(
+@@ -156,7 +173,7 @@ fn agent_rows(
          .flatten()
          .collect::<HashMap<_, _>>();
  
@@ -953,7 +1066,7 @@ index b56b41f..55121b8 100644
          endpoints,
          active_endpoint_id,
          config.agent_panel_sort,
-@@ -173,5 +183,7 @@ fn agent_rows(
+@@ -173,5 +190,7 @@ fn agent_rows(
              agent,
          })
      })
@@ -963,10 +1076,18 @@ index b56b41f..55121b8 100644
 +    rows
  }
 diff --git a/src/client/shell/endpoint_navigation.rs b/src/client/shell/endpoint_navigation.rs
-index a1f7ac2..d6faca4 100644
+index a1f7ac2..7f53e3d 100644
 --- a/src/client/shell/endpoint_navigation.rs
 +++ b/src/client/shell/endpoint_navigation.rs
-@@ -231,6 +231,7 @@ impl ClientShellState {
+@@ -92,6 +92,7 @@ impl ClientShellState {
+         else {
+             return false;
+         };
++        self.note_inbox_thread_click((endpoint_id.clone(), pane_id.clone()));
+         self.focus_or_activate(
+             endpoint_id,
+             ClientEndpointFocusTarget::Pane(pane_id),
+@@ -231,6 +232,7 @@ impl ClientShellState {
          outcome: &mut ClientShellInput,
      ) -> bool {
          self.pending_workspace_highlight = None;
@@ -975,7 +1096,7 @@ index a1f7ac2..d6faca4 100644
          let online = self.endpoint_is_online(&endpoint_id);
          if !online && !endpoint_id.is_local() {
 diff --git a/src/client/shell/endpoint_sidebar.rs b/src/client/shell/endpoint_sidebar.rs
-index 9698248..f2a48fc 100644
+index 9698248..e81eb0b 100644
 --- a/src/client/shell/endpoint_sidebar.rs
 +++ b/src/client/shell/endpoint_sidebar.rs
 @@ -21,6 +21,17 @@ pub(super) fn render_collapsed(
@@ -996,7 +1117,7 @@ index 9698248..f2a48fc 100644
      let (workspace_area, divider_y, detail_area) = super::sidebar::collapsed_sidebar_sections(area);
      let mut total_rows = 0usize;
      let mut selected_row = None;
-@@ -249,6 +260,20 @@ pub(super) fn render_expanded(
+@@ -249,6 +260,21 @@ pub(super) fn render_expanded(
      } else {
          Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
      };
@@ -1011,14 +1132,780 @@ index 9698248..f2a48fc 100644
 +            config,
 +            state.agent_scroll,
 +            hits,
++            state.inbox_cursor,
 +        );
 +        return;
 +    }
      let (workspace_area, detail_area) =
          crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
      hits.sidebar_section_divider =
+@@ -562,6 +588,7 @@ pub(super) fn render_expanded(
+         config,
+         state.agent_scroll,
+         hits,
++        None,
+     );
+     hits.sidebar_toggle = Rect::new(
+         area.right().saturating_sub(2),
+diff --git a/src/client/shell/inbox_keys.rs b/src/client/shell/inbox_keys.rs
+new file mode 100644
+index 0000000..ec29459
+--- /dev/null
++++ b/src/client/shell/inbox_keys.rs
+@@ -0,0 +1,737 @@
++//! Keyboard flow for inbox mode.
++//!
++//! Tab moves focus between the thread list and the terminal, j/k walk the
++//! threads, Enter opens one, Backspace archives it, and Ctrl+T dictates into
++//! the focused thread from anywhere: the recording and transcription run in
++//! the plugin's own `python3 main.py dictate` process, which also delivers the
++//! text through Herdr's prompt transport on whichever machine owns the pane.
++
++use super::*;
++use crossterm::event::KeyModifiers;
++use std::io::{BufRead, Write};
++use std::sync::mpsc;
++
++pub(super) const INBOX_PLUGIN_ID: &str = "lucasscariot.herdr-inbox";
++
++/// Test hook: the event sender and the bytes a detached session wrote to its "stdin".
++#[cfg(test)]
++pub(super) type InboxDictationProbe = (
++    mpsc::Sender<InboxDictationEvent>,
++    std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
++);
++const FINISHED_NOTICE: std::time::Duration = std::time::Duration::from_secs(4);
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub(super) enum InboxFocus {
++    #[default]
++    Terminal,
++    Threads,
++}
++
++/// One line printed by the dictation process, or the process ending.
++pub(super) enum InboxDictationEvent {
++    Stdin(Box<dyn Write + Send>),
++    Recording,
++    Transcribing,
++    Done { mode: String, text: String },
++    Cancelled,
++    Error(String),
++    Exited,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(super) enum InboxDictationPhase {
++    Starting,
++    Recording {
++        since: std::time::Instant,
++        shown_seconds: u64,
++    },
++    Finishing {
++        mode: &'static str,
++        transcribing: bool,
++    },
++    Finished {
++        message: String,
++        until: std::time::Instant,
++    },
++}
++
++pub(super) struct InboxDictation {
++    pub(super) title: String,
++    pub(super) phase: InboxDictationPhase,
++    stdin: Option<Box<dyn Write + Send>>,
++    pending_command: Option<&'static str>,
++    events: mpsc::Receiver<InboxDictationEvent>,
++    #[cfg(test)]
++    _keep_alive: Option<mpsc::Sender<InboxDictationEvent>>,
++}
++
++impl InboxDictation {
++    /// Start the plugin's dictation process for `target` and relay its events.
++    pub(super) fn spawn(target: (ClientEndpointId, String), title: String) -> Self {
++        let (sender, events) = mpsc::channel();
++        let machine = match &target.0 {
++            ClientEndpointId::Local => "local".to_owned(),
++            ClientEndpointId::Ssh(profile) => profile.as_str().to_owned(),
++        };
++        let pane_id = target.1.clone();
++        let thread_title = title.clone();
++        std::thread::spawn(move || {
++            run_dictation_process(&sender, &pane_id, &machine, &thread_title)
++        });
++        Self {
++            title,
++            phase: InboxDictationPhase::Starting,
++            stdin: None,
++            pending_command: None,
++            events,
++            #[cfg(test)]
++            _keep_alive: None,
++        }
++    }
++
++    /// A session with no process behind it; tests feed events and read commands.
++    #[cfg(test)]
++    pub(super) fn detached(
++        title: String,
++    ) -> (
++        Self,
++        mpsc::Sender<InboxDictationEvent>,
++        std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
++    ) {
++        let (sender, events) = mpsc::channel();
++        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
++        let session = Self {
++            title,
++            phase: InboxDictationPhase::Recording {
++                since: std::time::Instant::now(),
++                shown_seconds: 0,
++            },
++            stdin: Some(Box::new(SharedWriter(written.clone()))),
++            pending_command: None,
++            events,
++            _keep_alive: Some(sender.clone()),
++        };
++        (session, sender, written)
++    }
++
++    pub(super) fn active(&self) -> bool {
++        !matches!(self.phase, InboxDictationPhase::Finished { .. })
++    }
++
++    pub(super) fn recording(&self) -> bool {
++        matches!(
++            self.phase,
++            InboxDictationPhase::Starting | InboxDictationPhase::Recording { .. }
++        )
++    }
++
++    fn command(&mut self, command: &'static str) {
++        match self.stdin.take() {
++            Some(mut stdin) => {
++                let _ = writeln!(stdin, "{command}");
++                let _ = stdin.flush();
++            }
++            None => self.pending_command = Some(command),
++        }
++    }
++}
++
++#[cfg(test)]
++struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
++
++#[cfg(test)]
++impl Write for SharedWriter {
++    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++        self.0.lock().expect("writer lock").extend_from_slice(buf);
++        Ok(buf.len())
++    }
++
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++/// Where the plugin lives: `HERDR_INBOX_ROOT`, or the server's plugin registry.
++fn inbox_plugin_root() -> Result<std::path::PathBuf, String> {
++    if let Some(root) = std::env::var_os("HERDR_INBOX_ROOT") {
++        return Ok(std::path::PathBuf::from(root));
++    }
++    let herdr = crate::platform::launch_executable().map_err(|err| err.to_string())?;
++    let output = std::process::Command::new(herdr)
++        .args(["plugin", "list", "--json"])
++        .stdin(std::process::Stdio::null())
++        .output()
++        .map_err(|err| format!("could not list plugins: {err}"))?;
++    let listing: serde_json::Value = serde_json::from_slice(&output.stdout)
++        .map_err(|_| "could not read the plugin list".to_owned())?;
++    listing["result"]["plugins"]
++        .as_array()
++        .into_iter()
++        .flatten()
++        .find(|plugin| plugin["plugin_id"] == INBOX_PLUGIN_ID)
++        .and_then(|plugin| plugin["plugin_root"].as_str())
++        .map(std::path::PathBuf::from)
++        .ok_or_else(|| {
++            "Herdr Inbox is not installed here; run: herdr plugin install lucasscariot/herdr-inbox"
++                .to_owned()
++        })
++}
++
++fn run_dictation_process(
++    sender: &mpsc::Sender<InboxDictationEvent>,
++    pane_id: &str,
++    machine: &str,
++    title: &str,
++) {
++    let root = match inbox_plugin_root() {
++        Ok(root) => root,
++        Err(message) => {
++            let _ = sender.send(InboxDictationEvent::Error(message));
++            let _ = sender.send(InboxDictationEvent::Exited);
++            return;
++        }
++    };
++    let mut command = std::process::Command::new("python3");
++    command
++        .args([
++            "main.py",
++            "dictate",
++            "--pane",
++            pane_id,
++            "--machine",
++            machine,
++        ])
++        .arg("--title")
++        .arg(title)
++        .current_dir(&root)
++        .env("HERDR_ENV", "1")
++        .env("HERDR_SOCKET_PATH", crate::api::socket_path())
++        .env("HERDR_PLUGIN_ROOT", &root)
++        .env(
++            "HERDR_PLUGIN_CONFIG_DIR",
++            crate::plugin_paths::plugin_config_dir(INBOX_PLUGIN_ID),
++        )
++        .env(
++            "HERDR_PLUGIN_STATE_DIR",
++            crate::plugin_paths::plugin_state_dir(INBOX_PLUGIN_ID),
++        )
++        .stdin(std::process::Stdio::piped())
++        .stdout(std::process::Stdio::piped())
++        .stderr(std::process::Stdio::piped());
++    if let Ok(herdr) = crate::platform::launch_executable() {
++        command.env("HERDR_BIN_PATH", herdr);
++    }
++    let mut child = match command.spawn() {
++        Ok(child) => child,
++        Err(err) => {
++            let _ = sender.send(InboxDictationEvent::Error(format!(
++                "could not start python3 for dictation: {err}"
++            )));
++            let _ = sender.send(InboxDictationEvent::Exited);
++            return;
++        }
++    };
++    if let Some(stdin) = child.stdin.take() {
++        let _ = sender.send(InboxDictationEvent::Stdin(Box::new(stdin)));
++    }
++    let stderr = child.stderr.take();
++    let mut reported = false;
++    if let Some(stdout) = child.stdout.take() {
++        for line in std::io::BufReader::new(stdout).lines() {
++            let Ok(line) = line else { break };
++            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
++                continue;
++            };
++            let event = match value["event"].as_str().unwrap_or_default() {
++                "recording" => InboxDictationEvent::Recording,
++                "transcribing" => InboxDictationEvent::Transcribing,
++                "done" => InboxDictationEvent::Done {
++                    mode: value["mode"].as_str().unwrap_or("send").to_owned(),
++                    text: value["text"].as_str().unwrap_or_default().to_owned(),
++                },
++                "cancelled" => InboxDictationEvent::Cancelled,
++                "error" => InboxDictationEvent::Error(
++                    value["message"]
++                        .as_str()
++                        .unwrap_or("dictation failed")
++                        .to_owned(),
++                ),
++                _ => continue,
++            };
++            reported |= matches!(
++                event,
++                InboxDictationEvent::Done { .. }
++                    | InboxDictationEvent::Cancelled
++                    | InboxDictationEvent::Error(_)
++            );
++            if sender.send(event).is_err() {
++                break;
++            }
++        }
++    }
++    let status = child.wait();
++    if !reported && !status.as_ref().is_ok_and(|status| status.success()) {
++        let detail = stderr
++            .and_then(|mut stderr| {
++                let mut text = String::new();
++                std::io::Read::read_to_string(&mut stderr, &mut text).ok()?;
++                text.lines().last().map(str::to_owned)
++            })
++            .unwrap_or_default();
++        let _ = sender.send(InboxDictationEvent::Error(if detail.is_empty() {
++            "dictation ended before it reported a result".to_owned()
++        } else {
++            format!("dictation failed: {detail}")
++        }));
++    }
++    let _ = sender.send(InboxDictationEvent::Exited);
++}
++
++/// What the mode bar shows for the inbox: a badge plus hint segments; `true` marks a key.
++pub(super) struct InboxStatus {
++    pub(super) badge: String,
++    pub(super) segments: Vec<(String, bool)>,
++}
++
++impl ClientShellState {
++    /// Threads in sidebar order, across machines when more than one is attached.
++    pub(super) fn inbox_targets(&self) -> Vec<(ClientEndpointId, String)> {
++        if self.multi_endpoint_active() {
++            return super::aggregate_navigation::online_agent_targets(
++                &self.endpoints,
++                &self.active_endpoint_id,
++                self.config.agent_panel_sort,
++            )
++            .into_iter()
++            .map(|target| (target.endpoint_id, target.pane_id))
++            .collect();
++        }
++        self.snapshot
++            .as_deref()
++            .map(|snapshot| {
++                super::agent_sidebar::ordered_agent_pane_ids(snapshot, self.config.agent_panel_sort)
++                    .into_iter()
++                    .map(|pane_id| (self.active_endpoint_id.clone(), pane_id))
++                    .collect()
++            })
++            .unwrap_or_default()
++    }
++
++    /// The focused pane when it is an agent thread; plugin panes keep their own keys.
++    pub(super) fn focused_inbox_thread(&self) -> Option<(ClientEndpointId, String)> {
++        let snapshot = self.snapshot.as_deref()?;
++        let pane_id = snapshot.focused_pane_id.clone()?;
++        snapshot
++            .agents
++            .iter()
++            .any(|agent| agent.pane_id == pane_id)
++            .then(|| (self.active_endpoint_id.clone(), pane_id))
++    }
++
++    fn inbox_thread_title(&self, target: &(ClientEndpointId, String)) -> String {
++        let snapshot = if target.0 == self.active_endpoint_id {
++            self.snapshot.as_deref()
++        } else {
++            self.endpoints
++                .iter()
++                .find(|endpoint| endpoint.endpoint_id == target.0)
++                .and_then(|endpoint| endpoint.snapshot.as_deref())
++        };
++        snapshot
++            .and_then(|snapshot| {
++                snapshot
++                    .agents
++                    .iter()
++                    .find(|agent| agent.pane_id == target.1)
++            })
++            .map(|agent| super::agent_sidebar::inbox_thread_title(agent, None))
++            .unwrap_or_else(|| target.1.clone())
++    }
++
++    /// Handles a key in terminal mode. Returns true when the inbox consumed it.
++    pub(super) fn route_inbox_key(
++        &mut self,
++        key: &crate::input::TerminalKey,
++        outcome: &mut ClientShellInput,
++    ) -> bool {
++        if !self.config.inbox_mode {
++            return false;
++        }
++        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
++        let plain = modifiers.is_empty();
++        let ctrl_t = crate::config::terminal_key_matches_combo(
++            key,
++            (KeyCode::Char('t'), KeyModifiers::CONTROL),
++        );
++        if self
++            .inbox_dictation
++            .as_ref()
++            .is_some_and(InboxDictation::recording)
++        {
++            let command = if plain && code == KeyCode::Enter {
++                Some("send")
++            } else if ctrl_t {
++                Some("type")
++            } else if plain && code == KeyCode::Esc {
++                Some("cancel")
++            } else {
++                None
++            };
++            if let Some(command) = command {
++                self.finish_inbox_dictation(command);
++                outcome.repaint = true;
++                return true;
++            }
++        }
++        if ctrl_t {
++            let target = (self.inbox_focus == InboxFocus::Threads)
++                .then(|| self.inbox_cursor.clone())
++                .flatten()
++                .or_else(|| self.focused_inbox_thread());
++            let Some(target) = target else {
++                return false;
++            };
++            self.begin_inbox_dictation(target, outcome);
++            return true;
++        }
++        match self.inbox_focus {
++            InboxFocus::Terminal => {
++                if plain && code == KeyCode::Tab && self.focused_inbox_thread().is_some() {
++                    self.enter_inbox_threads(outcome);
++                    return true;
++                }
++                false
++            }
++            InboxFocus::Threads => {
++                let shift = modifiers == KeyModifiers::SHIFT;
++                match code {
++                    KeyCode::Tab | KeyCode::Esc if plain => self.leave_inbox_threads(outcome),
++                    KeyCode::Char('j') | KeyCode::Down if plain => {
++                        self.move_inbox_cursor(1, outcome)
++                    }
++                    KeyCode::Char('k') | KeyCode::Up if plain => {
++                        self.move_inbox_cursor(-1, outcome)
++                    }
++                    KeyCode::Char('g') | KeyCode::Home if plain => {
++                        self.move_inbox_cursor(isize::MIN, outcome)
++                    }
++                    KeyCode::Char('G') | KeyCode::End if plain || shift => {
++                        self.move_inbox_cursor(isize::MAX, outcome)
++                    }
++                    KeyCode::Enter | KeyCode::Char('o') if plain => self.open_inbox_cursor(outcome),
++                    KeyCode::Backspace | KeyCode::Delete | KeyCode::Char('x') if plain => {
++                        self.archive_inbox_cursor(outcome)
++                    }
++                    _ => {}
++                }
++                // Nothing typed while the list has focus reaches the agent.
++                true
++            }
++        }
++    }
++
++    fn enter_inbox_threads(&mut self, outcome: &mut ClientShellInput) {
++        let targets = self.inbox_targets();
++        let cursor = self
++            .focused_inbox_thread()
++            .filter(|focused| targets.contains(focused))
++            .or_else(|| {
++                self.inbox_cursor
++                    .clone()
++                    .filter(|cursor| targets.contains(cursor))
++            })
++            .or_else(|| targets.first().cloned());
++        self.inbox_focus = InboxFocus::Threads;
++        self.inbox_cursor = cursor;
++        self.reveal_inbox_cursor();
++        outcome.repaint = true;
++    }
++
++    fn leave_inbox_threads(&mut self, outcome: &mut ClientShellInput) {
++        self.inbox_focus = InboxFocus::Terminal;
++        outcome.repaint = true;
++    }
++
++    /// A click on a thread row behaves like opening it from the keyboard.
++    pub(super) fn note_inbox_thread_click(&mut self, target: (ClientEndpointId, String)) {
++        if !self.config.inbox_mode {
++            return;
++        }
++        self.inbox_cursor = Some(target);
++        self.inbox_focus = InboxFocus::Terminal;
++    }
++
++    fn move_inbox_cursor(&mut self, delta: isize, outcome: &mut ClientShellInput) {
++        let targets = self.inbox_targets();
++        if targets.is_empty() {
++            self.inbox_cursor = None;
++            return;
++        }
++        let current = self
++            .inbox_cursor
++            .as_ref()
++            .and_then(|cursor| targets.iter().position(|target| target == cursor));
++        let last = targets.len() - 1;
++        let next = match (current, delta) {
++            (_, isize::MIN) => 0,
++            (_, isize::MAX) => last,
++            (Some(index), delta) => index.saturating_add_signed(delta).min(last),
++            (None, delta) if delta < 0 => last,
++            (None, _) => 0,
++        };
++        self.inbox_cursor = Some(targets[next].clone());
++        self.reveal_inbox_cursor();
++        outcome.repaint = true;
++    }
++
++    fn reveal_inbox_cursor(&mut self) {
++        let Some((endpoint_id, pane_id)) = self.inbox_cursor.clone() else {
++            return;
++        };
++        let height = self.hits.agent_body.height;
++        self.reveal_endpoint_agent(&endpoint_id, &pane_id, height);
++    }
++
++    fn open_inbox_cursor(&mut self, outcome: &mut ClientShellInput) {
++        let Some((endpoint_id, pane_id)) = self.inbox_cursor.clone() else {
++            return;
++        };
++        self.inbox_focus = InboxFocus::Terminal;
++        self.focus_or_activate(
++            endpoint_id,
++            ClientEndpointFocusTarget::Pane(pane_id),
++            outcome,
++        );
++        outcome.repaint = true;
++    }
++
++    fn archive_inbox_cursor(&mut self, outcome: &mut ClientShellInput) {
++        let Some((endpoint_id, pane_id)) = self.inbox_cursor.clone() else {
++            return;
++        };
++        // Land on the neighbour below, or above when archiving the last row.
++        let targets = self.inbox_targets();
++        if let Some(index) = targets
++            .iter()
++            .position(|target| target == &(endpoint_id.clone(), pane_id.clone()))
++        {
++            self.inbox_cursor = targets
++                .get(index + 1)
++                .or_else(|| {
++                    index
++                        .checked_sub(1)
++                        .and_then(|previous| targets.get(previous))
++                })
++                .cloned();
++        }
++        self.archive_thread(endpoint_id, &pane_id, outcome);
++        outcome.repaint = true;
++    }
++
++    pub(super) fn begin_inbox_dictation(
++        &mut self,
++        target: (ClientEndpointId, String),
++        outcome: &mut ClientShellInput,
++    ) {
++        if self
++            .inbox_dictation
++            .as_ref()
++            .is_some_and(InboxDictation::active)
++        {
++            return;
++        }
++        let title = self.inbox_thread_title(&target);
++        #[cfg(test)]
++        if self.inbox_dictation_offline {
++            let (session, sender, written) = InboxDictation::detached(title);
++            self.inbox_dictation_probe = Some((sender, written));
++            self.inbox_dictation = Some(session);
++            outcome.repaint = true;
++            return;
++        }
++        self.inbox_dictation = Some(InboxDictation::spawn(target, title));
++        outcome.repaint = true;
++    }
++
++    fn finish_inbox_dictation(&mut self, command: &'static str) {
++        let Some(session) = self.inbox_dictation.as_mut() else {
++            return;
++        };
++        session.command(command);
++        session.phase = if command == "cancel" {
++            InboxDictationPhase::Finished {
++                message: "Recording discarded".to_owned(),
++                until: std::time::Instant::now() + std::time::Duration::from_millis(1500),
++            }
++        } else {
++            InboxDictationPhase::Finishing {
++                mode: command,
++                transcribing: false,
++            }
++        };
++    }
++
++    /// Drains dictation events; returns whether the frame needs repainting.
++    pub(crate) fn tick_inbox_dictation(&mut self, now: std::time::Instant) -> bool {
++        let Some(session) = self.inbox_dictation.as_mut() else {
++            return false;
++        };
++        let mut repaint = false;
++        let mut error = None;
++        loop {
++            let event = match session.events.try_recv() {
++                Ok(event) => event,
++                Err(mpsc::TryRecvError::Empty) => break,
++                Err(mpsc::TryRecvError::Disconnected) => {
++                    if session.active() {
++                        InboxDictationEvent::Exited
++                    } else {
++                        break;
++                    }
++                }
++            };
++            repaint = true;
++            match event {
++                InboxDictationEvent::Stdin(stdin) => {
++                    session.stdin = Some(stdin);
++                    if let Some(command) = session.pending_command.take() {
++                        session.command(command);
++                    }
++                }
++                InboxDictationEvent::Recording => {
++                    if session.phase == InboxDictationPhase::Starting {
++                        session.phase = InboxDictationPhase::Recording {
++                            since: now,
++                            shown_seconds: 0,
++                        };
++                    }
++                }
++                InboxDictationEvent::Transcribing => {
++                    if let InboxDictationPhase::Finishing { transcribing, .. } = &mut session.phase
++                    {
++                        *transcribing = true;
++                    }
++                }
++                InboxDictationEvent::Done { mode, text } => {
++                    let verb = if mode == "type" {
++                        "Typed into"
++                    } else {
++                        "Sent to"
++                    };
++                    session.phase = InboxDictationPhase::Finished {
++                        message: format!("{verb} {}: {text}", session.title),
++                        until: now + FINISHED_NOTICE,
++                    };
++                }
++                InboxDictationEvent::Cancelled => {
++                    session.phase = InboxDictationPhase::Finished {
++                        message: "Recording discarded".to_owned(),
++                        until: now + std::time::Duration::from_millis(1500),
++                    };
++                }
++                InboxDictationEvent::Error(message) => {
++                    error = Some(message);
++                    session.phase = InboxDictationPhase::Finished {
++                        message: String::new(),
++                        until: now,
++                    };
++                }
++                InboxDictationEvent::Exited => {
++                    if session.active() {
++                        error = Some("dictation ended before it reported a result".to_owned());
++                        session.phase = InboxDictationPhase::Finished {
++                            message: String::new(),
++                            until: now,
++                        };
++                    }
++                    if matches!(session.phase, InboxDictationPhase::Finished { .. }) {
++                        break;
++                    }
++                }
++            }
++        }
++        match &mut session.phase {
++            InboxDictationPhase::Recording {
++                since,
++                shown_seconds,
++            } => {
++                let seconds = now.saturating_duration_since(*since).as_secs();
++                if seconds != *shown_seconds {
++                    *shown_seconds = seconds;
++                    repaint = true;
++                }
++            }
++            InboxDictationPhase::Finished { until, .. } if now >= *until => {
++                self.inbox_dictation = None;
++                repaint = true;
++            }
++            _ => {}
++        }
++        if let Some(message) = error {
++            self.set_endpoint_error(format!("Dictation: {message}"));
++            repaint = true;
++        }
++        repaint
++    }
++
++    pub(super) fn inbox_status(&self) -> Option<InboxStatus> {
++        if !self.config.inbox_mode {
++            return None;
++        }
++        if let Some(session) = self.inbox_dictation.as_ref() {
++            let title = crate::ui::truncate_end(&session.title, 28);
++            return Some(match &session.phase {
++                InboxDictationPhase::Starting => InboxStatus {
++                    badge: " DICTATE ".to_owned(),
++                    segments: vec![(format!(" starting the recorder for {title}…"), false)],
++                },
++                InboxDictationPhase::Recording { shown_seconds, .. } => InboxStatus {
++                    badge: format!(" ● REC {}:{:02} ", shown_seconds / 60, shown_seconds % 60),
++                    segments: vec![
++                        (format!(" to {title}   "), false),
++                        ("enter".to_owned(), true),
++                        (" send  ".to_owned(), false),
++                        ("ctrl+t".to_owned(), true),
++                        (" type without sending  ".to_owned(), false),
++                        ("esc".to_owned(), true),
++                        (" discard".to_owned(), false),
++                    ],
++                },
++                InboxDictationPhase::Finishing { mode, transcribing } => InboxStatus {
++                    badge: " DICTATE ".to_owned(),
++                    segments: vec![(
++                        if !*transcribing {
++                            format!(" stopping the recorder for {title}…")
++                        } else if *mode == "type" {
++                            format!(" ⟳ transcribing, then typing into {title}…")
++                        } else {
++                            format!(" ⟳ transcribing, then sending to {title}…")
++                        },
++                        false,
++                    )],
++                },
++                InboxDictationPhase::Finished { message, .. } => InboxStatus {
++                    badge: " DICTATE ".to_owned(),
++                    segments: vec![(format!(" ✓ {message}"), false)],
++                },
++            });
++        }
++        (self.inbox_focus == InboxFocus::Threads).then(|| InboxStatus {
++            badge: " THREADS ".to_owned(),
++            segments: vec![
++                (" ".to_owned(), false),
++                ("j/k".to_owned(), true),
++                (" move  ".to_owned(), false),
++                ("enter".to_owned(), true),
++                (" open  ".to_owned(), false),
++                ("⌫".to_owned(), true),
++                (" archive  ".to_owned(), false),
++                ("ctrl+t".to_owned(), true),
++                (" dictate  ".to_owned(), false),
++                ("tab".to_owned(), true),
++                (" terminal".to_owned(), false),
++            ],
++        })
++    }
++}
+diff --git a/src/client/shell/input.rs b/src/client/shell/input.rs
+index 413e29f..e1f079d 100644
+--- a/src/client/shell/input.rs
++++ b/src/client/shell/input.rs
+@@ -574,6 +574,9 @@ impl ClientShellState {
+                     outcome.repaint = true;
+                     return None;
+                 }
++                if self.route_inbox_key(key, outcome) {
++                    return None;
++                }
+                 self.focused_pane_id().map(ClientInputTarget::Pane)
+             }
+             ClientShellMode::Prefix => {
 diff --git a/src/client/shell/mouse.rs b/src/client/shell/mouse.rs
-index f2df294..d272f0c 100644
+index f2df294..8a925c9 100644
 --- a/src/client/shell/mouse.rs
 +++ b/src/client/shell/mouse.rs
 @@ -1805,6 +1805,11 @@ impl ClientShellState {
@@ -1068,6 +1955,17 @@ index f2df294..d272f0c 100644
                  if self.handle_endpoint_agent_click(point, outcome) {
                      return;
                  }
+@@ -2122,6 +2148,10 @@ impl ClientShellState {
+                     .find(|(rect, _)| super::contains(*rect, point))
+                     .map(|(_, pane_id)| pane_id.clone());
+                 if let Some(pane_id) = agent_pane_id {
++                    self.note_inbox_thread_click((
++                        self.active_endpoint_id.clone(),
++                        pane_id.clone(),
++                    ));
+                     self.push_endpoint_method(
+                         crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                             pane_id,
 diff --git a/src/client/shell/overlay_input.rs b/src/client/shell/overlay_input.rs
 index 10bd4a4..32a87fd 100644
 --- a/src/client/shell/overlay_input.rs
@@ -1100,20 +1998,26 @@ index 10bd4a4..32a87fd 100644
          ));
          true
 diff --git a/src/client/shell/render.rs b/src/client/shell/render.rs
-index 248216c..0c4ea98 100644
+index 248216c..0bd595c 100644
 --- a/src/client/shell/render.rs
 +++ b/src/client/shell/render.rs
-@@ -35,8 +35,7 @@ pub(super) fn render_mode_bar(
+@@ -35,10 +35,12 @@ pub(super) fn render_mode_bar(
      copy_mode: Option<&ClientCopyModeState>,
      endpoint_error: Option<&str>,
      update_available: bool,
 -    keybinds: &LiveKeybindConfig,
 -    palette: &Palette,
 +    config: &ClientShellConfig,
++    inbox_status: Option<&super::inbox_keys::InboxStatus>,
  ) -> Option<Rect> {
-     if (mode == ClientShellMode::Terminal && endpoint_error.is_none()) || pane_area.is_empty() {
+-    if (mode == ClientShellMode::Terminal && endpoint_error.is_none()) || pane_area.is_empty() {
++    if (mode == ClientShellMode::Terminal && endpoint_error.is_none() && inbox_status.is_none())
++        || pane_area.is_empty()
++    {
          return None;
-@@ -48,6 +47,8 @@ pub(super) fn render_mode_bar(
+     }
+ 
+@@ -48,6 +50,8 @@ pub(super) fn render_mode_bar(
          pane_area.width,
          1,
      );
@@ -1122,7 +2026,7 @@ index 248216c..0c4ea98 100644
      let base = Style::default().fg(palette.overlay0).bg(palette.panel_bg);
      for x in bar.x..bar.x + bar.width {
          buffer[(x, bar.y)].set_symbol(" ").set_style(base);
-@@ -57,17 +58,24 @@ pub(super) fn render_mode_bar(
+@@ -57,17 +61,24 @@ pub(super) fn render_mode_bar(
          .fg(palette.accent)
          .bg(palette.panel_bg)
          .add_modifier(Modifier::BOLD);
@@ -1158,7 +2062,31 @@ index 248216c..0c4ea98 100644
      let prefix = keybinds.primary_prefix_label();
      let prefix_rhs = |bindings: &crate::config::ActionKeybinds| {
          bindings
-@@ -327,6 +335,8 @@ pub(super) fn render_shell(
+@@ -81,6 +92,14 @@ pub(super) fn render_mode_bar(
+             (" ERROR ".to_owned(), mode_style),
+             (format!(" {error}"), base),
+         ]);
++    } else if let (Some(status), ClientShellMode::Terminal) = (inbox_status, mode) {
++        segments.push((status.badge.clone(), mode_style));
++        segments.extend(
++            status
++                .segments
++                .iter()
++                .map(|(text, is_key)| (text.clone(), if *is_key { key } else { base })),
++        );
+     } else {
+         match mode {
+             ClientShellMode::Prefix => {
+@@ -248,6 +267,8 @@ pub(super) struct ShellRenderState<'a> {
+     pub(super) reveal_navigation_workspace: &'a mut bool,
+     pub(super) dragged_workspace_id: Option<&'a str>,
+     pub(super) workspace_drop_indicator_row: Option<u16>,
++    /// Inbox mode: the thread the keyboard cursor sits on while the list has focus.
++    pub(super) inbox_cursor: Option<&'a (ClientEndpointId, String)>,
+ }
+ 
+ pub(super) fn render_shell(
+@@ -327,6 +348,8 @@ pub(super) fn render_shell(
          hits.workspace_scrollbar = Rect::default();
          hits.agent_scrollbar = Rect::default();
          hits.agent_sort_toggle = Rect::default();
@@ -1167,7 +2095,7 @@ index 248216c..0c4ea98 100644
          hits.new_workspace = Rect::default();
          hits.machines.clear();
          hits.workspaces.clear();
-@@ -375,3 +385,91 @@ pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &s
+@@ -375,3 +398,91 @@ pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &s
  pub(super) fn display_width(text: &str) -> u16 {
      UnicodeWidthStr::width(text).min(u16::MAX as usize) as u16
  }
@@ -1260,23 +2188,40 @@ index 248216c..0c4ea98 100644
 +    }
 +}
 diff --git a/src/client/shell/sidebar.rs b/src/client/shell/sidebar.rs
-index f94f6bd..eda37a0 100644
+index f94f6bd..6a86dba 100644
 --- a/src/client/shell/sidebar.rs
 +++ b/src/client/shell/sidebar.rs
-@@ -211,6 +211,11 @@ pub(crate) fn render_sidebar(
+@@ -211,6 +211,20 @@ pub(crate) fn render_sidebar(
      } else {
          Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
      };
 +    if config.inbox_mode {
 +        let content = super::render::render_inbox_header(buffer, area, config, hits);
-+        super::render_agent_panel(buffer, content, snapshot, config, state.agent_scroll, hits);
++        let cursor = state.inbox_cursor.map(|(_, pane_id)| pane_id.as_str());
++        super::render_agent_panel(
++            buffer,
++            content,
++            snapshot,
++            config,
++            state.agent_scroll,
++            hits,
++            cursor,
++        );
 +        return;
 +    }
      let (workspace_area, detail_area) =
          crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
      hits.sidebar_section_divider =
+@@ -437,6 +451,7 @@ pub(crate) fn render_sidebar(
+         config,
+         state.agent_scroll,
+         hits,
++        None,
+     );
+ 
+     hits.sidebar_toggle = Rect::new(
 diff --git a/src/client/shell/state.rs b/src/client/shell/state.rs
-index c170c9b..d8f58c8 100644
+index c170c9b..02150a1 100644
 --- a/src/client/shell/state.rs
 +++ b/src/client/shell/state.rs
 @@ -13,6 +13,7 @@ pub(crate) enum ClientShellKeybindingSource {
@@ -1328,19 +2273,33 @@ index c170c9b..d8f58c8 100644
  }
  
  #[derive(Debug)]
-@@ -920,6 +934,7 @@ pub(crate) struct ClientShellState {
+@@ -920,6 +934,14 @@ pub(crate) struct ClientShellState {
      pub(super) popup_pending_deadline: Option<std::time::Instant>,
      pub(super) next_request_id: u64,
      pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
 +    pub(super) pending_inbox_focus: Option<(String, String, std::time::Instant)>,
++    pub(super) inbox_focus: super::inbox_keys::InboxFocus,
++    pub(super) inbox_cursor: Option<(ClientEndpointId, String)>,
++    pub(super) inbox_dictation: Option<super::inbox_keys::InboxDictation>,
++    #[cfg(test)]
++    pub(super) inbox_dictation_offline: bool,
++    #[cfg(test)]
++    pub(super) inbox_dictation_probe: Option<super::inbox_keys::InboxDictationProbe>,
      pub(super) pending_integration_installs: usize,
      pub(super) pending_notifications: Vec<ClientPendingNotification>,
      pub(super) visible_notification: Option<ClientVisibleNotification>,
-@@ -1085,6 +1100,7 @@ impl ClientShellState {
+@@ -1085,6 +1107,14 @@ impl ClientShellState {
              popup_pending_deadline: None,
              next_request_id: 1,
              pending_requests: HashMap::new(),
 +            pending_inbox_focus: None,
++            inbox_focus: Default::default(),
++            inbox_cursor: None,
++            inbox_dictation: None,
++            #[cfg(test)]
++            inbox_dictation_offline: false,
++            #[cfg(test)]
++            inbox_dictation_probe: None,
              pending_integration_installs: 0,
              pending_notifications: Vec::new(),
              visible_notification: None,
@@ -1724,3 +2683,408 @@ index e54301a..b916a8b 100644
          }),
          ClientShellOverlay::Help(ClientHelpOverlay {
              query: TextEditor::default(),
+diff --git a/src/client/shell/tests/inbox_keyboard.rs b/src/client/shell/tests/inbox_keyboard.rs
+new file mode 100644
+index 0000000..ba25b7c
+--- /dev/null
++++ b/src/client/shell/tests/inbox_keyboard.rs
+@@ -0,0 +1,387 @@
++use super::*;
++use crate::api::schema::AgentStatus;
++use crate::input::TerminalKey;
++use crossterm::event::KeyModifiers;
++
++fn thread(pane_id: &str, name: &str, status: AgentStatus, focused: bool) -> ClientShellAgent {
++    ClientShellAgent {
++        pane_id: pane_id.into(),
++        workspace_id: "ws_1".into(),
++        tab_id: "tab_1".into(),
++        name: Some(name.into()),
++        display_agent: None,
++        agent: Some("claude".into()),
++        title: None,
++        terminal_title: None,
++        terminal_title_stripped: None,
++        agent_status: status,
++        state_change_seq: 1,
++        state_labels: Vec::new(),
++        tokens: Vec::new(),
++        focused,
++    }
++}
++
++fn inbox_snapshot(focused_pane: &str) -> ClientShellSnapshot {
++    let mut local = snapshot();
++    let mut pane_2 = local.panes[0].clone();
++    pane_2.pane_id = "pane_2".into();
++    pane_2.focused = false;
++    local.panes.push(pane_2);
++    let mut composer = local.panes[0].clone();
++    composer.pane_id = "composer".into();
++    composer.label = Some("New thread".into());
++    composer.focused = false;
++    local.panes.push(composer);
++    for pane in &mut local.panes {
++        pane.focused = pane.pane_id == focused_pane;
++    }
++    local.focused_pane_id = Some(focused_pane.into());
++    local.agents.push(thread(
++        "pane_1",
++        "Fix login",
++        AgentStatus::Working,
++        focused_pane == "pane_1",
++    ));
++    local.agents.push(thread(
++        "pane_2",
++        "Add export",
++        AgentStatus::Idle,
++        focused_pane == "pane_2",
++    ));
++    local
++}
++
++fn inbox_state(focused_pane: &str) -> ClientShellState {
++    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++    state.config.inbox_mode = true;
++    state.config.confirm_close = false;
++    state.set_snapshot(Box::new(inbox_snapshot(focused_pane)));
++    state.set_pane_surface(surface());
++    state.set_endpoint_methods(Some(vec!["pane.focus".into(), "workspace.close".into()]));
++    state.compose(120, 40).expect("inbox frame");
++    assert_eq!(
++        state.inbox_targets(),
++        vec![
++            (ClientEndpointId::Local, "pane_1".to_owned()),
++            (ClientEndpointId::Local, "pane_2".to_owned()),
++        ]
++    );
++    state
++}
++
++fn press(state: &mut ClientShellState, code: KeyCode, modifiers: KeyModifiers) -> ClientShellInput {
++    state.handle_raw_events(vec![RawInputEvent::Key(TerminalKey::new(code, modifiers))])
++}
++
++fn cursor(state: &ClientShellState) -> Option<&str> {
++    state
++        .inbox_cursor
++        .as_ref()
++        .map(|(_, pane_id)| pane_id.as_str())
++}
++
++fn pane_input_for(outcome: &ClientShellInput, pane: &str) -> bool {
++    outcome.requests.iter().any(|request| {
++        matches!(request, ClientMessage::ClientShellPaneInput { pane_id, .. } if pane_id == pane)
++    })
++}
++
++fn ctrl_t(state: &mut ClientShellState) -> ClientShellInput {
++    press(state, KeyCode::Char('t'), KeyModifiers::CONTROL)
++}
++
++#[test]
++fn tab_focuses_the_thread_list_on_the_open_thread_and_j_k_walk_it() {
++    let mut state = inbox_state("pane_1");
++    let outcome = press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Threads
++    );
++    assert_eq!(cursor(&state), Some("pane_1"));
++    assert!(outcome.requests.is_empty(), "tab must not reach the agent");
++    press(&mut state, KeyCode::Char('j'), KeyModifiers::NONE);
++    assert_eq!(cursor(&state), Some("pane_2"));
++    press(&mut state, KeyCode::Char('j'), KeyModifiers::NONE);
++    assert_eq!(
++        cursor(&state),
++        Some("pane_2"),
++        "the cursor stops at the last thread"
++    );
++    press(&mut state, KeyCode::Char('k'), KeyModifiers::NONE);
++    assert_eq!(cursor(&state), Some("pane_1"));
++    press(&mut state, KeyCode::Char('G'), KeyModifiers::SHIFT);
++    assert_eq!(cursor(&state), Some("pane_2"));
++    press(&mut state, KeyCode::Char('g'), KeyModifiers::NONE);
++    assert_eq!(cursor(&state), Some("pane_1"));
++    press(&mut state, KeyCode::Down, KeyModifiers::NONE);
++    assert_eq!(cursor(&state), Some("pane_2"));
++    press(&mut state, KeyCode::Up, KeyModifiers::NONE);
++    assert_eq!(cursor(&state), Some("pane_1"));
++    assert!(state
++        .inbox_status()
++        .is_some_and(|status| status.badge.contains("THREADS")));
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Terminal
++    );
++    assert!(state.inbox_status().is_none());
++}
++
++#[test]
++fn enter_opens_the_cursor_thread_and_hands_focus_back_to_the_terminal() {
++    let mut state = inbox_state("pane_1");
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    press(&mut state, KeyCode::Char('j'), KeyModifiers::NONE);
++    let outcome = press(&mut state, KeyCode::Enter, KeyModifiers::NONE);
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { request, .. }
++            if matches!(&request.method, crate::api::schema::Method::PaneFocus(params) if params.pane_id == "pane_2"))));
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Terminal
++    );
++    assert_eq!(cursor(&state), Some("pane_2"));
++}
++
++#[test]
++fn backspace_archives_the_cursor_thread_and_moves_to_its_neighbour() {
++    let mut state = inbox_state("pane_1");
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    let outcome = press(&mut state, KeyCode::Backspace, KeyModifiers::NONE);
++    assert!(outcome.actions.iter().any(|action| matches!(action,
++        ClientShellAction::Endpoint { request, .. }
++            if matches!(&request.method, crate::api::schema::Method::WorkspaceClose(params) if params.workspace_id == "ws_1" && !params.close_group))));
++    assert_eq!(cursor(&state), Some("pane_2"));
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Threads
++    );
++}
++
++#[test]
++fn typing_in_the_thread_list_never_reaches_the_agent_and_esc_returns() {
++    let mut state = inbox_state("pane_1");
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    let outcome = press(&mut state, KeyCode::Char('a'), KeyModifiers::NONE);
++    assert!(outcome.requests.is_empty());
++    let outcome = press(&mut state, KeyCode::Esc, KeyModifiers::NONE);
++    assert!(outcome.requests.is_empty());
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Terminal
++    );
++    let outcome = press(&mut state, KeyCode::Char('a'), KeyModifiers::NONE);
++    assert!(pane_input_for(&outcome, "pane_1"));
++}
++
++#[test]
++fn tab_and_ctrl_t_stay_with_a_plugin_pane_such_as_the_composer() {
++    let mut state = inbox_state("composer");
++    let outcome = press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    assert!(pane_input_for(&outcome, "composer"));
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Terminal
++    );
++    let outcome = ctrl_t(&mut state);
++    assert!(pane_input_for(&outcome, "composer"));
++    assert!(state.inbox_dictation.is_none());
++}
++
++#[test]
++fn shift_tab_is_never_intercepted() {
++    let mut state = inbox_state("pane_1");
++    let outcome = press(&mut state, KeyCode::BackTab, KeyModifiers::NONE);
++    assert!(pane_input_for(&outcome, "pane_1"));
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Terminal
++    );
++}
++
++#[test]
++fn ctrl_t_dictates_into_the_focused_thread_and_enter_sends() {
++    use super::super::inbox_keys::{InboxDictationEvent, InboxDictationPhase};
++    let mut state = inbox_state("pane_1");
++    state.inbox_dictation_offline = true;
++    let outcome = ctrl_t(&mut state);
++    assert!(
++        outcome.requests.is_empty(),
++        "ctrl+t is the inbox's, not the agent's"
++    );
++    assert_eq!(
++        state
++            .inbox_dictation
++            .as_ref()
++            .map(|session| session.title.as_str()),
++        Some("Fix login")
++    );
++    assert!(state
++        .inbox_status()
++        .is_some_and(|status| status.badge.contains("REC")));
++    let outcome = press(&mut state, KeyCode::Enter, KeyModifiers::NONE);
++    assert!(
++        outcome.requests.is_empty(),
++        "enter stops the recording instead of reaching the agent"
++    );
++    let (events, written) = state.inbox_dictation_probe.clone().expect("probe");
++    assert_eq!(written.lock().expect("lock").as_slice(), b"send\n");
++    assert!(matches!(
++        state.inbox_dictation.as_ref().map(|session| &session.phase),
++        Some(InboxDictationPhase::Finishing { mode: "send", .. })
++    ));
++    events
++        .send(InboxDictationEvent::Transcribing)
++        .expect("send");
++    let now = std::time::Instant::now();
++    assert!(state.tick_inbox_dictation(now));
++    assert!(state
++        .inbox_status()
++        .is_some_and(|status| status.segments[0].0.contains("transcribing")));
++    events
++        .send(InboxDictationEvent::Done {
++            mode: "send".into(),
++            text: "fix the redirect".into(),
++        })
++        .expect("send");
++    assert!(state.tick_inbox_dictation(now));
++    assert!(matches!(
++        state.inbox_dictation.as_ref().map(|session| &session.phase),
++        Some(InboxDictationPhase::Finished { message, .. }) if message == "Sent to Fix login: fix the redirect"
++    ));
++    // The agent gets keys again while the notice is up, and the notice expires on its own.
++    let outcome = press(&mut state, KeyCode::Char('a'), KeyModifiers::NONE);
++    assert!(pane_input_for(&outcome, "pane_1"));
++    assert!(state.tick_inbox_dictation(now + std::time::Duration::from_secs(5)));
++    assert!(state.inbox_dictation.is_none());
++}
++
++#[test]
++fn ctrl_t_again_types_without_sending_and_esc_discards() {
++    use super::super::inbox_keys::InboxDictationPhase;
++    let mut state = inbox_state("pane_1");
++    state.inbox_dictation_offline = true;
++    ctrl_t(&mut state);
++    ctrl_t(&mut state);
++    let (_, written) = state.inbox_dictation_probe.clone().expect("probe");
++    assert_eq!(written.lock().expect("lock").as_slice(), b"type\n");
++    assert!(matches!(
++        state.inbox_dictation.as_ref().map(|session| &session.phase),
++        Some(InboxDictationPhase::Finishing { mode: "type", .. })
++    ));
++    state.tick_inbox_dictation(std::time::Instant::now() + std::time::Duration::from_secs(60));
++    assert!(
++        state.inbox_dictation.is_some(),
++        "a finishing session waits for its result"
++    );
++
++    let mut state = inbox_state("pane_1");
++    state.inbox_dictation_offline = true;
++    ctrl_t(&mut state);
++    let outcome = press(&mut state, KeyCode::Esc, KeyModifiers::NONE);
++    assert!(outcome.requests.is_empty());
++    let (_, written) = state.inbox_dictation_probe.clone().expect("probe");
++    assert_eq!(written.lock().expect("lock").as_slice(), b"cancel\n");
++    assert!(matches!(
++        state.inbox_dictation.as_ref().map(|session| &session.phase),
++        Some(InboxDictationPhase::Finished { message, .. }) if message == "Recording discarded"
++    ));
++}
++
++#[test]
++fn ctrl_t_in_the_thread_list_targets_the_cursor_thread() {
++    let mut state = inbox_state("pane_1");
++    state.inbox_dictation_offline = true;
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    press(&mut state, KeyCode::Char('j'), KeyModifiers::NONE);
++    ctrl_t(&mut state);
++    assert_eq!(
++        state
++            .inbox_dictation
++            .as_ref()
++            .map(|session| session.title.as_str()),
++        Some("Add export")
++    );
++}
++
++#[test]
++fn dictation_errors_surface_in_the_mode_bar_error_slot() {
++    use super::super::inbox_keys::InboxDictationEvent;
++    let mut state = inbox_state("pane_1");
++    state.inbox_dictation_offline = true;
++    ctrl_t(&mut state);
++    let (events, _) = state.inbox_dictation_probe.clone().expect("probe");
++    events
++        .send(InboxDictationEvent::Error(
++            "No transcription service is connected".into(),
++        ))
++        .expect("send");
++    events.send(InboxDictationEvent::Exited).expect("send");
++    let now = std::time::Instant::now();
++    assert!(state.tick_inbox_dictation(now));
++    assert!(state
++        .endpoint_error
++        .as_deref()
++        .is_some_and(|error| error.contains("No transcription service")));
++    state.tick_inbox_dictation(now);
++    assert!(state.inbox_dictation.is_none());
++}
++
++#[test]
++fn clicking_a_thread_leaves_the_list_focused_state_behind() {
++    let mut state = inbox_state("pane_1");
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    let (rect, pane_id) = state.hits.agents[1].clone();
++    assert_eq!(pane_id, "pane_2");
++    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: rect.x,
++        row: rect.y,
++        modifiers: KeyModifiers::NONE,
++    })]);
++    assert_eq!(
++        state.inbox_focus,
++        super::super::inbox_keys::InboxFocus::Terminal
++    );
++    assert_eq!(cursor(&state), Some("pane_2"));
++}
++
++fn rail_background(frame: &crate::protocol::FrameData, width: usize, text: &str) -> u32 {
++    let rows = frame.cells.chunks(width).collect::<Vec<_>>();
++    let row = rows
++        .iter()
++        .find(|row| {
++            row.iter()
++                .map(|cell| cell.symbol.as_str())
++                .collect::<String>()
++                .contains(text)
++        })
++        .unwrap_or_else(|| panic!("no row shows {text}"));
++    row.iter()
++        .find(|cell| cell.symbol == "▎")
++        .map(|cell| cell.bg)
++        .expect("the thread row has a rail")
++}
++
++#[test]
++fn the_highlight_follows_the_cursor_while_the_list_has_focus() {
++    let mut state = inbox_state("pane_1");
++    let frame = state.compose(120, 40).expect("frame");
++    let open = rail_background(&frame, 120, "Fix login");
++    let other = rail_background(&frame, 120, "Add export");
++    assert_ne!(open, other, "the open thread is highlighted");
++    press(&mut state, KeyCode::Tab, KeyModifiers::NONE);
++    press(&mut state, KeyCode::Char('j'), KeyModifiers::NONE);
++    let frame = state.compose(120, 40).expect("frame");
++    assert_eq!(rail_background(&frame, 120, "Add export"), open);
++    assert_eq!(rail_background(&frame, 120, "Fix login"), other);
++    let text = frame
++        .cells
++        .iter()
++        .map(|cell| cell.symbol.as_str())
++        .collect::<String>();
++    assert!(text.contains("THREADS"));
++}
+diff --git a/src/client/shell/tests/mod.rs b/src/client/shell/tests/mod.rs
+index 9d96014..86be279 100644
+--- a/src/client/shell/tests/mod.rs
++++ b/src/client/shell/tests/mod.rs
+@@ -252,6 +252,7 @@ mod copy;
+ mod endpoint_requests;
+ mod endpoints;
+ mod graphics;
++mod inbox_keyboard;
+ #[path = "input.rs"]
+ mod input_domain;
+ mod keybindings_settings;
