@@ -3,6 +3,7 @@
 //! so every behaviour is testable without a server or a terminal.
 
 mod composer;
+mod dictation;
 mod input;
 mod layout;
 
@@ -22,6 +23,7 @@ use crate::state::{Preferences, Remembered};
 use crate::threads::{self, Activity, Source, Thread, ThreadId};
 
 pub use composer::{Choice, Composer, Field, Pick, Picker, WorkspaceSel};
+pub use dictation::{Dictation, Entry, Menu, MenuItem, Phase, SpeechStatus, Target, Then, menu_items};
 pub use layout::{Layout, Row, RowKind};
 
 const NOTICE_TTL: Duration = Duration::from_secs(4);
@@ -182,10 +184,40 @@ pub enum Effect {
         record: Box<Record>,
     },
     Remember(Remembered),
+    SavePresets(Vec<crate::presets::Preset>),
+    SaveHistory(String),
+    /// Send text to an agent without opening its thread.
+    Prompt {
+        machine: String,
+        pane_id: String,
+        title: String,
+        text: String,
+    },
+    /// Forget a failed launch.
+    Dismiss {
+        record: String,
+    },
+    StartDictation,
+    StopDictation,
+    CancelDictation,
+    /// Type text into an agent's prompt without sending it.
+    TypeText {
+        machine: String,
+        pane_id: String,
+        title: String,
+        text: String,
+    },
+    OpenUrl(String),
+    VerifyKey {
+        service: &'static str,
+        key: String,
+    },
+    InstallWhisper,
+    SaveCredentials(crate::speech::backends::Credentials),
     Quit,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Input {
     Snapshot {
         machine: String,
@@ -230,8 +262,35 @@ pub enum Input {
     Resumed {
         result: Result<Outcome, Failure>,
     },
-    /// Launches from an earlier run that still wait at a startup dialog.
+    /// Launch journals from earlier runs.
     Journals(Vec<Record>),
+    Prompted {
+        title: String,
+        text: String,
+        result: Result<bool, String>,
+    },
+    Typed {
+        title: String,
+        result: Result<(), String>,
+    },
+    DictationStarted(Result<(), String>),
+    Levels {
+        levels: Vec<f32>,
+        quiet: bool,
+    },
+    Transcribed(Result<String, String>),
+    Speech(SpeechStatus),
+    KeyVerified {
+        service: &'static str,
+        key: String,
+        result: Result<(), String>,
+    },
+    Whisper {
+        result: Result<Option<String>, String>,
+        progress: Option<String>,
+    },
+    /// Something in the background failed in a way the user should know.
+    Error(String),
     Tick,
 }
 
@@ -269,7 +328,31 @@ pub struct App {
     /// Launches waiting at a startup dialog, by thread.
     pub waiting: HashMap<ThreadId, Record>,
     launch_counter: u32,
+    pub presets: Vec<crate::presets::Preset>,
+    /// Past tasks, newest first.
+    pub history: Vec<String>,
+    /// Every launch journal the inbox knows, by launch id.
+    pub records: HashMap<String, Record>,
+    /// The list filter, and whether the user is typing it.
+    pub filter: String,
+    pub filtering: bool,
+    /// A reply being written to a thread from the list.
+    pub reply: Option<Reply>,
+    pub dictation: Option<Dictation>,
+    pub speech: SpeechStatus,
+    pub menu: Option<Menu>,
+    pub credentials: crate::speech::backends::Credentials,
 }
+
+/// Text for an agent, written from the thread list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub thread: ThreadId,
+    pub editor: crate::editor::Editor,
+}
+
+/// Synthetic threads for failed launches have ids under this prefix.
+pub const LAUNCH_PREFIX: &str = "launch/";
 
 impl App {
     /// `machines` lists the saved remote machines; the local one is added first.
@@ -308,7 +391,30 @@ impl App {
             launches: Vec::new(),
             waiting: HashMap::new(),
             launch_counter: 0,
+            presets: Vec::new(),
+            history: Vec::new(),
+            records: HashMap::new(),
+            filter: String::new(),
+            filtering: false,
+            reply: None,
+            dictation: None,
+            speech: SpeechStatus::default(),
+            menu: None,
+            credentials: Default::default(),
         }
+    }
+
+    /// Saved dictation credentials, read at startup.
+    pub fn with_credentials(mut self, credentials: crate::speech::backends::Credentials) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    /// Presets and task history, read at startup.
+    pub fn with_memory(mut self, presets: Vec<crate::presets::Preset>, history: Vec<String>) -> Self {
+        self.presets = presets;
+        self.history = history;
+        self
     }
 
     /// Settings and remembered choices, read at startup.
@@ -326,6 +432,7 @@ impl App {
             inventories: &self.inventories,
             preferences: &self.preferences,
             config: &self.config,
+            presets: &self.presets,
         };
         f(&mut self.composer, &ctx)
     }
@@ -336,6 +443,7 @@ impl App {
             inventories: &self.inventories,
             preferences: &self.preferences,
             config: &self.config,
+            presets: &self.presets,
         }
     }
 
@@ -366,12 +474,42 @@ impl App {
             Input::Resumed { result } => self.on_resumed(result, now),
             Input::Journals(records) => {
                 for record in records {
-                    if let Some(pane) = &record.pane_id {
-                        self.waiting.insert(threads::thread_id(&record.machine_id, pane), record);
+                    if record.stage == launch::Stage::StartupBlocked
+                        && let Some(pane) = &record.pane_id
+                    {
+                        self.waiting.insert(threads::thread_id(&record.machine_id, pane), record.clone());
                     }
+                    self.records.insert(record.id.clone(), record);
                 }
+                self.rebuild();
                 self.resume_ready(&mut effects);
             }
+            Input::Error(text) => self.notify(text, NoticeKind::Error, now),
+            Input::Prompted { title, text, result } => match result {
+                Ok(false) => self.notify(format!("Sent to “{title}”"), NoticeKind::Info, now),
+                Ok(true) => self.notify(format!("Sent to “{title}”, not confirmed yet"), NoticeKind::Info, now),
+                // The words are kept in the notice, so nothing is lost.
+                Err(error) if error.contains("blocked") => self.notify(
+                    format!("Not sent: “{title}” is waiting for an answer. Your words: “{text}”"),
+                    NoticeKind::Error,
+                    now,
+                ),
+                Err(error) => self.notify(
+                    format!("Could not send to “{title}”: {error}. Your words: “{text}”"),
+                    NoticeKind::Error,
+                    now,
+                ),
+            },
+            Input::Typed { title, result } => match result {
+                Ok(()) => self.notify(format!("Typed into “{title}”"), NoticeKind::Info, now),
+                Err(error) => self.notify(format!("Could not type into “{title}”: {error}"), NoticeKind::Error, now),
+            },
+            Input::DictationStarted(result) => self.on_dictation_started(result, now),
+            Input::Levels { levels, quiet } => self.on_levels(levels, quiet),
+            Input::Transcribed(result) => self.on_transcribed(result, now, &mut effects),
+            Input::Speech(status) => self.speech = status,
+            Input::KeyVerified { service, key, result } => self.on_key_verified(service, key, result, &mut effects),
+            Input::Whisper { result, progress } => self.on_whisper(result, progress, &mut effects),
             Input::Tick => {
                 if self.notice.as_ref().is_some_and(|n| n.until <= now) {
                     self.notice = None;
@@ -455,6 +593,10 @@ impl App {
             self.launches.remove(0);
         }
         self.composer.error = None;
+        let task = self.composer.task.text().trim().to_string();
+        self.history = crate::state::with_task(std::mem::take(&mut self.history), &task);
+        self.composer.history_index = None;
+        effects.push(Effect::SaveHistory(task));
         if !keep {
             self.composer.task.clear();
         }
@@ -463,6 +605,86 @@ impl App {
             self.composer.workspace = WorkspaceSel::New;
         }
         effects.push(Effect::Launch { machine: request.machine_id, plan: Box::new(plan) });
+        self.rebuild();
+    }
+
+    /// Saves, renames or removes presets and tells the runtime to store them.
+    pub(crate) fn change_presets(
+        &mut self,
+        next: Result<Vec<crate::presets::Preset>, String>,
+        effects: &mut Vec<Effect>,
+    ) {
+        match next {
+            Ok(presets) => {
+                self.presets = presets;
+                effects.push(Effect::SavePresets(self.presets.clone()));
+            }
+            Err(error) => self.composer.error = Some(error),
+        }
+    }
+
+    /// Fills the composer from a thread's launch and opens it, to send the
+    /// same task again elsewhere.
+    pub(crate) fn resend(&mut self, id: &str, now: SystemTime, effects: &mut Vec<Effect>) {
+        let Some(thread) = self.thread(id).cloned() else {
+            return;
+        };
+        let record = self.record_for(&thread).cloned();
+        let composer = &mut self.composer;
+        composer.picker = None;
+        composer.error = None;
+        composer.machine = Some(thread.machine_id.clone());
+        match &record {
+            Some(record) => {
+                composer.project = Some(record.project.clone());
+                composer.harness = Some(record.harness.clone());
+                composer.model = Some(record.model.clone()).filter(|m| !m.is_empty());
+                composer.thinking = Some(record.thinking.clone()).filter(|t| !t.is_empty());
+                // A launch that failed keeps its branch: retrying reuses it.
+                composer.workspace = match (&thread.note, record.workspace.as_str()) {
+                    (Some(threads::LaunchNote::Failed(_)), "worktree") if !record.branch.is_empty() => {
+                        WorkspaceSel::Named(record.branch.clone())
+                    }
+                    (_, "checkout") if !record.cwd.is_empty() => WorkspaceSel::Checkout(record.cwd.clone()),
+                    _ => WorkspaceSel::New,
+                };
+                composer.task.set(&record.task);
+            }
+            None => {
+                composer.project = Some(thread.project.clone());
+                composer.harness = thread.kind.clone();
+                composer.model = None;
+                composer.thinking = None;
+                composer.workspace = WorkspaceSel::New;
+                composer.task.clear();
+            }
+        }
+        composer.field = Field::Task;
+        self.open_composer(now, effects);
+    }
+
+    /// The launch journal behind a thread: by pane for live threads, by id
+    /// for failed launches.
+    pub fn record_for(&self, thread: &Thread) -> Option<&Record> {
+        if let Some(id) = thread.id.strip_prefix(LAUNCH_PREFIX) {
+            return self.records.get(id);
+        }
+        self.records
+            .values()
+            .filter(|r| r.machine_id == thread.machine_id && r.pane_id.as_deref() == Some(thread.pane_id.as_str()))
+            .max_by_key(|r| r.created_at)
+    }
+
+    /// Forgets a failed launch's row.
+    pub(crate) fn dismiss(&mut self, id: &str, effects: &mut Vec<Effect>) {
+        let Some(record_id) = id.strip_prefix(LAUNCH_PREFIX) else {
+            return;
+        };
+        if self.records.remove(record_id).is_some() {
+            effects.push(Effect::Dismiss { record: record_id.to_string() });
+            self.rebuild();
+            self.fix_cursor();
+        }
     }
 
     fn set_launch(&mut self, id: &str, state: LaunchState) {
@@ -483,6 +705,7 @@ impl App {
                 let record = match &outcome {
                     Outcome::Sent(record) | Outcome::WaitingForStartup(record) => record.clone(),
                 };
+                self.records.insert(record.id.clone(), record.clone());
                 let workspace = if record.workspace == "worktree" { "worktree" } else { "checkout" };
                 let remembered = Remembered {
                     project: record.project.clone(),
@@ -507,6 +730,8 @@ impl App {
             }
             Err(Failure { record, error }) => {
                 let first_line = error.lines().next().unwrap_or("launch failed").to_string();
+                self.records.insert(record.id.clone(), (*record).clone());
+                self.rebuild();
                 self.set_launch(id, LaunchState::Failed(first_line.clone()));
                 self.notify(format!("Could not start “{}”: {first_line}", record.title), NoticeKind::Error, now);
             }
@@ -742,7 +967,70 @@ impl App {
                 })
             })
             .collect();
-        self.threads = threads::build(&sources, &self.activity);
+        let mut threads = threads::build(&sources, &self.activity);
+        self.annotate(&mut threads);
+        threads::sort(&mut threads);
+        if !self.filter.trim().is_empty() {
+            // Each field on its own: letters scattered across a title and a
+            // branch name are not a match.
+            threads.retain(|t| {
+                let fields = [
+                    Some(t.title.as_str()),
+                    Some(t.project.as_str()),
+                    t.branch.as_deref(),
+                    Some(t.harness.as_str()),
+                    t.machine_label.as_deref(),
+                ];
+                fields.into_iter().flatten().any(|field| crate::fuzzy::score(&self.filter, field).is_some())
+            });
+        }
+        self.threads = threads;
+    }
+
+    /// Adds what the launch journals say: notes on live threads, and a row
+    /// for each failed launch whose agent never appeared.
+    fn annotate(&self, threads: &mut Vec<Thread>) {
+        let mut covered = HashSet::new();
+        for thread in threads.iter_mut() {
+            if let Some(record) = self.record_for(thread) {
+                covered.insert(record.id.clone());
+                thread.note = match record.stage {
+                    launch::Stage::StartupBlocked => Some(threads::LaunchNote::Waiting),
+                    launch::Stage::NeedsAttention => Some(threads::LaunchNote::Failed(first_line(record))),
+                    launch::Stage::Submitted if record.unverified => Some(threads::LaunchNote::Unverified),
+                    _ => None,
+                };
+            }
+        }
+        for record in self.records.values() {
+            if record.stage != launch::Stage::NeedsAttention || covered.contains(&record.id) {
+                continue;
+            }
+            let machine_label = self.machine(&record.machine_id).filter(|m| !m.is_local()).map(|m| m.label.clone());
+            threads.push(Thread {
+                id: format!("{LAUNCH_PREFIX}{}", record.id),
+                machine_id: record.machine_id.clone(),
+                machine_label: machine_label
+                    .or_else(|| (record.machine_id != threads::LOCAL).then(|| record.machine_label.clone())),
+                pane_id: record.pane_id.clone().unwrap_or_default(),
+                workspace_id: record.workspace_id.clone().unwrap_or_default(),
+                status: AgentStatus::Blocked,
+                title: record.title.clone(),
+                project: record.project.clone(),
+                branch: Some(record.branch.clone()).filter(|b| !b.is_empty()),
+                harness: threads::harness_label_for(&record.harness),
+                kind: Some(record.harness.clone()),
+                note: Some(threads::LaunchNote::Failed(first_line(record))),
+                changed_at: Some(std::time::UNIX_EPOCH + Duration::from_secs(record.created_at)),
+                change_seq: 0,
+            });
+        }
+    }
+
+    /// Rebuilds the list now, after a filter change, keeping the cursor valid.
+    pub(crate) fn rebuild_now(&mut self) {
+        self.rebuild();
+        self.fix_cursor();
     }
 
     /// Keeps the cursor on an existing thread: its old position's neighbour if
@@ -791,6 +1079,10 @@ impl App {
             return;
         };
         let (machine, pane_id) = (thread.machine_id.clone(), thread.pane_id.clone());
+        if pane_id.is_empty() {
+            self.notify("This launch never got a pane. Press e to send it again.", NoticeKind::Info, now);
+            return;
+        }
         // Re-opening the open thread is a no-op, unless its stream ended (for
         // instance because another client took it over): then it re-attaches.
         let already_streaming =
@@ -830,6 +1122,10 @@ impl App {
         self.notice = None;
         effects.push(Effect::StartServer);
     }
+}
+
+fn first_line(record: &Record) -> String {
+    record.error.as_deref().and_then(|e| e.lines().next()).unwrap_or("the launch stopped").to_string()
 }
 
 #[cfg(test)]

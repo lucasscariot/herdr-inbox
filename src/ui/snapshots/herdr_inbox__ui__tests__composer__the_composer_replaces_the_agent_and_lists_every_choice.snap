@@ -14,13 +14,13 @@ expression: "text(&render(&app, at(1)))"
  READY  1                           │
 ▎site                       ✓ ready │    Project    cockpit                                               F2
 ▎Review navigation                  │    Machine    Local                                                 F6
-▎⎇ feat/a-very-long-branch-name-th… │    Harness    Claude                                                F3
-                                    │    Model      Default (opus)                                        F4
- WORKING  1                         │    Thinking   Default                                               F8
-▎api                      ◐ working │    Workspace  New worktree  ⎇ fix-login-redirect-loop               F9
-▎Add invoice export                 │
-▎⎇ main · Codex                     │  ↵ send   ⌃S send & keep   ⇧↵ newline   ⇥ fields   F5 rescan
-                                    │
+▎⎇ feat/a-very-long-branch-name-th… │    Preset     None yet · Ctrl+D saves one                           F7
+                                    │    Harness    Claude                                                F3
+ WORKING  1                         │    Model      Default (opus)                                        F4
+▎api                      ◐ working │    Thinking   Default                                               F8
+▎Add invoice export                 │    Workspace  New worktree  ⎇ fix-login-redirect-loop               F9
+▎⎇ main · Codex                     │
+                                    │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
  IDLE  1                            │
 ▎scratch                     ○ idle │
 ▎New Pi thread                      │

@@ -37,10 +37,9 @@ It never replaces `herdr`, never starts a server unless you ask it to, and
 never updates anything. Plain `herdr` keeps working beside it, on the same
 sessions.
 
-> **Status.** The standalone client is being rebuilt in stages. It already
-> covers threads on this machine and on every saved SSH machine (the live
-> list, the interactive terminal, archiving) and starting new threads from the
-> composer. Dictation and the remaining conveniences follow. The original
+> **Status.** The standalone client covers everything the plugin did: threads
+> on every machine, the composer, dictation, presets, history, replies. What
+> remains is shipping it: prebuilt binaries and an installer. The original
 > Python plugin lives in [`legacy/`](legacy/) until then.
 
 ## Install
@@ -67,10 +66,17 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | | `g` `G` / `Home` `End` | First / last |
 | | `Enter`, `o`, click | Open the thread and focus its agent |
 | | `n`, click **+ New thread** | Open the composer |
+| | `r` | Reply to the agent without opening it |
+| | `e` | Send the thread's task again, from the composer |
+| | `/` | Filter by title, project, branch, harness or machine; `Esc` clears |
 | | `x`, `Delete`, `Backspace` | Archive: closes the thread's workspace, keeps its worktree on disk |
+| | `d` | Dismiss a failed launch |
+| | `Ctrl+T` | Dictate to the thread under the cursor |
+| | `F10` | Dictation settings |
 | | `Tab`, `Esc` | Back to the agent |
 | | `q`, `Ctrl+C` | Quit |
 | Agent | anything | Goes to the agent, including `Ctrl+C` and `Shift+Tab` |
+| | `Ctrl+T` | Dictate to the agent |
 | | `Tab` | Back to the threads |
 
 Threads are grouped as **needs input**, **ready** (finished, not yet looked
@@ -92,8 +98,14 @@ the background and its progress shows under **Launches**.
 | `Shift+Enter`, `Alt+Enter` | New line |
 | `Tab`, `Shift+Tab` | Move between the task and the choices |
 | `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
+| `Ctrl+T` | Dictate the task |
+| `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
+| `Ctrl+D` | Save the harness, model and thinking level as a preset |
 | `F5` | Rescan projects and model catalogs |
 | `Esc` | Close a list, then the composer (the draft stays) |
+
+**Presets** (`F7`) apply a saved harness, model and thinking level in one
+move. In the preset list, `Ctrl+R` renames and `Delete` removes.
 
 Every list filters as you type: `bgpk` finds `opencode/big-pickle`. A model
 the list does not know can still be used: type its id and pick **Use …**.
@@ -144,6 +156,39 @@ machine = "Mac Studio"
 [machines."Mac Studio"]            # per machine: replaces, never merges
 harness_args = { codex = ["--no-daemon", "--fast"] }
 ```
+
+### Dictation
+
+Press `Ctrl+T` anywhere: in the composer it dictates the task, on a thread it
+dictates to that agent, in a reply box it dictates the reply. While the
+status bar shows `● REC` and the live meter:
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Stop and send: launch the task, send the reply, or prompt the agent |
+| `Ctrl+T` | Stop and type the words, unsent, to edit them first |
+| `Esc` | Discard |
+
+Nothing you type reaches an agent while the microphone is open. If the words
+cannot be delivered (the agent is waiting for an answer, say), the notice
+keeps them so you can paste them.
+
+`F10` sets up transcription. Pick a service and paste its key (Groq and
+Gemini have free tiers), or build whisper.cpp locally for fully offline
+dictation, or give any command that prints a transcript for `{file}`.
+Installed `voxtype` or `whisper-cli` with a model are found on their own.
+Recording uses `pw-record`, `arecord`, `parecord`, `sox` or `ffmpeg`,
+whichever is installed; hosted services are called with `curl`.
+
+`[speech]` in the config can force a backend, pin a language or model, or
+hold keys; `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
+`MISTRAL_API_KEY` and `DEEPGRAM_API_KEY` work too.
+
+### Coming from the plugin
+
+On first start Herdr Inbox copies the plugin's remembered choices, presets,
+task history and dictation keys, and reads its `config.json` until a
+`config.toml` exists. Nothing in the plugin's directories is changed.
 
 ### Other machines
 

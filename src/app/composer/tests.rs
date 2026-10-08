@@ -52,6 +52,7 @@ struct World {
     inventories: HashMap<String, Inventory>,
     preferences: Preferences,
     config: Config,
+    presets: Vec<Preset>,
 }
 
 impl World {
@@ -61,6 +62,7 @@ impl World {
             inventories: &self.inventories,
             preferences: &self.preferences,
             config: &self.config,
+            presets: &self.presets,
         }
     }
 }
@@ -107,6 +109,7 @@ fn world() -> World {
         inventories,
         preferences: Preferences::default(),
         config: Config::default(),
+        presets: Vec::new(),
     }
 }
 
@@ -368,6 +371,7 @@ fn with_nothing_discovered_the_composer_says_so_and_refuses_to_send() {
         inventories: HashMap::new(),
         preferences: Preferences::default(),
         config: Config::default(),
+        presets: Vec::new(),
     };
     let mut composer = settled(&world);
     assert_eq!(composer.project, None);

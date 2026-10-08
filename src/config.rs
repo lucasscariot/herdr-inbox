@@ -64,6 +64,9 @@ pub struct Config {
     /// Overrides by machine id or label.
     #[serde(default)]
     pub machines: BTreeMap<String, MachineSettings>,
+    /// Dictation: a forced backend, a command, language, model, keys.
+    #[serde(default)]
+    pub speech: crate::speech::backends::SpeechConfig,
 }
 
 /// The effective settings for one machine.
@@ -254,9 +257,11 @@ mod tests {
 
     #[test]
     fn the_legacy_plugin_json_reads_the_same_way() {
-        let json = r#"{"roots": ["~/Work"], "depth": 2, "machines": {"Mac Studio": {"harness_args": {"codex": ["--no-daemon"]}}}, "projects": [], "presets": [{"name": "x"}]}"#;
+        let json = r#"{"roots": ["~/Work"], "depth": 2, "machines": {"Mac Studio": {"harness_args": {"codex": ["--no-daemon"]}}}, "projects": [], "presets": [{"name": "x"}], "speech": {"language": "fr", "keys": {"groq": "gsk"}}}"#;
         let config = Config::parse_json(json, Path::new("config.json")).unwrap();
         assert_eq!(config.for_machine("id", "Mac Studio", false).harness_args["codex"], ["--no-daemon"]);
+        assert_eq!(config.speech.language.as_deref(), Some("fr"));
+        assert_eq!(config.speech.keys["groq"], "gsk");
     }
 
     #[test]

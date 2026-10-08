@@ -26,6 +26,10 @@ use crate::herdr::transport::{Runner, Transport};
 use crate::launch::{self, Plan, Record, Stage};
 use crate::link::{Link, Request};
 use crate::machines::{self, Remote};
+use crate::speech::backends;
+use crate::speech::meter::Meter;
+use crate::speech::recorder::{self, Recording};
+use crate::speech::whisper;
 use crate::state::State;
 use crate::theme;
 use crate::threads;
@@ -155,8 +159,12 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
         // Without a private control directory SSH still works, just slower.
         let _ = crate::herdr::ssh::prepare_control_dir(&dir);
     }
+    if let Some(legacy) = State::legacy_dir() {
+        state.migrate_from(&legacy);
+    }
     let mut app = App::new(size.width, size.height, remotes.iter().map(|r| r.info.clone()).collect())
-        .with_setup(config.clone(), state.preferences());
+        .with_setup(config.clone(), state.preferences())
+        .with_memory(state.presets(), state.history());
     if let Some(error) = config_error {
         app.notify(format!("Config ignored: {error}"), crate::app::NoticeKind::Error, SystemTime::now());
     }
@@ -165,7 +173,11 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
     let labels: HashMap<String, (String, bool)> =
         app.machines.iter().map(|m| (m.id.clone(), (m.label.clone(), m.is_local()))).collect();
     let fleet = Fleet::start(local, remotes, &tx);
-    let work = Work { state, config, labels, tx: tx.clone() };
+    let credentials: backends::Credentials = state.read("credentials.json");
+    let voice = Voice::new(config.speech.clone(), credentials.clone());
+    app.update(Input::Speech(voice.status()), SystemTime::now());
+    let mut app = app.with_credentials(credentials);
+    let work = Work { state, config, voice, labels, tx: tx.clone() };
     work.restore(&mut app);
     let mut session: Option<(u64, Session)> = None;
     let mut last_draw = Instant::now() - FRAME;
@@ -197,6 +209,7 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
                     if let Some((_, mut session)) = session.take() {
                         session.release();
                     }
+                    work.voice.cancel();
                     return Ok(());
                 }
             }
@@ -298,14 +311,188 @@ fn perform(
             // Losing a remembered choice only costs a default next time.
             let _ = work.state.remember(&remembered);
         }
+        Effect::SavePresets(presets) => {
+            if let Err(err) = work.state.save_presets(&presets) {
+                let _ = tx.send(Input::Error(format!("Could not save presets: {err}")));
+            }
+        }
+        Effect::SaveHistory(task) => {
+            let _ = work.state.push_history(&task);
+        }
+        Effect::Prompt { machine, pane_id, title, text } => {
+            if let Some((transport, _)) = fleet.get(&machine) {
+                let runner = transport.runner();
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    let result = launch::prompt(&runner, &pane_id, &text);
+                    let _ = tx.send(Input::Prompted { title, text, result });
+                });
+            }
+        }
+        Effect::Dismiss { record } => {
+            let _ = work.state.remove(&format!("launches/{record}.json"));
+        }
+        Effect::StartDictation => work.voice.start(tx),
+        Effect::StopDictation => work.voice.stop(tx),
+        Effect::CancelDictation => work.voice.cancel(),
+        Effect::TypeText { machine, pane_id, title, text } => {
+            if let Some((transport, _)) = fleet.get(&machine) {
+                let runner = transport.runner();
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    let result =
+                        launch::herdr(&runner, &["pane", "send-text", &pane_id, &text], Duration::from_secs(15))
+                            .map(|_| ())
+                            .map_err(|e| e.message);
+                    let _ = tx.send(Input::Typed { title, result });
+                });
+            }
+        }
+        Effect::OpenUrl(url) => open_url(&url),
+        Effect::VerifyKey { service, key } => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let result = backends::verify_key(service, &key, "curl");
+                let _ = tx.send(Input::KeyVerified { service, key, result });
+            });
+        }
+        Effect::InstallWhisper => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let progress = |text: &str| {
+                    let _ = tx.send(Input::Whisper { result: Ok(None), progress: Some(text.to_string()) });
+                };
+                let tools = whisper::Tools::system();
+                let result = whisper::install(
+                    &tools,
+                    &whisper::home(),
+                    whisper::MODEL,
+                    &whisper::model_url(whisper::MODEL),
+                    &progress,
+                );
+                let _ = tx.send(Input::Whisper { result: result.map(Some), progress: None });
+            });
+        }
+        Effect::SaveCredentials(credentials) => {
+            if let Err(err) = work.state.write("credentials.json", &credentials) {
+                let _ = tx.send(Input::Error(format!("Could not save dictation settings: {err}")));
+            }
+            work.voice.set_credentials(credentials);
+            let _ = tx.send(Input::Speech(work.voice.status()));
+        }
     }
     true
 }
 
-/// Background work: discovery, launches, and the state they write.
+/// Opens a page in the user's browser, detached.
+fn open_url(url: &str) {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let mut command = Command::new(opener);
+    command.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let _ = command.spawn();
+}
+
+/// The microphone: at most one recording, its meter, and how to transcribe.
+struct Voice {
+    speech: backends::SpeechConfig,
+    credentials: std::sync::Mutex<backends::Credentials>,
+    recording: std::sync::Mutex<Option<(Recording, std::sync::Arc<std::sync::atomic::AtomicBool>)>>,
+}
+
+impl Voice {
+    fn new(speech: backends::SpeechConfig, credentials: backends::Credentials) -> Self {
+        Self { speech, credentials: std::sync::Mutex::new(credentials), recording: std::sync::Mutex::new(None) }
+    }
+
+    fn settings(&self) -> backends::Settings {
+        let credentials = self.credentials.lock().unwrap_or_else(|e| e.into_inner());
+        backends::Settings::merge(&self.speech, &credentials)
+    }
+
+    fn set_credentials(&self, credentials: backends::Credentials) {
+        *self.credentials.lock().unwrap_or_else(|e| e.into_inner()) = credentials;
+    }
+
+    fn status(&self) -> crate::app::SpeechStatus {
+        let environment = backends::Environment::system();
+        let available = backends::available(&self.settings(), &environment);
+        let tools = available
+            .iter()
+            .filter(|b| matches!(b, backends::Backend::Tool { .. } | backends::Backend::Command(_)))
+            .map(backends::Backend::describe)
+            .collect();
+        crate::app::SpeechStatus { ready: available.first().map(backends::Backend::describe), tools }
+    }
+
+    fn start(&self, tx: &Sender<Input>) {
+        self.cancel();
+        let path = Recording::new_path();
+        let Some(argv) = recorder::recorder_argv(&path, &recorder::installed) else {
+            let message =
+                "No microphone recorder found. Install pipewire (pw-record), alsa-utils (arecord), sox, or ffmpeg.";
+            let _ = tx.send(Input::DictationStarted(Err(message.into())));
+            return;
+        };
+        match Recording::start(&argv, path.clone()) {
+            Ok(recording) => {
+                let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let flag = std::sync::Arc::clone(&running);
+                let meter_tx = tx.clone();
+                thread::spawn(move || {
+                    let mut meter = Meter::new(path);
+                    while flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        let levels = meter.update().to_vec();
+                        if meter_tx.send(Input::Levels { levels, quiet: meter.quiet() }).is_err() {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(66));
+                    }
+                });
+                *self.recording.lock().unwrap_or_else(|e| e.into_inner()) = Some((recording, running));
+                let _ = tx.send(Input::DictationStarted(Ok(())));
+            }
+            Err(error) => {
+                let _ = tx.send(Input::DictationStarted(Err(error)));
+            }
+        }
+    }
+
+    fn stop(&self, tx: &Sender<Input>) {
+        let Some((recording, running)) = self.recording.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            let _ = tx.send(Input::Transcribed(Err("Nothing was recording.".into())));
+            return;
+        };
+        running.store(false, std::sync::atomic::Ordering::Relaxed);
+        let settings = self.settings();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let result = recording.stop().and_then(|path| {
+                let environment = backends::Environment::system();
+                let text = backends::transcribe(&path, &settings, &environment, "curl");
+                let _ = std::fs::remove_file(&path);
+                text
+            });
+            let _ = tx.send(Input::Transcribed(result));
+        });
+    }
+
+    fn cancel(&self) {
+        if let Some((recording, running)) = self.recording.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            running.store(false, std::sync::atomic::Ordering::Relaxed);
+            recording.cancel();
+        }
+    }
+}
+
+/// Background work: discovery, launches, dictation, and the state they write.
 struct Work {
     state: State,
     config: Config,
+    voice: Voice,
     /// Machine id → (label, is local), for per-machine settings.
     labels: HashMap<String, (String, bool)>,
     tx: Sender<Input>,
@@ -322,15 +509,23 @@ impl Work {
                 app.update(Input::Inventory { machine: machine.clone(), result: Ok(cached) }, now);
             }
         }
-        let waiting: Vec<Record> = self
-            .state
-            .list("launches")
-            .into_iter()
-            .filter_map(|id| serde_json::from_value::<Record>(self.state.read(&format!("launches/{id}.json"))).ok())
-            .filter(|record| record.stage == Stage::StartupBlocked)
-            .collect();
-        if !waiting.is_empty() {
-            let _ = self.tx.send(Input::Journals(waiting));
+        let cutoff = discovery::seconds(now).saturating_sub(JOURNAL_DAYS * 86_400);
+        let mut records = Vec::new();
+        for id in self.state.list("launches") {
+            let file = format!("launches/{id}.json");
+            let Ok(record) = serde_json::from_value::<Record>(self.state.read(&file)) else {
+                continue;
+            };
+            // Delivered launches are kept for re-sending, not forever. Failed
+            // and waiting ones stay until the user deals with them.
+            if record.stage == Stage::Submitted && record.created_at < cutoff {
+                let _ = self.state.remove(&file);
+                continue;
+            }
+            records.push(record);
+        }
+        if !records.is_empty() {
+            let _ = self.tx.send(Input::Journals(records));
         }
     }
 
@@ -368,11 +563,6 @@ impl Work {
                 let _ = tx.send(Input::LaunchProgress { id: id.clone(), text: text.to_string() });
             };
             let result = launch::execute(&runner, plan, &journal, &progress);
-            if let Ok(launch::Outcome::Sent(record)) = &result {
-                // A delivered launch needs no journal; failures and waiting
-                // ones keep theirs.
-                let _ = state.remove(&format!("launches/{}.json", record.id));
-            }
             refresh();
             let _ = tx.send(Input::LaunchFinished { id, result });
         });
@@ -386,15 +576,14 @@ impl Work {
                 let _ = state.write(&format!("launches/{}.json", record.id), record);
             };
             let result = launch::resume(&runner, record, &journal);
-            if let Ok(launch::Outcome::Sent(record)) = &result {
-                let _ = state.remove(&format!("launches/{}.json", record.id));
-            }
             let _ = tx.send(Input::Resumed { result });
         });
     }
 }
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
+/// How long delivered launches are kept for re-sending.
+const JOURNAL_DAYS: u64 = 14;
 
 fn inventory_file(machine: &str) -> String {
     let safe: String = machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();

@@ -517,6 +517,18 @@ fn submit(runner: &Runner, record: &mut Record, journal: &dyn Fn(&Record)) -> Re
     Ok(())
 }
 
+/// Sends text to an agent and waits until it reacts. `Ok(true)` means Herdr
+/// typed it but saw no reaction in time.
+pub fn prompt(runner: &Runner, pane: &str, text: &str) -> Result<bool, String> {
+    let args =
+        ["agent", "prompt", pane, text, "--wait", "--until", "working", "--until", "blocked", "--timeout", "8000"];
+    match herdr(runner, &args, Duration::from_secs(20)) {
+        Ok(_) => Ok(false),
+        Err(error) if error.code.as_deref() == Some(PROMPT_STALLED) => Ok(true),
+        Err(error) => Err(error.message),
+    }
+}
+
 /// How often and how long a resumed launch polls for readiness.
 const READY_POLL: Duration = Duration::from_millis(750);
 const READY_TIMEOUT: Duration = Duration::from_secs(60);

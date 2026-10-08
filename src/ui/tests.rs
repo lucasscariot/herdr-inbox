@@ -535,3 +535,208 @@ mod composer {
         }
     }
 }
+
+mod conveniences {
+    use super::*;
+    use crate::launch::{Record, Stage};
+    use ratatui::crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.update(
+            Input::Key(KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(1),
+        );
+    }
+
+    fn record(id: &str, pane: Option<&str>, stage: Stage, unverified: bool) -> Record {
+        Record {
+            id: id.into(),
+            machine_id: LOCAL.into(),
+            machine_label: "Local".into(),
+            project: "cockpit".into(),
+            repo: "/w/cockpit".into(),
+            harness: "claude".into(),
+            model: String::new(),
+            thinking: String::new(),
+            title: "Ship the release notes".into(),
+            task: "Ship the release notes".into(),
+            agent_name: "t".into(),
+            created_at: 0,
+            stage,
+            workspace: "worktree".into(),
+            branch: "release-notes".into(),
+            cwd: String::new(),
+            workspace_id: None,
+            pane_id: pane.map(str::to_string),
+            tab_id: None,
+            unverified,
+            failed_stage: None,
+            error: Some("expected claude, detected bash".into()),
+        }
+    }
+
+    #[test]
+    fn launch_notes_replace_the_branch_line() {
+        let mut app = loaded(110, 40);
+        app.update(
+            Input::Journals(vec![
+                record("f", None, Stage::NeedsAttention, false),
+                record("w", Some("w2:p1"), Stage::StartupBlocked, false),
+                record("u", Some("w4:p1"), Stage::Submitted, true),
+            ]),
+            at(1),
+        );
+        let terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        assert!(screen.contains("▎failed: expected claude, detected… │"), "{screen}");
+        assert!(screen.contains("▎waiting: answer its prompt"), "{screen}");
+        assert!(screen.contains("▎sent, not confirmed yet"), "{screen}");
+        assert_eq!(terminal.backend().buffer()[find(&terminal, "failed: expected")].fg, Palette::default().red);
+        assert_eq!(terminal.backend().buffer()[find(&terminal, "waiting: answer")].fg, Palette::default().yellow);
+    }
+
+    #[test]
+    fn the_reply_box_floats_over_the_terminal_with_its_cursor() {
+        let mut app = loaded(110, 30);
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('r'));
+        for c in "add tests".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        let mut terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        assert!(screen.contains("Reply to “Add invoice export”"), "{screen}");
+        assert!(screen.contains("↵ send · ⇧↵ new line · esc cancel"), "{screen}");
+        assert!(screen.lines().last().unwrap().contains("REPLY"));
+        let (x, y) = find(&terminal, "add tests");
+        terminal.backend_mut().assert_cursor_position((x + 9, y));
+    }
+
+    #[test]
+    fn the_filter_shows_in_the_header() {
+        let mut app = loaded(110, 30);
+        key(&mut app, KeyCode::Char('/'));
+        for c in "invoice".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.lines().nth(1).unwrap().contains("/ invoice▏  1 shown"), "{screen}");
+        assert!(screen.contains("Add invoice export"));
+        assert!(!screen.contains("Review navigation"), "{screen}");
+        assert!(screen.lines().last().unwrap().contains("FILTER"));
+    }
+}
+
+mod voice {
+    use super::*;
+    use crate::app::{Phase, SpeechStatus};
+    use ratatui::crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn ctrl_t(app: &mut App) {
+        app.update(
+            Input::Key(KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(0),
+        );
+    }
+
+    #[test]
+    fn recording_shows_a_live_meter_and_the_keys() {
+        let mut app = loaded(120, 24);
+        app.update(Input::Speech(SpeechStatus { ready: Some("Groq Whisper".into()), tools: vec![] }), at(0));
+        ctrl_t(&mut app);
+        app.update(Input::DictationStarted(Ok(())), at(0));
+        app.update(
+            Input::Levels { levels: vec![0.0, 0.3, 0.7, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], quiet: false },
+            at(0),
+        );
+        let terminal = render(&app, at(65));
+        let last = text(&terminal).lines().last().unwrap().to_string();
+        assert!(last.starts_with(" ● REC 1:05 ▁▂▆█"), "{last}");
+        assert!(last.contains("↵ send  ⌃T type  esc discard"), "{last}");
+        assert!(last.ends_with("to “Fix the login redirect loop on mobile”"), "{last}");
+        let palette = Palette::default();
+        let buffer = terminal.backend().buffer();
+        let (x, y) = find(&terminal, "● REC");
+        assert_eq!(buffer[(x, y)].fg, palette.red);
+        assert_eq!(buffer[(x + 13, y)].fg, palette.accent, "0.7 runs warm");
+        assert_eq!(buffer[(x + 14, y)].fg, palette.red, "a full band runs hot");
+        assert_eq!(buffer[(x + 12, y)].fg, palette.green);
+    }
+
+    #[test]
+    fn silence_and_transcribing_are_said_plainly() {
+        let mut app = loaded(120, 24);
+        app.update(Input::Speech(SpeechStatus { ready: Some("Groq Whisper".into()), tools: vec![] }), at(0));
+        ctrl_t(&mut app);
+        app.update(Input::DictationStarted(Ok(())), at(0));
+        app.update(Input::Levels { levels: vec![0.0; 12], quiet: true }, at(0));
+        assert!(text(&render(&app, at(5))).lines().last().unwrap().ends_with("no sound is reaching the microphone"));
+        app.update(
+            Input::Key(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(5),
+        );
+        assert_eq!(app.dictation.as_ref().unwrap().phase, Phase::Transcribing);
+        assert!(text(&render(&app, at(6))).lines().last().unwrap().starts_with(" ⟳ Transcribing…"));
+    }
+
+    #[test]
+    fn the_menu_lists_services_and_hides_a_typed_key() {
+        let mut app = loaded(110, 30);
+        app.update(
+            Input::Key(KeyEvent {
+                code: KeyCode::F(10),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(0),
+        );
+        let screen = text(&render(&app, at(0)));
+        assert!(screen.contains(" Dictation "), "{screen}");
+        assert!(screen.contains("No transcription yet. Connect one:"), "{screen}");
+        assert!(screen.contains("Connect Groq Whisper") && screen.contains("free tier · fastest"), "{screen}");
+        assert!(screen.contains("Build whisper.cpp here"));
+        app.update(
+            Input::Key(KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(0),
+        );
+        for c in "gsk_secret".chars() {
+            app.update(
+                Input::Key(KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press,
+                    state: KeyEventState::NONE,
+                }),
+                at(0),
+            );
+        }
+        let mut terminal = render(&app, at(0));
+        let screen = text(&terminal);
+        assert!(screen.contains("Groq Whisper key › ••••••••••"), "{screen}");
+        assert!(!screen.contains("gsk_secret"), "the key is never drawn");
+        let (x, y) = find(&terminal, "••••••••••");
+        terminal.backend_mut().assert_cursor_position((x + 10, y));
+    }
+}

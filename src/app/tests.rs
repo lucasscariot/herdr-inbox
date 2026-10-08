@@ -904,7 +904,8 @@ mod composer_flow {
         assert_eq!(record.title, "Fix login");
         assert_eq!(record.branch, "fix-login");
         assert_eq!(record.harness, "claude");
-        assert!(matches!(effects[0], Effect::Launch { ref machine, .. } if machine == LOCAL));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Launch { machine, .. } if machine == LOCAL)));
+        assert!(effects.contains(&Effect::SaveHistory("Fix login".into())), "the task joins the history");
         assert_eq!(app.composer.task.text(), "");
         assert_eq!(app.launches.len(), 1);
         assert_eq!(app.launches[0].state, LaunchState::Running("starting".into()));
@@ -1001,10 +1002,10 @@ mod composer_flow {
     #[test]
     fn a_picker_opened_from_its_row_stays_on_the_row() {
         let mut app = composing();
-        app.update(press(KeyCode::Tab), at(1));
-        app.update(press(KeyCode::Tab), at(1));
-        app.update(press(KeyCode::Tab), at(1));
-        assert_eq!(app.composer.field, Field::Harness);
+        for _ in 0..4 {
+            app.update(press(KeyCode::Tab), at(1));
+        }
+        assert_eq!(app.composer.field, Field::Harness, "task, project, machine, preset, harness");
         app.update(press(KeyCode::Enter), at(1));
         app.update(press(KeyCode::Enter), at(1));
         assert_eq!(app.composer.field, Field::Harness);
@@ -1158,5 +1159,696 @@ mod composer_flow {
         }
         assert_eq!(app.launches.len(), 8);
         assert_eq!(app.launches[0].title, "task 2");
+    }
+}
+
+mod conveniences {
+    use super::*;
+    use crate::discovery::{Catalog, CheckoutEntry, Choice as ModelChoice, Inventory, Project};
+    use crate::launch::{Outcome, Record, Stage};
+    use crate::presets::Preset;
+    use crate::threads::LaunchNote;
+    use std::collections::BTreeMap;
+
+    fn inventory() -> Inventory {
+        Inventory {
+            projects: vec![Project {
+                name: "cockpit".into(),
+                path: "/w/cockpit".into(),
+                branch: "main".into(),
+                checkouts: vec![CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false }],
+            }],
+            harnesses: vec!["claude".into(), "codex".into()],
+            models: BTreeMap::from([(
+                "claude".into(),
+                Catalog {
+                    choices: vec![ModelChoice { id: "opus".into(), label: "Opus".into() }],
+                    selectable: true,
+                    thinking_flag: "--effort".into(),
+                    thinking: vec!["high".into()],
+                    ..Catalog::default()
+                },
+            )]),
+            models_at: 0,
+        }
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.update(press(KeyCode::Char(c)), at(1));
+        }
+    }
+
+    fn ctrl(app: &mut App, c: char) -> Vec<Effect> {
+        app.update(press_with(KeyCode::Char(c), KeyModifiers::CONTROL), at(1))
+    }
+
+    fn composing(presets: Vec<Preset>, history: Vec<String>) -> App {
+        let (app, _) = loaded();
+        let mut app = app.with_memory(presets, history);
+        app.update(press(KeyCode::Char('n')), at(1));
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(1));
+        app
+    }
+
+    fn preset(name: &str, harness: &str, model: &str, thinking: &str) -> Preset {
+        Preset { name: name.into(), harness: harness.into(), model: model.into(), thinking: thinking.into() }
+    }
+
+    fn record(id: &str, pane: Option<&str>, stage: Stage) -> Record {
+        Record {
+            id: id.into(),
+            machine_id: LOCAL.into(),
+            machine_label: "Local".into(),
+            project: "cockpit".into(),
+            repo: "/w/cockpit".into(),
+            harness: "claude".into(),
+            model: "opus".into(),
+            thinking: "high".into(),
+            title: format!("Task {id}"),
+            task: format!("Task {id}\nwith details"),
+            agent_name: format!("t-{id}"),
+            created_at: 5,
+            stage,
+            workspace: "worktree".into(),
+            branch: format!("branch-{id}"),
+            cwd: String::new(),
+            workspace_id: pane.map(|p| p.split(':').next().unwrap().to_string()),
+            pane_id: pane.map(str::to_string),
+            tab_id: None,
+            unverified: false,
+            failed_stage: None,
+            error: Some("expected claude, detected bash\nfull log".into()),
+        }
+    }
+
+    #[test]
+    fn ctrl_d_saves_the_current_choices_as_a_preset() {
+        let mut app = composing(vec![], vec![]);
+        assert!(ctrl(&mut app, 'd').is_empty());
+        assert_eq!(app.composer.error.as_deref(), Some("Pick a model first to save a preset."));
+        app.update(press(KeyCode::F(4)), at(1));
+        type_text(&mut app, "opus");
+        app.update(press(KeyCode::Enter), at(1));
+        ctrl(&mut app, 'd');
+        let picker = app.composer.picker.as_ref().unwrap();
+        assert_eq!((picker.field, picker.query.as_str()), (Field::Preset, "Claude · Opus"));
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(effects, vec![Effect::SavePresets(vec![preset("Claude · Opus", "claude", "opus", "")])]);
+        assert_eq!(app.composer.value(&app.composer_context(), Field::Preset), "Claude · Opus");
+    }
+
+    #[test]
+    fn picking_a_preset_sets_harness_model_and_thinking() {
+        let mut app =
+            composing(vec![preset("Deep", "claude", "opus", "high"), preset("Fast", "codex", "gpt-5", "")], vec![]);
+        app.update(press(KeyCode::F(3)), at(1));
+        type_text(&mut app, "codex");
+        app.update(press(KeyCode::Enter), at(1));
+        app.update(press(KeyCode::F(7)), at(1));
+        type_text(&mut app, "deep");
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert_eq!(app.composer.model.as_deref(), Some("opus"));
+        assert_eq!(app.composer.thinking.as_deref(), Some("high"));
+        assert_eq!(app.composer.matching_preset(&app.presets).map(|p| p.name.as_str()), Some("Deep"));
+    }
+
+    #[test]
+    fn typing_finds_presets_before_offering_to_save_one() {
+        let mut app = composing(vec![preset("Deep", "claude", "opus", "high")], vec![]);
+        app.composer.model = Some("opus".into());
+        app.update(press(KeyCode::F(7)), at(1));
+        type_text(&mut app, "dee");
+        let labels: Vec<String> = app
+            .composer
+            .choices_with_actions(&app.composer_context(), Field::Preset, "dee")
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(labels, ["Deep", "Save as dee"]);
+    }
+
+    #[test]
+    fn a_preset_for_a_cli_missing_here_is_shown_but_not_pickable() {
+        let mut app = composing(vec![preset("Pi", "pi", "x", "")], vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        let choices = app.composer.choices_with_actions(&app.composer_context(), Field::Preset, "");
+        assert_eq!(choices[0].detail, "not installed here");
+        assert!(!choices[0].enabled);
+        app.update(press(KeyCode::Enter), at(1));
+        assert!(app.composer.picker.is_some(), "a disabled choice does nothing");
+    }
+
+    #[test]
+    fn presets_are_deleted_and_renamed_inside_the_picker() {
+        let mut app = composing(vec![preset("A", "claude", "opus", ""), preset("B", "codex", "gpt-5", "")], vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        let effects = app.update(press(KeyCode::Delete), at(1));
+        assert_eq!(effects, vec![Effect::SavePresets(vec![preset("B", "codex", "gpt-5", "")])]);
+        ctrl(&mut app, 'r');
+        assert_eq!(app.composer.picker.as_ref().unwrap().renaming.as_deref(), Some("B"));
+        app.update(press(KeyCode::Backspace), at(1));
+        type_text(&mut app, "Quick");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(effects, vec![Effect::SavePresets(vec![preset("Quick", "codex", "gpt-5", "")])]);
+    }
+
+    #[test]
+    fn renaming_onto_a_taken_name_is_refused() {
+        let mut app = composing(vec![preset("A", "claude", "opus", ""), preset("B", "codex", "gpt-5", "")], vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        ctrl(&mut app, 'r');
+        for _ in 0..1 {
+            app.update(press(KeyCode::Backspace), at(1));
+        }
+        type_text(&mut app, "B");
+        assert!(app.update(press(KeyCode::Enter), at(1)).is_empty());
+        assert!(app.composer.error.as_deref().unwrap().contains("already has this name"));
+    }
+
+    #[test]
+    fn ctrl_p_and_ctrl_n_browse_the_history_and_restore_the_draft() {
+        let mut app = composing(vec![], vec!["newest".into(), "older".into()]);
+        type_text(&mut app, "draft");
+        ctrl(&mut app, 'p');
+        assert_eq!(app.composer.task.text(), "newest");
+        ctrl(&mut app, 'p');
+        ctrl(&mut app, 'p');
+        assert_eq!(app.composer.task.text(), "older", "stops at the oldest");
+        ctrl(&mut app, 'n');
+        ctrl(&mut app, 'n');
+        assert_eq!(app.composer.task.text(), "draft");
+        ctrl(&mut app, 'n');
+        assert_eq!(app.composer.task.text(), "draft", "nothing newer than the draft");
+    }
+
+    #[test]
+    fn sending_puts_the_task_on_top_of_the_history() {
+        let mut app = composing(vec![], vec!["Fix login".into(), "older".into()]);
+        type_text(&mut app, "Fix login");
+        app.update(press(KeyCode::Enter), at(5));
+        assert_eq!(app.history, ["Fix login", "older"]);
+    }
+
+    #[test]
+    fn slash_filters_the_list_as_you_type() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('/')), at(1));
+        assert!(app.filtering);
+        type_text(&mut app, "bld");
+        assert_eq!(ids(&app), ["w2:p1"], "fuzzy: Build");
+        assert_eq!(app.cursor.as_deref(), Some(l("w2:p1").as_str()), "the cursor stays on a visible thread");
+        app.update(press(KeyCode::Enter), at(1));
+        assert!(!app.filtering);
+        assert_eq!(ids(&app), ["w2:p1"], "Enter keeps the filter");
+        assert!(app.update(press(KeyCode::Char('j')), at(1)).is_empty(), "j moves again");
+        app.update(press(KeyCode::Esc), at(1));
+        assert_eq!(ids(&app).len(), 3, "Esc clears it");
+    }
+
+    #[test]
+    fn the_filter_matches_one_field_at_a_time() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('/')), at(1));
+        type_text(&mut app, "bdcl");
+        assert!(app.threads.is_empty(), "Build + Docs + Claude letters do not add up across fields");
+    }
+
+    #[test]
+    fn the_filter_survives_new_snapshots() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('/')), at(1));
+        type_text(&mut app, "docs");
+        app.update(
+            snapshot(vec![agent("w3:p1", AgentStatus::Idle, "Docs"), agent("w4:p1", AgentStatus::Idle, "Other")]),
+            at(2),
+        );
+        assert_eq!(ids(&app), ["w3:p1"]);
+    }
+
+    #[test]
+    fn backspace_on_an_empty_filter_leaves_filter_mode() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('/')), at(1));
+        app.update(press(KeyCode::Backspace), at(1));
+        assert!(!app.filtering);
+    }
+
+    #[test]
+    fn r_replies_to_an_agent_without_opening_it() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        assert!(app.reply.is_some());
+        type_text(&mut app, "also add tests");
+        app.update(press_with(KeyCode::Enter, KeyModifiers::SHIFT), at(1));
+        type_text(&mut app, "thanks");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(
+            effects,
+            vec![Effect::Prompt {
+                machine: LOCAL.into(),
+                pane_id: "w3:p1".into(),
+                title: "Docs".into(),
+                text: "also add tests\nthanks".into(),
+            }]
+        );
+        assert!(app.reply.is_none());
+        assert_eq!(app.focus, Focus::List, "replying never leaves the list");
+    }
+
+    #[test]
+    fn a_blocked_agent_cannot_be_replied_to_from_the_list() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('r')), at(1));
+        assert!(app.reply.is_none());
+        assert!(app.notice.as_ref().unwrap().text.contains("is waiting for an answer"));
+    }
+
+    #[test]
+    fn an_empty_reply_is_not_sent_and_esc_cancels() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        assert!(app.update(press(KeyCode::Enter), at(1)).is_empty());
+        app.update(press(KeyCode::Esc), at(1));
+        assert!(app.reply.is_none());
+    }
+
+    #[test]
+    fn reply_results_are_reported() {
+        let (mut app, _) = loaded();
+        let prompted = |result| Input::Prompted { title: "Docs".into(), text: "add tests".into(), result };
+        app.update(prompted(Ok(false)), at(1));
+        assert_eq!(app.notice.as_ref().unwrap().text, "Sent to “Docs”");
+        app.update(prompted(Ok(true)), at(1));
+        assert!(app.notice.as_ref().unwrap().text.contains("not confirmed"));
+        app.update(prompted(Err("agent Docs is blocked".into())), at(1));
+        assert!(app.notice.as_ref().unwrap().text.contains("waiting for an answer"));
+        assert!(app.notice.as_ref().unwrap().text.ends_with("Your words: “add tests”"), "the words are never lost");
+        app.update(prompted(Err("pane not found".into())), at(1));
+        assert!(app.notice.as_ref().unwrap().text.contains("pane not found"));
+    }
+
+    #[test]
+    fn e_fills_the_composer_from_the_threads_launch() {
+        let (mut app, _) = loaded();
+        app.update(Input::Journals(vec![record("a1", Some("w2:p1"), Stage::Submitted)]), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        let effects = app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.focus, Focus::Composer);
+        assert!(effects.iter().any(|e| matches!(e, Effect::Discover { .. })));
+        assert_eq!(app.composer.task.text(), "Task a1\nwith details");
+        assert_eq!(app.composer.project.as_deref(), Some("cockpit"));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert_eq!(app.composer.model.as_deref(), Some("opus"));
+        assert_eq!(app.composer.thinking.as_deref(), Some("high"));
+        assert_eq!(app.composer.workspace, WorkspaceSel::New, "a delivered launch gets a fresh worktree");
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(2));
+        assert_eq!(app.composer.model.as_deref(), Some("opus"), "the choices survive discovery");
+    }
+
+    #[test]
+    fn e_on_a_thread_without_a_launch_keeps_its_project_and_harness() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.task.text(), "");
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert_eq!(app.composer.machine.as_deref(), Some(LOCAL));
+        assert_eq!(app.composer.workspace, WorkspaceSel::New);
+    }
+
+    #[test]
+    fn a_failed_launch_becomes_a_row_that_can_be_retried_or_dismissed() {
+        let (mut app, _) = loaded();
+        app.update(Input::Journals(vec![record("f1", None, Stage::NeedsAttention)]), at(1));
+        let failed = app.thread("launch/f1").expect("a row for the failed launch").clone();
+        assert_eq!(failed.status, AgentStatus::Blocked);
+        assert_eq!(failed.note, Some(LaunchNote::Failed("expected claude, detected bash".into())));
+        assert_eq!(failed.title, "Task f1");
+        assert_eq!(app.threads[0].id, "launch/f1", "the newest needs-input row comes first");
+        app.cursor = Some("launch/f1".into());
+        assert!(app.update(press(KeyCode::Enter), at(1)).is_empty(), "no pane to open");
+        assert!(app.notice.as_ref().unwrap().text.contains("never got a pane"));
+        assert_eq!(app.focus, Focus::List, "the keyboard stays on the list");
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.workspace, WorkspaceSel::Named("branch-f1".into()), "retrying keeps the branch");
+        app.update(press(KeyCode::Esc), at(1));
+        app.focus = Focus::List;
+        app.cursor = Some("launch/f1".into());
+        let effects = app.update(press(KeyCode::Char('d')), at(1));
+        assert_eq!(effects, vec![Effect::Dismiss { record: "f1".into() }]);
+        assert!(app.thread("launch/f1").is_none());
+        assert!(app.cursor.is_some());
+    }
+
+    #[test]
+    fn archiving_a_failed_launch_closes_its_workspace_and_forgets_it() {
+        let (mut app, _) = loaded();
+        app.update(Input::Journals(vec![record("f2", Some("w9:p1"), Stage::NeedsAttention)]), at(1));
+        app.cursor = Some("launch/f2".into());
+        app.update(press(KeyCode::Char('x')), at(1));
+        let effects = app.update(press(KeyCode::Char('y')), at(1));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Archive { workspace_id, .. } if workspace_id == "w9")));
+        assert!(effects.contains(&Effect::Dismiss { record: "f2".into() }));
+    }
+
+    #[test]
+    fn d_only_dismisses_failed_launches() {
+        let (mut app, _) = loaded();
+        assert!(app.update(press(KeyCode::Char('d')), at(1)).is_empty());
+        assert_eq!(app.threads.len(), 3);
+    }
+
+    #[test]
+    fn launch_notes_show_on_live_threads() {
+        let (mut app, _) = loaded();
+        let mut unverified = record("u1", Some("w3:p1"), Stage::Submitted);
+        unverified.unverified = true;
+        app.update(
+            Input::Journals(vec![
+                record("b1", Some("w1:p1"), Stage::StartupBlocked),
+                unverified,
+                record("ok", Some("w2:p1"), Stage::Submitted),
+            ]),
+            at(1),
+        );
+        assert_eq!(app.thread(&l("w1:p1")).unwrap().note, Some(LaunchNote::Waiting));
+        assert_eq!(app.thread(&l("w3:p1")).unwrap().note, Some(LaunchNote::Unverified));
+        assert_eq!(app.thread(&l("w2:p1")).unwrap().note, None);
+        assert!(app.waiting.contains_key(&l("w1:p1")), "a waiting journal resumes too");
+    }
+
+    #[test]
+    fn a_failure_reported_live_also_becomes_a_row() {
+        let mut app = composing(vec![], vec![]);
+        type_text(&mut app, "Fix login");
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        let Some(Effect::Launch { plan, .. }) = effects.iter().find(|e| matches!(e, Effect::Launch { .. })) else {
+            panic!("no launch");
+        };
+        let mut failed = plan.record.clone();
+        failed.stage = Stage::NeedsAttention;
+        failed.error = Some("boom".into());
+        app.update(
+            Input::LaunchFinished {
+                id: failed.id.clone(),
+                result: Err(crate::launch::Failure { record: Box::new(failed.clone()), error: "boom".into() }),
+            },
+            at(6),
+        );
+        assert!(app.thread(&format!("launch/{}", failed.id)).is_some());
+        let _ = Outcome::Sent(failed);
+    }
+}
+
+mod voice {
+    use super::*;
+    use crate::app::{Dictation, Entry, Menu, Phase, SpeechStatus, Target};
+    use crate::speech::backends::Credentials;
+
+    fn ready(mut app: App) -> App {
+        app.update(Input::Speech(SpeechStatus { ready: Some("Groq Whisper".into()), tools: vec![] }), at(0));
+        app
+    }
+
+    fn ctrl_t(app: &mut App) -> Vec<Effect> {
+        app.update(press_with(KeyCode::Char('t'), KeyModifiers::CONTROL), at(1))
+    }
+
+    fn recording(app: &mut App) {
+        app.update(Input::DictationStarted(Ok(())), at(1));
+        assert_eq!(app.dictation.as_ref().map(|d| d.phase), Some(Phase::Recording));
+    }
+
+    #[test]
+    fn ctrl_t_without_a_transcriber_opens_the_menu_instead_of_recording() {
+        let (mut app, _) = loaded();
+        assert!(ctrl_t(&mut app).is_empty());
+        assert!(app.dictation.is_none());
+        let menu = app.menu.as_ref().expect("the menu opens");
+        assert_eq!(menu.status.as_ref().map(|(s, _)| s.as_str()), Some("Connect a transcription service to dictate."));
+    }
+
+    #[test]
+    fn ctrl_t_targets_what_has_the_keyboard() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        assert_eq!(ctrl_t(&mut app), vec![Effect::StartDictation]);
+        assert_eq!(
+            app.dictation.as_ref().unwrap().target,
+            Target::Thread(l("w1:p1")),
+            "the cursor's thread from the list"
+        );
+        app.update(press(KeyCode::Esc), at(1));
+        app.update(press(KeyCode::Enter), at(1));
+        ctrl_t(&mut app);
+        assert_eq!(
+            app.dictation.as_ref().unwrap().target,
+            Target::Thread(l("w1:p1")),
+            "the open agent from the terminal"
+        );
+        app.update(press(KeyCode::Esc), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        app.update(press(KeyCode::Char('n')), at(1));
+        ctrl_t(&mut app);
+        assert_eq!(app.dictation.as_ref().unwrap().target, Target::Composer);
+    }
+
+    #[test]
+    fn a_failed_launch_row_cannot_be_dictated_to() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        app.cursor = Some("launch/x".into());
+        assert!(ctrl_t(&mut app).is_empty());
+        assert!(app.dictation.is_none());
+    }
+
+    #[test]
+    fn while_recording_no_key_reaches_the_agent() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        app.update(press(KeyCode::Enter), at(1));
+        ctrl_t(&mut app);
+        recording(&mut app);
+        for code in [KeyCode::Char('x'), KeyCode::Tab, KeyCode::Char('q'), KeyCode::Up] {
+            assert!(app.update(press(code), at(1)).is_empty(), "{code:?} must not leak");
+        }
+        assert_eq!(app.focus, Focus::Terminal);
+    }
+
+    #[test]
+    fn enter_sends_and_ctrl_t_types_into_the_agent() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        ctrl_t(&mut app);
+        recording(&mut app);
+        assert_eq!(app.update(press(KeyCode::Enter), at(2)), vec![Effect::StopDictation]);
+        assert_eq!(app.dictation.as_ref().unwrap().phase, Phase::Transcribing);
+        let effects = app.update(Input::Transcribed(Ok("fix the tests".into())), at(3));
+        assert_eq!(
+            effects,
+            vec![Effect::Prompt {
+                machine: LOCAL.into(),
+                pane_id: "w1:p1".into(),
+                title: "Login".into(),
+                text: "fix the tests".into()
+            }]
+        );
+        assert!(app.dictation.is_none());
+        ctrl_t(&mut app);
+        recording(&mut app);
+        assert_eq!(ctrl_t(&mut app), vec![Effect::StopDictation]);
+        let effects = app.update(Input::Transcribed(Ok("draft words".into())), at(4));
+        assert_eq!(
+            effects,
+            vec![Effect::TypeText {
+                machine: LOCAL.into(),
+                pane_id: "w1:p1".into(),
+                title: "Login".into(),
+                text: "draft words".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn dictating_into_the_composer_inserts_or_sends() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        app.update(press(KeyCode::Char('n')), at(1));
+        for c in "Fix".chars() {
+            app.update(press(KeyCode::Char(c)), at(1));
+        }
+        ctrl_t(&mut app);
+        recording(&mut app);
+        ctrl_t(&mut app);
+        app.update(Input::Transcribed(Ok("the login".into())), at(2));
+        assert_eq!(app.composer.task.text(), "Fix the login", "a space joins the words");
+        ctrl_t(&mut app);
+        recording(&mut app);
+        app.update(press(KeyCode::Enter), at(2));
+        let effects = app.update(Input::Transcribed(Ok("loop".into())), at(3));
+        assert_eq!(app.composer.error.as_deref(), Some("Pick a project."), "sending ran (and needs a project here)");
+        assert!(effects.is_empty());
+        assert_eq!(app.composer.task.text(), "Fix the login loop");
+    }
+
+    #[test]
+    fn dictating_into_a_reply_fills_it_then_sends() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        ctrl_t(&mut app);
+        assert_eq!(app.dictation.as_ref().unwrap().target, Target::Reply);
+        recording(&mut app);
+        app.update(press(KeyCode::Enter), at(2));
+        let effects = app.update(Input::Transcribed(Ok("also docs".into())), at(3));
+        assert_eq!(
+            effects,
+            vec![Effect::Prompt {
+                machine: LOCAL.into(),
+                pane_id: "w3:p1".into(),
+                title: "Docs".into(),
+                text: "also docs".into()
+            }]
+        );
+        assert!(app.reply.is_none());
+    }
+
+    #[test]
+    fn esc_discards_even_a_transcript_that_arrives_late() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        ctrl_t(&mut app);
+        recording(&mut app);
+        app.update(press(KeyCode::Enter), at(2));
+        assert_eq!(app.update(press(KeyCode::Esc), at(2)), vec![Effect::CancelDictation]);
+        assert!(app.update(Input::Transcribed(Ok("too late".into())), at(3)).is_empty());
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn a_recorder_or_transcription_failure_is_reported() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        ctrl_t(&mut app);
+        app.update(Input::DictationStarted(Err("No microphone recorder found.".into())), at(1));
+        assert!(app.dictation.is_none());
+        assert_eq!(app.notice.as_ref().unwrap().text, "No microphone recorder found.");
+        ctrl_t(&mut app);
+        recording(&mut app);
+        app.update(press(KeyCode::Enter), at(2));
+        app.update(Input::Transcribed(Err("Transcription failed: HTTP 401: bad key".into())), at(3));
+        assert!(app.dictation.is_none());
+        assert!(app.notice.as_ref().unwrap().text.contains("HTTP 401"));
+    }
+
+    #[test]
+    fn levels_feed_the_meter() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        ctrl_t(&mut app);
+        recording(&mut app);
+        app.update(Input::Levels { levels: vec![0.5; 12], quiet: true }, at(2));
+        let d: &Dictation = app.dictation.as_ref().unwrap();
+        assert_eq!(d.levels, vec![0.5; 12]);
+        assert!(d.quiet);
+    }
+
+    #[test]
+    fn the_menu_connects_a_service_after_verifying_its_key() {
+        let (mut app, _) = loaded();
+        assert!(app.update(press(KeyCode::F(10)), at(1)).is_empty());
+        assert_eq!(app.menu, Some(Menu::default()));
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(effects, vec![Effect::OpenUrl("https://console.groq.com/keys".into())], "the key page opens");
+        assert!(matches!(app.menu.as_ref().unwrap().entry, Some(Entry::Key { service: "groq", .. })));
+        for c in "gsk_123".chars() {
+            app.update(press(KeyCode::Char(c)), at(1));
+        }
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(effects, vec![Effect::VerifyKey { service: "groq", key: "gsk_123".into() }]);
+        let effects = app.update(Input::KeyVerified { service: "groq", key: "gsk_123".into(), result: Ok(()) }, at(2));
+        let Some(Effect::SaveCredentials(saved)) = effects.first() else { panic!("{effects:?}") };
+        assert_eq!(saved.keys["groq"], "gsk_123");
+        assert_eq!(saved.backend, "groq");
+        assert!(app.menu.as_ref().unwrap().status.as_ref().unwrap().0.contains("Groq Whisper connected"));
+    }
+
+    #[test]
+    fn a_rejected_key_is_shown_and_not_saved() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::F(10)), at(1));
+        let effects = app.update(
+            Input::KeyVerified {
+                service: "groq",
+                key: "bad".into(),
+                result: Err("Groq Whisper rejected the key: HTTP 401".into()),
+            },
+            at(2),
+        );
+        assert!(effects.is_empty());
+        assert_eq!(app.menu.as_ref().unwrap().status, Some(("Groq Whisper rejected the key: HTTP 401".into(), true)));
+        assert!(app.credentials.keys.is_empty());
+    }
+
+    #[test]
+    fn the_menu_saves_a_custom_command_and_disconnects() {
+        let (app, _) = loaded();
+        let mut app = app.with_credentials(Credentials {
+            backend: String::new(),
+            keys: [("groq".into(), "k".into())].into(),
+            command: String::new(),
+        });
+        app.update(press(KeyCode::F(10)), at(1));
+        for _ in 0..6 {
+            app.update(press(KeyCode::Down), at(1));
+        }
+        app.update(press(KeyCode::Enter), at(1));
+        assert!(matches!(app.menu.as_ref().unwrap().entry, Some(Entry::Command { .. })));
+        for c in "stt {file}".chars() {
+            app.update(press(KeyCode::Char(c)), at(1));
+        }
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        let Some(Effect::SaveCredentials(saved)) = effects.first() else { panic!("{effects:?}") };
+        assert_eq!((saved.backend.as_str(), saved.command.as_str()), ("command", "stt {file}"));
+        assert_eq!(saved.keys["groq"], "k", "other keys are kept");
+        app.update(press(KeyCode::Down), at(1));
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(effects, vec![Effect::SaveCredentials(Credentials::default())]);
+        assert_eq!(app.update(press(KeyCode::Esc), at(1)), vec![]);
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn building_whisper_reports_progress_then_saves_the_command() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::F(10)), at(1));
+        for _ in 0..5 {
+            app.update(press(KeyCode::Down), at(1));
+        }
+        assert_eq!(app.update(press(KeyCode::Enter), at(1)), vec![Effect::InstallWhisper]);
+        app.update(Input::Whisper { result: Ok(None), progress: Some("Compiling whisper.cpp".into()) }, at(2));
+        assert_eq!(app.menu.as_ref().unwrap().status, Some(("Compiling whisper.cpp".into(), false)));
+        let effects =
+            app.update(Input::Whisper { result: Ok(Some("/w/whisper-cli -f {file}".into())), progress: None }, at(3));
+        assert!(matches!(&effects[..], [Effect::SaveCredentials(c)] if c.command == "/w/whisper-cli -f {file}"));
+        app.update(
+            Input::Whisper { result: Err("Local whisper needs cmake installed.".into()), progress: None },
+            at(4),
+        );
+        assert_eq!(app.menu.as_ref().unwrap().status, Some(("Local whisper needs cmake installed.".into(), true)));
+    }
+
+    #[test]
+    fn the_menu_swallows_keys_meant_for_threads() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::F(10)), at(1));
+        assert!(app.update(press(KeyCode::Char('q')), at(1)).is_empty(), "q does not quit");
+        assert!(app.menu.is_some());
     }
 }

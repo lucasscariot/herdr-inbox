@@ -23,6 +23,14 @@ All notable changes to Herdr Inbox. The format follows
 - `config.toml` for roots, branch prefix, harness arguments and more; the
   legacy plugin's `config.json` is read until it exists. `--config` reads
   another file.
+- Dictation everywhere with `Ctrl+T`: the composer's task, a reply, or any
+  agent, with a live meter. Enter sends, Ctrl+T types, Esc discards. `F10`
+  connects Groq, Gemini, OpenAI, Mistral or Deepgram, or builds whisper.cpp.
+- Presets (`F7`, `Ctrl+D`), task history (`Ctrl+P`/`Ctrl+N`), a list filter
+  (`/`), replies without opening a thread (`r`), sending a thread's task again
+  (`e`), and failed launches as rows to retry or dismiss (`d`).
+- The plugin's remembered choices, presets, history and dictation keys are
+  copied on first start.
 
 ### Changed
 

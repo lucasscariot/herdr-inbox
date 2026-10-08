@@ -450,6 +450,44 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
 }
 
 #[test]
+fn dictation_records_meters_and_types_the_transcript_into_the_composer() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    // A recorder that writes a real WAV header and samples, finalizing on SIGINT.
+    write_executable(
+        &root.join("bin/pw-record"),
+        "#!/bin/sh\nfor out; do :; done\ntrap 'exit 0' INT\nprintf 'RIFF\\044\\000\\000\\000WAVEfmt \\020\\000\\000\\000\\001\\000\\001\\000\\200>\\000\\000\\000}\\000\\000\\002\\000\\020\\000data\\000\\000\\000\\000' > \"$out\"\nhead -c 64000 /dev/urandom >> \"$out\"\nwhile true; do sleep 0.05; done\n",
+    );
+    let config = "[speech]\ncommand = \"printf 'fix the login loop' # {file}\"\n";
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
+    std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 30);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("What should we build?");
+    inbox.keys("\x14");
+    inbox.wait_for_text("● REC");
+    inbox.wait_for_text("⌃T type");
+    inbox.keys("\x14");
+    inbox.wait_for_text("fix the login loop");
+    inbox.wait_until_gone("● REC");
+    let leftovers: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+        .expect("tmp")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(&format!("herdr-inbox-{}-", inbox.child.process_id().unwrap_or(0)))
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "the recording is deleted after transcription");
+}
+
+#[test]
 fn without_a_server_the_inbox_offers_to_start_one() {
     if !enabled() {
         return;
