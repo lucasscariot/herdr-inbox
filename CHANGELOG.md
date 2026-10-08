@@ -4,7 +4,11 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] - Unreleased
+
+Herdr Inbox is now one program, `herdr-inbox`, instead of a Herdr plugin plus
+a patched Herdr client. It runs beside plain `herdr` on the same server and
+never changes it.
 
 ### Added
 
@@ -31,22 +35,14 @@ All notable changes to Herdr Inbox. The format follows
   (`e`), and failed launches as rows to retry or dismiss (`d`).
 - The plugin's remembered choices, presets, history and dictation keys are
   copied on first start.
+- Prebuilt binaries for Linux and macOS on every release, and a one-line
+  installer that checks their SHA-256.
 
-### Changed
+### Removed
 
-- The Python plugin moved to `legacy/`. Link it from there
-  (`herdr plugin link legacy`) until the standalone client replaces it.
-
-### Added (legacy plugin)
-
-- Live microphone meter while dictating: a twelve-band equalizer read from
-  the WAV the recorder is writing, with a noise floor so room hum stays low
-  and speech lights the bars. The composer and inbox show it next to the
-  elapsed time, the dictation popup draws it three rows tall, and the
-  thread-only client's `● REC` mode bar carries the same bars. All of them
-  note when nothing audible has reached the microphone for a few seconds.
-- `python3 main.py dictate --pane` prints `level` events (`bands`, `quiet`)
-  while recording, so any front end can draw the meter.
+- The Herdr plugin (composer and inbox panes) and the patched thread-only
+  Herdr client: `herdr-inbox` replaces both. See "Coming from the plugin" in
+  the README to move over.
 
 ## [0.5.0] - 2026-10-08
 

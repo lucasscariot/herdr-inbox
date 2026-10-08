@@ -37,17 +37,30 @@ It never replaces `herdr`, never starts a server unless you ask it to, and
 never updates anything. Plain `herdr` keeps working beside it, on the same
 sessions.
 
-> **Status.** The standalone client covers everything the plugin did: threads
-> on every machine, the composer, dictation, presets, history, replies. What
-> remains is shipping it: prebuilt binaries and an installer. The original
-> Python plugin lives in [`legacy/`](legacy/) until then.
-
 ## Install
 
-You need Herdr 0.9.2 or newer, and Rust 1.88 or newer to build.
+You need [Herdr](https://herdr.dev) 0.9.2 or newer.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lucasscariot/herdr-inbox/main/install.sh | sh
+```
+
+The installer downloads the prebuilt binary for Linux or macOS (x86_64 or
+arm64), checks its SHA-256, and puts it in `~/.local/bin`
+(`HERDR_INBOX_INSTALL_DIR` to change it). It never touches `herdr`. Run it
+again to update.
+
+To build from source instead (Rust 1.88 or newer):
 
 ```sh
 cargo install --locked --git https://github.com/lucasscariot/herdr-inbox
+```
+
+To uninstall, remove the binary and, if you like, what it remembers:
+
+```sh
+rm ~/.local/bin/herdr-inbox
+rm -rf ~/.config/herdr-inbox ~/.local/state/herdr-inbox ~/.local/share/herdr-inbox
 ```
 
 ## Use
@@ -186,9 +199,19 @@ hold keys; `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
 
 ### Coming from the plugin
 
-On first start Herdr Inbox copies the plugin's remembered choices, presets,
-task history and dictation keys, and reads its `config.json` until a
-`config.toml` exists. Nothing in the plugin's directories is changed.
+Herdr Inbox used to be a Herdr plugin plus a patched Herdr client. It is now
+this one program. On first start it copies the plugin's remembered choices,
+presets, task history and dictation keys, and reads its `config.json` until a
+`config.toml` exists; nothing in the plugin's directories is changed. To move
+over:
+
+1. Install with the line above. It replaces the old `herdr-inbox` command.
+2. Remove the plugin: `herdr plugin uninstall lucasscariot.herdr-inbox` (or
+   `herdr plugin unlink …` for a linked checkout), delete the
+   `lucasscariot.herdr-inbox.*` key bindings from `~/.config/herdr/config.toml`,
+   then `herdr server reload-config`.
+3. Delete the patched client: `rm -r ~/.local/share/herdr-inbox/bin`. A
+   whisper.cpp built by the plugin next to it is reused as is.
 
 ### Other machines
 
@@ -213,9 +236,13 @@ client takes it back, the inbox says so, and `Enter` brings it back.
 ## Develop
 
 ```sh
-cargo test                   # unit tests, no Herdr needed
+cargo test                   # unit tests and the installer, no Herdr needed
 HERDR_E2E=1 cargo test --test e2e   # end to end against a real herdr
 ```
+
+To release, set the version in `Cargo.toml`, add it to `CHANGELOG.md`, and
+push a `vX.Y.Z` tag. The release workflow builds the four binaries and
+publishes them with their checksums.
 
 The end-to-end tests start their own Herdr server with every directory in a
 temporary folder, so they never touch your sessions. CI runs them against the
