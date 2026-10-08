@@ -8,6 +8,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+from inbox import dictate
 from inbox.herdr import Herdr, HerdrError
 from inbox.inventory import discover
 from inbox.store import Store
@@ -37,6 +38,13 @@ def main():
     where.add_argument("--checkout", metavar="PATH", help="Run in this existing checkout or worktree of the project")
     command.add_argument("--base", default="", help="Base ref for a new worktree; defaults to the current HEAD")
     command.add_argument("--task", required=True)
+    command = commands.add_parser("dictate", help="Record, transcribe, and send or type the text into an agent pane")
+    command.add_argument("--pane", default="", help="Target pane ID; defaults to the pane this action was invoked from")
+    command.add_argument("--machine", default="local", help="Saved machine ID that owns the pane; defaults to Local")
+    command.add_argument("--title", default="", help="Thread title to show while recording")
+    how = command.add_mutually_exclusive_group()
+    how.add_argument("--open", action="store_true", help="Open the dictation popup over the focused pane (the dictate action)")
+    how.add_argument("--popup", action="store_true", help="Run the dictation popup itself (the dictation pane)")
     args = parser.parse_args()
     if os.environ.get("HERDR_ENV") != "1" and not getattr(args, "demo", False):
         parser.error("Run this inside Herdr. For a UI preview use: python3 main.py ui --demo")
@@ -78,6 +86,19 @@ def main():
         for row in rows:
             row["machine"] = row["machine"].__dict__
         print(json.dumps({"threads": rows, "errors": errors}, indent=2, ensure_ascii=False))
+    elif args.command == "dictate":
+        if args.open:
+            pane_id = args.pane or os.environ.get("HERDR_PANE_ID", "")
+            print(json.dumps(dictate.open_popup(herdr, pane_id, args.machine)))
+            return
+        pane_id = args.pane or os.environ.get("HERDR_INBOX_PANE", "")
+        machine = dictate.machine_from_id(args.machine if args.pane else os.environ.get("HERDR_INBOX_MACHINE", args.machine))
+        if not pane_id:
+            parser.error("--pane is required")
+        if args.popup:
+            session = dictate.Session(herdr, store, machine, pane_id, args.title or dictate.pane_title(herdr, machine, pane_id))
+            sys.exit(curses.wrapper(lambda screen: dictate.popup(screen, session)))
+        sys.exit(dictate.headless(dictate.Session(herdr, store, machine, pane_id, args.title)))
     elif args.command == "launch":
         machine = next((m for m in herdr.machines() if args.machine in (m.id, m.label)), None)
         if machine is None:

@@ -163,6 +163,30 @@ Press **Ctrl+T**, speak, then **Enter** to send the transcribed task, or
 **Ctrl+T** again to edit it first. Escape discards the recording. Recording
 uses PipeWire, ALSA, PulseAudio, sox, or ffmpeg, whichever is installed.
 
+### Dictate into a running thread
+
+The same flow works for a follow-up on any thread, not only the composer. Bind
+the plugin's `dictate` action to a key; `ctrl+t` matches the composer:
+
+```toml
+[[keys.command]]
+key = "ctrl+t"
+type = "plugin_action"
+command = "lucasscariot.herdr-inbox.dictate"
+description = "Dictate to this agent"
+```
+
+Press it while an agent's terminal is focused. A small popup records; **Enter**
+transcribes and submits the text to that agent through Herdr's prompt
+transport, **Ctrl+T** types it into the agent without sending so you can edit
+it, and **Esc** discards it. A thread that is waiting for your approval is not
+interrupted: the popup reports it and shows the transcript instead. The
+thread-only client below needs no binding; its Ctrl+T works everywhere.
+
+`python3 main.py dictate --pane <id> [--machine <id>]` is the same engine for
+scripts: it prints JSON events and takes one line on stdin (`send`, `type`,
+or `cancel`).
+
 The first Ctrl+T, or **F10** at any time, opens the Dictation menu. No key is
 ever typed into a file:
 
@@ -291,6 +315,23 @@ HERDR_INBOX_MODE=1 build/herdr-inbox-client
 
 The pinned upstream commit is recorded in the build script; the patch ships
 with the upstream Apache 2.0 license. Regular `herdr` keeps working.
+
+The client is built for the keyboard loop *pick a thread, say what to do next,
+move on*:
+
+| Key | Action |
+| --- | --- |
+| Tab | Move focus between the thread list and the agent's terminal (Shift+Tab always reaches the agent) |
+| j k or ↓ ↑, g G | Move through the threads; the mode bar shows `THREADS` while the list has focus |
+| Enter or o | Open the thread under the cursor and return focus to its terminal |
+| Backspace, Delete, or x | Archive the thread under the cursor (closes its workspace; the worktree stays on disk) |
+| Ctrl+T | Dictate into the focused thread, or the thread under the cursor: Enter sends, Ctrl+T types without sending, Esc discards |
+| Esc | Leave the thread list |
+
+Tab is intercepted only while an agent's terminal is focused; the composer and
+other plugin panes keep their own Tab. Ctrl+T in the composer still dictates
+the task. The client finds the plugin through `herdr plugin list`; set
+`HERDR_INBOX_ROOT` to point it at a checkout instead.
 
 ## Contributing
 

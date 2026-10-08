@@ -16,6 +16,7 @@ inbox/opencode.py    OpenCode 2 session API calls
 inbox/relay.py       self-contained event watcher (runs locally and on remote hosts)
 inbox/live.py        one supervised relay link per machine, feeding a queue
 inbox/speech.py      dictation: recorders, transcription services, local tools
+inbox/dictate.py     dictation into a running thread: headless engine and popup
 inbox/presets.py     named harness/model/thinking combinations
 inbox/store.py       config, preferences, presets, credentials, journals
 ```
