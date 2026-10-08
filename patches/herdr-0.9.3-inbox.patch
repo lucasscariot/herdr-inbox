@@ -54,7 +54,7 @@ index 9d0a3bd..33da692 100644
 +            .keybinds()
 +            .custom_commands
 +            .iter()
-+            .find(|binding| binding.command == format!("lucas.herdr-inbox.{action}"))
++            .find(|binding| binding.command == format!("lucasscariot.herdr-inbox.{action}"))
 +            .map(|binding| binding.bindings.labels())
 +            .unwrap_or_else(|| {
 +                vec![if action == "new" {

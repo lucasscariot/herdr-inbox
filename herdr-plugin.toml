@@ -7,7 +7,7 @@
 #
 # Bind the two actions to keys in ~/.config/herdr/config.toml (see README).
 
-id = "lucas.herdr-inbox"
+id = "lucasscariot.herdr-inbox"
 name = "Herdr Inbox"
 version = "0.4.0"
 min_herdr_version = "0.9.1"
@@ -27,7 +27,7 @@ title = "Agent inbox"
 contexts = ["global", "workspace", "pane"]
 command = ["python3", "main.py", "open", "--view", "inbox"]
 
-# Panes are what the actions open; `herdr plugin pane open --plugin lucas.herdr-inbox --entrypoint launcher` works too.
+# Panes are what the actions open; `herdr plugin pane open --plugin lucasscariot.herdr-inbox --entrypoint launcher` works too.
 [[panes]]
 id = "launcher"
 title = "New thread"

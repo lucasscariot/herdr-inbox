@@ -56,5 +56,5 @@ remove them with `git worktree remove` when done.
 
 Include `herdr status`, the plugin version, the machine kind (Local or saved
 SSH), and the relevant lines from `herdr plugin log list --plugin
-lucas.herdr-inbox`. Launch journals under the plugin state directory
+lucasscariot.herdr-inbox`. Launch journals under the plugin state directory
 (`threads/*.json`) contain the exact stage a launch reached.

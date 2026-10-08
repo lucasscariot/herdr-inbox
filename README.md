@@ -36,13 +36,13 @@ other keys.
 [[keys.command]]
 key = "prefix+c"
 type = "plugin_action"
-command = "lucas.herdr-inbox.new"
+command = "lucasscariot.herdr-inbox.new"
 description = "New agent thread"
 
 [[keys.command]]
 key = "prefix+j"
 type = "plugin_action"
-command = "lucas.herdr-inbox.open"
+command = "lucasscariot.herdr-inbox.open"
 description = "Agent inbox"
 ```
 
@@ -187,7 +187,7 @@ path for a local tool.
 
 ## Configuration
 
-`herdr plugin config-dir lucas.herdr-inbox` prints the directory. Everything in
+`herdr plugin config-dir lucasscariot.herdr-inbox` prints the directory. Everything in
 `config.json` is optional.
 
 ```json

@@ -150,14 +150,14 @@ def launch(herdr, store, machine, project, harness, task, progress=lambda messag
             # task; the inbox sends it as soon as the agent becomes idle.
             record["stage"] = "startup_blocked"
             store.journal(record)
-            herdr.call(machine, "pane", "report-metadata", record["pane_id"], "--source", "plugin:lucas.herdr-inbox", "--display-agent", harness.capitalize(), "--token", "thread=" + title)
+            herdr.call(machine, "pane", "report-metadata", record["pane_id"], "--source", "plugin:lucasscariot.herdr-inbox", "--display-agent", harness.capitalize(), "--token", "thread=" + title)
             store.remember(project["name"], machine, harness, model, thinking, workspace["mode"])
             store.push_history(task)
             progress("Waiting for the startup prompt in the thread")
             return record
         record["stage"] = "ready"
         store.journal(record)
-        herdr.call(machine, "pane", "report-metadata", record["pane_id"], "--source", "plugin:lucas.herdr-inbox", "--display-agent", harness.capitalize(), "--token", "thread=" + title)
+        herdr.call(machine, "pane", "report-metadata", record["pane_id"], "--source", "plugin:lucasscariot.herdr-inbox", "--display-agent", harness.capitalize(), "--token", "thread=" + title)
         if session_api and effective_model:
             record["stage"] = "selecting_model"
             store.journal(record)

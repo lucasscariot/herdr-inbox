@@ -13,11 +13,11 @@ HISTORY_LIMIT = 50
 
 
 def config_dir():
-    return Path(os.environ.get("HERDR_PLUGIN_CONFIG_DIR", str(Path.home() / ".config/herdr/plugins/config/lucas.herdr-inbox")))
+    return Path(os.environ.get("HERDR_PLUGIN_CONFIG_DIR", str(Path.home() / ".config/herdr/plugins/config/lucasscariot.herdr-inbox")))
 
 
 def state_dir():
-    default = Path.home() / ".local/state/herdr/plugins/lucas.herdr-inbox"
+    default = Path.home() / ".local/state/herdr/plugins/lucasscariot.herdr-inbox"
     return Path(os.environ.get("HERDR_PLUGIN_STATE_DIR", str(default)))
 
 

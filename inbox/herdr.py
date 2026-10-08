@@ -128,10 +128,10 @@ class Herdr:
             panes = self.raw("pane.list", {})["panes"]
             if any(p["pane_id"] == saved["pane_id"] and p.get("tokens", {}).get("inbox_composer") == saved["nonce"] for p in panes):
                 return self.raw("plugin.pane.focus", {"pane_id": saved["pane_id"]})
-        result = self.raw("plugin.pane.open", {"plugin_id": "lucas.herdr-inbox", "entrypoint": entrypoint, "placement": "tab", "focus": True})
+        result = self.raw("plugin.pane.open", {"plugin_id": "lucasscariot.herdr-inbox", "entrypoint": entrypoint, "placement": "tab", "focus": True})
         pane_id = result["plugin_pane"]["pane"]["pane_id"]
         nonce = uuid.uuid4().hex
-        self.call(local_machine(), "pane", "report-metadata", pane_id, "--source", "plugin:lucas.herdr-inbox", "--token", "inbox_composer=" + nonce)
+        self.call(local_machine(), "pane", "report-metadata", pane_id, "--source", "plugin:lucasscariot.herdr-inbox", "--token", "inbox_composer=" + nonce)
         write_json(locator, {"pane_id": pane_id, "nonce": nonce})
         return result
 
