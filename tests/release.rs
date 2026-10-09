@@ -45,7 +45,7 @@ fn each_platform_has_a_flat_archive_and_a_portable_checksum() {
         let extracted = temp.path().join(asset);
         fs::create_dir(&extracted).unwrap();
         let extraction =
-            Command::new("tar").arg("-xzf").arg(output.join(&archive)).arg("-C").arg(&extracted).status().unwrap();
+            Command::new("tar").arg("-xzpf").arg(output.join(&archive)).arg("-C").arg(&extracted).status().unwrap();
         assert!(extraction.success());
         assert_eq!(fs::read(extracted.join("herdr-inbox")).unwrap(), fs::read(&binary).unwrap());
         assert_eq!(fs::metadata(extracted.join("herdr-inbox")).unwrap().permissions().mode() & 0o777, 0o755);
