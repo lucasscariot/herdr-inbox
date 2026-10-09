@@ -35,7 +35,7 @@ expression: "text(&render(&app, at(7)))"
                                  │    Model      Default                                        F4
                                  │    Workspace  New worktree                                   F9
                                  │
-                                 │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
+                                 │  ↵ send   ⌃S send & keep   hold ␣ dictate   ⇥ fields   F7 pres…
                                  │
                                  │
                                  │

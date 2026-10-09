@@ -10,6 +10,8 @@ mod layout;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
+use crate::hold::Step;
+
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 
 use crate::config::Config;
@@ -339,6 +341,8 @@ pub struct App {
     /// A reply being written to a thread from the list.
     pub reply: Option<Reply>,
     pub dictation: Option<Dictation>,
+    /// Tells a held space bar from typed spaces.
+    pub hold: crate::hold::SpaceHold,
     pub speech: SpeechStatus,
     pub menu: Option<Menu>,
     pub credentials: crate::speech::backends::Credentials,
@@ -398,6 +402,7 @@ impl App {
             filtering: false,
             reply: None,
             dictation: None,
+            hold: crate::hold::SpaceHold::default(),
             speech: SpeechStatus::default(),
             menu: None,
             credentials: Default::default(),
@@ -460,8 +465,18 @@ impl App {
             }
             Input::Connection { machine, connection } => self.on_connection(&machine, connection, now, &mut effects),
             Input::Key(key) => input::key(self, key, now, &mut effects),
-            Input::Paste(text) => input::paste(self, &text, &mut effects),
-            Input::Mouse(mouse) => input::mouse(self, mouse, now, &mut effects),
+            Input::Paste(text) => {
+                input::settle_spaces(self, now, &mut effects);
+                input::paste(self, &text, &mut effects);
+            }
+            Input::Mouse(mouse) => {
+                // A click may move the focus: spaces typed before it land
+                // where they were typed. Mere movement never interrupts.
+                if matches!(mouse.kind, ratatui::crossterm::event::MouseEventKind::Down(_)) {
+                    input::settle_spaces(self, now, &mut effects);
+                }
+                input::mouse(self, mouse, now, &mut effects);
+            }
             Input::Resize { width, height } => self.on_resize(width, height, &mut effects),
             Input::Terminal { generation, message } => self.on_terminal(generation, message),
             Input::Archived { title, result } => match result {
@@ -513,6 +528,11 @@ impl App {
             Input::Tick => {
                 if self.notice.as_ref().is_some_and(|n| n.until <= now) {
                     self.notice = None;
+                }
+                match self.hold.tick(now) {
+                    Step::Type(spaces) => input::type_spaces(self, spaces, now, &mut effects),
+                    Step::Release => self.release_space(now, &mut effects),
+                    Step::Wait | Step::Hold(_) => {}
                 }
             }
         }
@@ -795,6 +815,19 @@ impl App {
     /// Without saved machines, a missing local server is the whole screen.
     pub fn local_only(&self) -> bool {
         self.machines.len() == 1
+    }
+
+    /// How soon the runtime should send a tick: often while a space waits to
+    /// be told apart from a held bar, at the orbit's frame rate while it
+    /// shows, and otherwise only for ages and notices.
+    pub fn tick_every(&self) -> Duration {
+        if self.hold.busy() {
+            Duration::from_millis(20)
+        } else if self.animating() {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(500)
+        }
     }
 
     /// Whether the screen shows the orbit, which moves on its own and so

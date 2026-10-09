@@ -4,7 +4,7 @@
 //!
 //! Words are never lost: a failed delivery keeps the transcript in its notice.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -45,7 +45,12 @@ pub struct Dictation {
     pub quiet: bool,
     pub started: SystemTime,
     pub then: Option<Then>,
+    /// Started by holding the space bar: letting go types the words.
+    pub held: bool,
 }
+
+/// A hold let go sooner than this was a long space, not dictation.
+pub const SHORTEST_HOLD: Duration = Duration::from_millis(600);
 
 /// What the runtime found: the active transcription path, local tools.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -122,8 +127,50 @@ impl App {
             quiet: false,
             started: now,
             then: None,
+            held: false,
         });
         effects.push(Effect::StartDictation);
+    }
+
+    /// Whether a space typed now could be the start of a held bar: wherever
+    /// a space is text, and in the thread list, where it does nothing else.
+    pub(crate) fn space_holds(&self) -> bool {
+        self.config.speech.space_hold != Some(false)
+            && self.menu.is_none()
+            && self.dictation.is_none()
+            && !self.needs_server_screen()
+            && match self.focus {
+                Focus::Terminal => self.open.is_some(),
+                Focus::Composer => self.composer.picker.is_none() && self.composer.field == super::Field::Task,
+                Focus::List => !self.filtering,
+            }
+    }
+
+    /// The space bar is held: dictate, as Ctrl+T would.
+    pub(crate) fn hold_space(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
+        self.start_dictation(now, effects);
+        if let Some(dictation) = self.dictation.as_mut() {
+            dictation.held = true;
+        }
+    }
+
+    /// The held space bar was let go: type the words. Let go too soon, it was
+    /// a long press on a space, so a space is what it types.
+    pub(crate) fn release_space(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
+        let Some(dictation) = self.dictation.as_mut().filter(|d| d.held) else {
+            return;
+        };
+        if !matches!(dictation.phase, Phase::Starting | Phase::Recording) {
+            return;
+        }
+        if now.duration_since(dictation.started).unwrap_or_default() < SHORTEST_HOLD {
+            self.dictation = None;
+            effects.push(Effect::CancelDictation);
+            return super::input::type_spaces(self, 1, now, effects);
+        }
+        dictation.then = Some(Then::Type);
+        dictation.phase = Phase::Transcribing;
+        effects.push(Effect::StopDictation);
     }
 
     /// Keys while dictating. Returns true when the key was used.

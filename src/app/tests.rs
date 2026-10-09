@@ -1852,3 +1852,272 @@ mod voice {
         assert!(app.menu.is_some());
     }
 }
+
+mod space_bar {
+    use super::*;
+    use crate::app::{Phase, SpeechStatus, Target, Then};
+    use crate::speech::backends::SpeechConfig;
+
+    /// Milliseconds into the session.
+    fn ms(ms: u64) -> SystemTime {
+        at(100) + Duration::from_millis(ms)
+    }
+
+    fn ready(mut app: App) -> App {
+        app.update(Input::Speech(SpeechStatus { ready: Some("Groq Whisper".into()), tools: vec![] }), at(0));
+        app
+    }
+
+    /// The loaded app with its first thread open and focused.
+    fn in_agent() -> App {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.focus, Focus::Terminal);
+        app
+    }
+
+    fn space(app: &mut App, at_ms: u64) -> Vec<Effect> {
+        app.update(press(KeyCode::Char(' ')), ms(at_ms))
+    }
+
+    fn tick(app: &mut App, at_ms: u64) -> Vec<Effect> {
+        app.update(Input::Tick, ms(at_ms))
+    }
+
+    fn typed(bytes: &[u8]) -> Effect {
+        Effect::Send { generation: 1, control: Control::Input(bytes.to_vec()) }
+    }
+
+    /// Holds the bar from `start` the way this keyboard repeats it, through
+    /// `until`; returns every effect along the way.
+    fn hold(app: &mut App, start: u64, until: u64) -> Vec<Effect> {
+        let mut effects = space(app, start);
+        let mut t = start + 250;
+        while t <= until {
+            effects.extend(space(app, t));
+            t += 25;
+        }
+        effects
+    }
+
+    #[test]
+    fn a_typed_space_reaches_the_agent_with_the_next_key_in_order() {
+        let mut app = in_agent();
+        assert_eq!(app.update(press(KeyCode::Char('a')), ms(0)), vec![typed(b"a")]);
+        assert!(space(&mut app, 90).is_empty(), "a space waits");
+        assert_eq!(app.update(press(KeyCode::Char('b')), ms(160)), vec![typed(b" "), typed(b"b")]);
+        assert!(space(&mut app, 300).is_empty());
+        assert!(space(&mut app, 420).is_empty());
+        assert_eq!(app.update(press(KeyCode::Enter), ms(500)), vec![typed(b" "), typed(b" "), typed(b"\r")]);
+        assert!(!app.hold.busy());
+    }
+
+    #[test]
+    fn a_space_with_nothing_after_it_arrives_once_it_cannot_be_a_hold() {
+        let mut app = in_agent();
+        space(&mut app, 0);
+        assert!(tick(&mut app, 500).is_empty());
+        assert_eq!(tick(&mut app, 701), vec![typed(b" ")]);
+        assert!(tick(&mut app, 2_000).is_empty());
+    }
+
+    #[test]
+    fn holding_space_on_an_agent_records_and_letting_go_types_the_words() {
+        let mut app = in_agent();
+        let effects = hold(&mut app, 0, 300);
+        assert_eq!(effects, vec![Effect::StartDictation], "no space ever reaches the agent");
+        let dictation = app.dictation.as_ref().expect("recording");
+        assert!(dictation.held);
+        assert_eq!(dictation.target, Target::Thread(l("w1:p1")));
+        app.update(Input::DictationStarted(Ok(())), ms(320));
+        // Keep holding for two seconds: the repeats are swallowed.
+        let mut t = 325;
+        while t <= 2_300 {
+            assert!(space(&mut app, t).is_empty(), "at {t}");
+            assert!(tick(&mut app, t + 10).is_empty(), "still held at {t}");
+            t += 25;
+        }
+        // Let go.
+        assert!(tick(&mut app, 2_440).is_empty(), "a repeat 140 ms late is not a release");
+        assert_eq!(tick(&mut app, 2_460), vec![Effect::StopDictation]);
+        let dictation = app.dictation.as_ref().unwrap();
+        assert_eq!((dictation.phase, dictation.then), (Phase::Transcribing, Some(Then::Type)));
+        let effects = app.update(Input::Transcribed(Ok("fix the tests".into())), ms(3_000));
+        assert_eq!(
+            effects,
+            vec![Effect::TypeText {
+                machine: LOCAL.into(),
+                pane_id: "w1:p1".into(),
+                title: "Login".into(),
+                text: "fix the tests".into()
+            }]
+        );
+        assert!(!app.hold.busy());
+    }
+
+    #[test]
+    fn a_brief_hold_is_a_space_not_a_recording() {
+        let mut app = in_agent();
+        hold(&mut app, 0, 400);
+        assert!(app.dictation.is_some());
+        // Let go, noticed 260 ms after recording started: a long press on
+        // space.
+        assert_eq!(tick(&mut app, 560), vec![Effect::CancelDictation, typed(b" ")]);
+        assert!(app.dictation.is_none());
+    }
+
+    #[test]
+    fn enter_while_holding_sends_and_letting_go_after_does_nothing_more() {
+        let mut app = in_agent();
+        hold(&mut app, 0, 1_000);
+        assert_eq!(app.update(press(KeyCode::Enter), ms(1_010)), vec![Effect::StopDictation]);
+        assert_eq!(app.dictation.as_ref().unwrap().then, Some(Then::Send));
+        hold_on(&mut app, 1_025, 1_200);
+        assert!(tick(&mut app, 1_400).is_empty(), "released, already sending");
+        assert!(!app.hold.busy());
+    }
+
+    fn hold_on(app: &mut App, from: u64, to: u64) {
+        let mut t = from;
+        while t <= to {
+            assert!(space(app, t).is_empty());
+            t += 25;
+        }
+    }
+
+    #[test]
+    fn esc_while_holding_discards_and_the_rest_of_the_hold_types_nothing() {
+        let mut app = in_agent();
+        hold(&mut app, 0, 1_000);
+        assert_eq!(app.update(press(KeyCode::Esc), ms(1_010)), vec![Effect::CancelDictation]);
+        hold_on(&mut app, 1_025, 1_500);
+        assert!(tick(&mut app, 1_700).is_empty());
+        assert!(app.dictation.is_none());
+    }
+
+    #[test]
+    fn in_the_composer_spaces_type_and_a_hold_dictates_the_task() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        app.update(press(KeyCode::Char('n')), ms(0));
+        for (i, c) in "fix it".chars().enumerate() {
+            app.update(press(KeyCode::Char(c)), ms(10 + i as u64 * 120));
+        }
+        assert_eq!(app.composer.task.text(), "fix it");
+        assert_eq!(hold(&mut app, 1_000, 1_300), vec![Effect::StartDictation]);
+        assert_eq!(app.dictation.as_ref().unwrap().target, Target::Composer);
+        assert_eq!(app.composer.task.text(), "fix it", "the held space is not in the task");
+        app.update(Input::DictationStarted(Ok(())), ms(1_310));
+        hold_on(&mut app, 1_325, 2_500);
+        assert_eq!(tick(&mut app, 2_660), vec![Effect::StopDictation]);
+        app.update(Input::Transcribed(Ok("the login loop".into())), ms(3_000));
+        assert_eq!(app.composer.task.text(), "fix it the login loop", "typed, not sent");
+        assert_eq!(app.focus, Focus::Composer);
+    }
+
+    #[test]
+    fn in_the_list_a_hold_dictates_to_the_thread_under_the_cursor() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        assert_eq!(app.focus, Focus::List);
+        app.update(press(KeyCode::Char('j')), ms(0));
+        let cursor = app.cursor.clone().unwrap();
+        assert_eq!(hold(&mut app, 100, 400), vec![Effect::StartDictation]);
+        assert_eq!(app.dictation.as_ref().unwrap().target, Target::Thread(cursor));
+    }
+
+    #[test]
+    fn where_space_means_something_else_it_never_waits() {
+        let (app, _) = loaded();
+        let mut app = ready(app);
+        // The list filter types its spaces at once.
+        app.update(press(KeyCode::Char('/')), ms(0));
+        app.update(press(KeyCode::Char('a')), ms(10));
+        space(&mut app, 20);
+        assert_eq!(app.filter, "a ");
+        assert!(!app.hold.busy());
+        app.update(press(KeyCode::Esc), ms(30));
+        // On a composer field, space opens its picker.
+        app.update(press(KeyCode::Char('n')), ms(40));
+        app.update(press(KeyCode::Tab), ms(50));
+        assert_ne!(app.composer.field, crate::app::Field::Task);
+        space(&mut app, 60);
+        assert!(app.composer.picker.is_some(), "the picker opened at once");
+        assert!(!app.hold.busy());
+    }
+
+    #[test]
+    fn shift_space_and_a_disabled_hold_type_at_once() {
+        let mut app = in_agent();
+        assert_eq!(app.update(press_with(KeyCode::Char(' '), KeyModifiers::SHIFT), ms(0)).len(), 1);
+        assert!(!app.hold.busy());
+        app.config.speech = SpeechConfig { space_hold: Some(false), ..SpeechConfig::default() };
+        assert_eq!(space(&mut app, 10), vec![typed(b" ")]);
+        let effects = hold(&mut app, 100, 400);
+        assert_eq!(effects, vec![typed(b" "); 4], "the press and three repeats, each a space");
+        assert!(app.dictation.is_none());
+    }
+
+    #[test]
+    fn without_a_transcriber_a_hold_opens_the_menu_and_types_nowhere() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Enter), at(1));
+        assert!(hold(&mut app, 0, 300).is_empty());
+        let menu = app.menu.as_ref().expect("the dictation menu");
+        assert!(menu.entry.is_none());
+        // The repeats neither move the menu nor reach the agent.
+        let before = app.menu.clone();
+        hold_on(&mut app, 325, 800);
+        assert_eq!(app.menu, before);
+        assert!(tick(&mut app, 1_000).is_empty());
+    }
+
+    #[test]
+    fn ctrl_t_dictation_is_unchanged_and_spaces_while_recording_go_nowhere() {
+        let mut app = in_agent();
+        assert_eq!(
+            app.update(press_with(KeyCode::Char('t'), KeyModifiers::CONTROL), ms(0)),
+            vec![Effect::StartDictation]
+        );
+        assert!(!app.dictation.as_ref().unwrap().held);
+        assert!(space(&mut app, 100).is_empty());
+        assert!(!app.hold.busy(), "spaces while recording are not held");
+        assert!(tick(&mut app, 2_000).is_empty());
+    }
+
+    #[test]
+    fn a_paste_or_a_click_types_waiting_spaces_first_but_moving_the_mouse_does_not() {
+        let mut app = in_agent();
+        space(&mut app, 0);
+        let effects = app.update(Input::Paste("x".into()), ms(10));
+        assert_eq!(effects.first(), Some(&typed(b" ")));
+        assert_eq!(effects.len(), 2);
+        space(&mut app, 20);
+        app.update(mouse(MouseEventKind::Moved, 50, 10), ms(30));
+        assert!(app.hold.busy(), "moving the mouse leaves the space waiting");
+        let effects = app.update(mouse(MouseEventKind::Down(MouseButton::Left), 2, 10), ms(40));
+        assert_eq!(effects.first(), Some(&typed(b" ")), "a click types it first");
+        assert!(!app.hold.busy());
+    }
+
+    #[test]
+    fn ticks_come_fast_only_while_a_space_waits_or_the_bar_is_held() {
+        let mut app = in_agent();
+        assert_eq!(app.tick_every(), Duration::from_millis(500));
+        space(&mut app, 0);
+        assert_eq!(app.tick_every(), Duration::from_millis(20));
+        tick(&mut app, 1_000);
+        assert_eq!(app.tick_every(), Duration::from_millis(500));
+        hold(&mut app, 2_000, 2_300);
+        assert_eq!(app.tick_every(), Duration::from_millis(20), "watching for the release");
+    }
+
+    #[test]
+    fn the_space_hold_setting_reads_from_the_speech_section() {
+        let config: crate::config::Config = toml::from_str("[speech]\nspace_hold = false\n").unwrap();
+        assert_eq!(config.speech.space_hold, Some(false));
+        let config: crate::config::Config = toml::from_str("[speech]\nlanguage = \"fr\"\n").unwrap();
+        assert_eq!(config.speech.space_hold, None, "on by default");
+    }
+}

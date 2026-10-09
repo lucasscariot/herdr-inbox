@@ -857,7 +857,7 @@ mod orbit_view {
         );
         assert!(cells.iter().all(|&(x, _, _)| x > app.layout.terminal.x));
         assert!(prompt - title - 2 <= 14 + 1, "the orbit stays small enough to keep the task high:\n{screen}");
-        for line in ["Workspace", "⌃T dictate"] {
+        for line in ["Workspace", "hold ␣ dictate"] {
             assert!(screen.contains(line), "everything under the task still shows: {line}");
         }
         let colours: Vec<Color> = cells.iter().map(|c| c.2).collect();
@@ -937,5 +937,50 @@ mod orbit_view {
         assert!(app.composer.picker.is_some());
         let terminal = render(&app, at(1));
         assert!(braille(&terminal).len() <= before, "{}", text(&terminal));
+    }
+}
+
+mod space_hold_hints {
+    use super::*;
+    use crate::app::{Dictation, Phase, Target};
+    use crate::speech::backends::SpeechConfig;
+
+    fn recording(held: bool) -> Dictation {
+        Dictation {
+            target: Target::Composer,
+            phase: Phase::Recording,
+            levels: vec![],
+            quiet: false,
+            started: at(0),
+            then: None,
+            held,
+        }
+    }
+
+    fn bar(app: &App) -> String {
+        text(&render(app, at(3))).lines().last().unwrap().to_string()
+    }
+
+    #[test]
+    fn a_held_recording_says_letting_go_types() {
+        let mut app = loaded(110, 30);
+        app.dictation = Some(recording(true));
+        let line = bar(&app);
+        assert!(line.contains("release type  ↵ send  esc discard"), "{line}");
+        assert!(!line.contains("⌃T"), "{line}");
+        app.dictation = Some(recording(false));
+        assert!(bar(&app).contains("↵ send  ⌃T type  esc discard"), "Ctrl+T dictation keeps its keys");
+    }
+
+    #[test]
+    fn the_agent_and_composer_show_the_hold_unless_it_is_off() {
+        let mut app = loaded(110, 30);
+        app.focus = crate::app::Focus::Terminal;
+        assert!(bar(&app).contains("tab threads  hold ␣ dictate"), "{}", bar(&app));
+        app.config.speech = SpeechConfig { space_hold: Some(false), ..SpeechConfig::default() };
+        assert!(!bar(&app).contains("hold ␣"), "{}", bar(&app));
+        app.focus = crate::app::Focus::Composer;
+        let screen = text(&render(&app, at(3)));
+        assert!(screen.contains("⌃T dictate") && !screen.contains("hold ␣"), "{screen}");
     }
 }

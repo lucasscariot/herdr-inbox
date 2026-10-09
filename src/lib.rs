@@ -9,6 +9,7 @@ pub mod editor;
 pub mod fuzzy;
 pub mod git;
 pub mod herdr;
+pub mod hold;
 pub mod keys;
 pub mod launch;
 pub mod link;

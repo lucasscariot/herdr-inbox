@@ -92,7 +92,12 @@ fn dictation_bar(buf: &mut Buffer, app: &App, dictation: &crate::app::Dictation,
                 left.push((crate::speech::meter::line(&[*level]), Style::new().fg(color)));
             }
             left.push(("  ".into(), text));
-            for (index, (k, label)) in [("↵", "send"), ("⌃T", "type"), ("esc", "discard")].iter().enumerate() {
+            let keys: &[(&str, &str)] = if dictation.held {
+                &[("release", "type"), ("↵", "send"), ("esc", "discard")]
+            } else {
+                &[("↵", "send"), ("⌃T", "type"), ("esc", "discard")]
+            };
+            for (index, (k, label)) in keys.iter().enumerate() {
                 if index > 0 {
                     left.push(("  ".into(), text));
                 }
@@ -797,6 +802,9 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
             "THREADS",
             vec![("↵", "open"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],
         ),
+        (_, Focus::Terminal) if app.config.speech.space_hold != Some(false) => {
+            ("AGENT", vec![("tab", "threads"), ("hold ␣", "dictate")])
+        }
         (_, Focus::Terminal) => ("AGENT", vec![("tab", "threads")]),
         (_, Focus::Composer) => ("NEW THREAD", vec![("esc", "back")]),
     };
