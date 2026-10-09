@@ -652,9 +652,13 @@ fn dictation_records_meters_and_types_the_transcript_into_the_composer() {
     let sandbox = Sandbox::start();
     let root = sandbox.root.path();
     // A recorder that writes a real WAV header and samples, finalizing on SIGINT.
+    let ready = root.join("recorder-ready");
     write_executable(
         &root.join("bin/pw-record"),
-        "#!/bin/sh\nfor out; do :; done\ntrap 'exit 0' INT\nprintf 'RIFF\\044\\000\\000\\000WAVEfmt \\020\\000\\000\\000\\001\\000\\001\\000\\200>\\000\\000\\000}\\000\\000\\002\\000\\020\\000data\\000\\000\\000\\000' > \"$out\"\nhead -c 64000 /dev/urandom >> \"$out\"\nwhile true; do sleep 0.05; done\n",
+        &format!(
+            "#!/bin/sh\nfor out; do :; done\ntrap 'exit 0' INT\nprintf 'RIFF\\044\\000\\000\\000WAVEfmt \\020\\000\\000\\000\\001\\000\\001\\000\\200>\\000\\000\\000}}\\000\\000\\002\\000\\020\\000data\\000\\000\\000\\000' > \"$out\"\nhead -c 64000 /dev/urandom >> \"$out\"\nprintf ready > '{ready}'\nwhile true; do sleep 0.05; done\n",
+            ready = ready.display(),
+        ),
     );
     let config = "[speech]\ncommand = \"printf 'fix the login loop' # {file}\"\n";
     std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
@@ -667,6 +671,7 @@ fn dictation_records_meters_and_types_the_transcript_into_the_composer() {
     inbox.keys("\x14");
     inbox.wait_for_text("● REC");
     inbox.wait_for_text("⌃T type");
+    sandbox.wait_for(|| ready.exists(), "the fake recorder's samples");
     inbox.keys("\x14");
     inbox.wait_for_text("fix the login loop");
     inbox.wait_until_gone("● REC");

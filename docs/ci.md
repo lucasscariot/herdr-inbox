@@ -28,10 +28,11 @@ The native macOS runner lives at
 `~/goinfre/actions-runners/herdr-inbox-macos`. Its background LaunchAgent is
 `fr.scariot.herdr-inbox-runner` in the `user/501` domain, with its plist in
 `~/Library/LaunchAgents/`. It runs without a GUI login, uses Xcode and Rosetta,
-and restarts after an unexpected exit. Use `ProcessType=Standard` while keeping
-`LimitLoadToSessionType=Background`: background scheduling coalesced 25 ms test
-keypresses into intervals above 150 ms and broke hold-to-dictate checks. Standard
-scheduling preserves a headless service without throttling input timers.
+and restarts after an unexpected exit. It uses the SDK's `runsvc.sh`,
+`ACTIONS_RUNNER_SVC=1`, `SessionCreate=true` and `ProcessType=Interactive`, as in
+GitHub's official service template, while keeping the headless Background
+launch domain. Background and Standard process scheduling stretched 25 ms
+keypresses beyond 150 ms and caused intermittent hold-to-dictate failures.
 Its HOME, Rust toolchains and config
 live inside the runner directory, separate from personal development settings.
 Logs are in the runner's `logs/` and `_diag/` directories. A full reboot has not
@@ -65,8 +66,10 @@ Please.
 Both PR workflows use `pull_request_target`, so GitHub reads their definitions
 from the trusted base branch. Every job that can run PR code checks that the
 head repository is this repository before checkout. Checkout pins the head SHA
-and does not persist credentials. Fork PRs skip these jobs, even if someone
-approves their workflow run. Never replace this with an unguarded
+and does not persist credentials. Fork PRs skip these jobs. Do not approve
+fork-originated workflow runs: a fork could add a different workflow that
+requests the same runners. The approval policy is the guard against those
+new definitions. Never replace the trusted PR workflows with an unguarded
 `pull_request` workflow on the self-hosted pool.
 
 To test an external contribution, review its code and workflow changes first,
