@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests.rs
-assertion_line: 878
 expression: "text(&render(&app, at(7)))"
 ---
  herdr inbox                     │
@@ -35,7 +34,7 @@ expression: "text(&render(&app, at(7)))"
                                  │    Model      Default                                        F4
                                  │    Workspace  New worktree                                   F9
                                  │
-                                 │  ↵ send   ⌃S send & keep   hold ␣ dictate   ⇥ fields   F7 pres…
+                                 │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
                                  │
                                  │
                                  │

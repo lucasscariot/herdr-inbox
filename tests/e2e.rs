@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -149,6 +149,7 @@ fn apply_env(command: &mut Command, env: &[(String, String)]) {
 /// terminal would show it.
 struct Inbox {
     screen: Arc<Mutex<vt100::Parser>>,
+    changed: Arc<Condvar>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     _master: Box<dyn portable_pty::MasterPty + Send>,
@@ -178,10 +179,12 @@ impl Inbox {
         let child = pty.slave.spawn_command(command).expect("spawn herdr-inbox");
         drop(pty.slave);
         let screen = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let changed = Arc::new(Condvar::new());
         let writer = Arc::new(Mutex::new(pty.master.take_writer().expect("writer")));
         let mut reader = pty.master.try_clone_reader().expect("reader");
         {
             let screen = Arc::clone(&screen);
+            let changed = Arc::clone(&changed);
             let writer = Arc::clone(&writer);
             std::thread::spawn(move || {
                 let mut buf = [0u8; 8192];
@@ -192,6 +195,7 @@ impl Inbox {
                     let chunk = &buf[..n];
                     let mut screen = screen.lock().unwrap();
                     screen.process(chunk);
+                    changed.notify_all();
                     // Answer the queries a real terminal answers.
                     let mut answer = Vec::new();
                     if chunk.windows(4).any(|w| w == b"\x1b[6n") {
@@ -209,7 +213,7 @@ impl Inbox {
                 }
             });
         }
-        Self { screen, writer, child, _master: pty.master }
+        Self { screen, changed, writer, child, _master: pty.master }
     }
 
     fn text(&self) -> String {
@@ -241,6 +245,41 @@ impl Inbox {
         let mut writer = self.writer.lock().unwrap();
         writer.write_all(bytes.as_bytes()).expect("write keys");
         writer.flush().expect("flush keys");
+    }
+
+    /// Measures ASCII input within one row, including a trailing space that
+    /// cannot be distinguished from blank cells by a text-only assertion.
+    fn press_and_measure(&mut self, bytes: &str) -> Duration {
+        let expected = {
+            let mut screen = self.screen.lock().unwrap();
+            let started = Instant::now();
+            while screen.screen().hide_cursor() {
+                let remaining = Duration::from_secs(2).saturating_sub(started.elapsed());
+                assert!(!remaining.is_zero(), "the input cursor never became visible");
+                screen = self.changed.wait_timeout(screen, remaining).expect("visible cursor").0;
+            }
+            let (row, col) = screen.screen().cursor_position();
+            (row, col + bytes.len() as u16)
+        };
+        // Catch the old 700 ms hold delay without a fragile sub-frame wall-clock
+        // assertion on shared CI runners. The redraw tests use a controlled clock.
+        let budget = Duration::from_millis(250);
+        let started = Instant::now();
+        self.press(bytes);
+        let mut screen = self.screen.lock().unwrap();
+        while screen.screen().hide_cursor() || screen.screen().cursor_position() != expected {
+            let remaining = budget.saturating_sub(started.elapsed());
+            assert!(
+                !remaining.is_zero(),
+                "key {bytes:?} exceeded {budget:?}; cursor {:?}, expected {expected:?}; screen:\n{}",
+                screen.screen().cursor_position(),
+                screen.screen().contents()
+            );
+            screen = self.changed.wait_timeout(screen, remaining).expect("screen changed").0;
+        }
+        let elapsed = started.elapsed();
+        assert!(elapsed < budget, "key {bytes:?} took {elapsed:?}, budget {budget:?}");
+        elapsed
     }
 
     fn keys(&mut self, bytes: &str) {
@@ -523,7 +562,7 @@ fn holding_space_dictates_into_the_composer_and_typed_spaces_still_type() {
         &root.join("bin/pw-record"),
         "#!/bin/sh\nfor out; do :; done\ntrap 'exit 0' INT\nprintf 'RIFF\\044\\000\\000\\000WAVEfmt \\020\\000\\000\\000\\001\\000\\001\\000\\200>\\000\\000\\000}\\000\\000\\002\\000\\020\\000data\\000\\000\\000\\000' > \"$out\"\nhead -c 64000 /dev/urandom >> \"$out\"\nwhile true; do sleep 0.05; done\n",
     );
-    let config = "[speech]\ncommand = \"printf 'the login loop' # {file}\"\n";
+    let config = "[speech]\nspace_hold = true\ncommand = \"printf 'the login loop' # {file}\"\n";
     std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
     std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
 
@@ -556,4 +595,83 @@ fn holding_space_dictates_into_the_composer_and_typed_spaces_still_type() {
     inbox.wait_for_text("│ fix it the login loop ");
     inbox.wait_until_gone("● REC");
     inbox.wait_for_text("What should we build?");
+}
+
+#[test]
+fn paused_spaces_in_the_composer_do_not_wait_for_dictation() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("What should we build?");
+    let samples: Vec<_> = "a b c d e f".chars().map(|key| inbox.press_and_measure(&key.to_string())).collect();
+    eprintln!("composer key-to-PTY-output latency: {samples:?}");
+    inbox.wait_for_text("│ a b c d e f ");
+}
+
+#[test]
+fn typing_stays_responsive_while_an_agent_repaints() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    let created = sandbox.herdr(&["workspace", "create", "--cwd", root.to_str().unwrap(), "--no-focus"]);
+    let pane = created["result"]["root_pane"]["pane_id"].as_str().expect("pane id");
+    sandbox.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "claude", "--state", "idle", pane]);
+    sandbox.herdr(&["pane", "report-metadata", pane, "--source", "e2e", "--token", "thread=Typing probe"]);
+    let fixture = root.join("typing.py");
+    // Full-pane output at 60 fps, with an input line and a stable visible
+    // cursor below it. Only the sandbox's shell ever runs this fixture.
+    std::fs::write(
+        &fixture,
+        r#"import os, select, sys, termios, time, tty
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+tty.setraw(fd)
+text = ""
+frame = 0
+next_frame = time.monotonic()
+try:
+    sys.stdout.write("\x1b[2J")
+    while True:
+        ready, _, _ = select.select([fd], [], [], max(0, next_frame - time.monotonic()))
+        if ready:
+            data = os.read(fd, 4096)
+            if not data or b"\x03" in data:
+                break
+            text += data.decode("utf-8", "replace")
+        now = time.monotonic()
+        if now >= next_frame or ready:
+            cols, rows = os.get_terminal_size(fd)
+            out = ["\x1b[?25l"]
+            if now >= next_frame:
+                for row in range(1, rows):
+                    out.append(f"\x1b[{row};1H" + chr(65 + (frame + row) % 26) * (cols - 1))
+                frame += 1
+                next_frame = now + 1 / 60
+            out.append(f"\x1b[{rows};1HBENCH> " + text + "\x1b[K\x1b[?25h")
+            sys.stdout.write("".join(out))
+            sys.stdout.flush()
+finally:
+    termios.tcsetattr(fd, termios.TCSANOW, old)
+"#,
+    )
+    .expect("write typing fixture");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("Typing probe");
+    inbox.keys("\r");
+    inbox.wait_for_text("AGENT");
+    inbox.wait_for_text("$");
+    inbox.keys(&format!("python3 -u '{}'\r", fixture.display()));
+    inbox.wait_for_text("BENCH>");
+    let samples: Vec<_> = "a b c d e f".chars().map(|key| inbox.press_and_measure(&key.to_string())).collect();
+    eprintln!("streaming agent key-to-PTY-output latency: {samples:?}");
+    inbox.wait_for_text("BENCH> a b c d e f");
+    inbox.press("\x03");
+    inbox.wait_for_text("$");
 }
