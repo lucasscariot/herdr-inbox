@@ -66,6 +66,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Install Linux build and test tools in the runner container
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential python3
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
