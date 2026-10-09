@@ -1,60 +1,41 @@
 # Contributing
 
-Thanks for helping. Herdr Inbox is plain Python 3.9+ with the standard library
-only; keep it that way so it installs with a clone and runs its discovery and
-event relay on remote machines without installing anything there.
+Herdr Inbox is a Rust binary (`src/`) that talks to a running Herdr server.
+The original Python plugin lives in `legacy/` with its own guide.
 
-## Run it
-
-```sh
-herdr plugin link "$PWD"            # register this checkout with your Herdr
-python3 main.py ui --demo           # composer preview, no Herdr needed
-python3 main.py ui --demo --view inbox
-```
-
-After editing, close an open composer with Escape and reopen it; Herdr starts
-the pane command fresh each time. `F5` hot-reloads `inbox/banner.py`.
-
-## Test it
+## Build and run
 
 ```sh
-python3 -m unittest discover -s tests -v
+cargo run -- --session inbox-test   # against an isolated Herdr session
 ```
 
-The suite runs in a few seconds and needs no Herdr. It includes a fake Herdr
-socket server (`tests/test_live.py`) that mimics the real subscription rules,
-so changes to `inbox/relay.py` and `inbox/live.py` can be verified offline.
-CI runs the suite on Linux and macOS with Python 3.9 and 3.13.
+Start the isolated session with `herdr --session inbox-test server &` and
+stop it with `herdr session stop inbox-test`. Anything you open, archive or
+type there stays away from your real agents.
 
-## Validate against a real server without touching your session
-
-Start an isolated Herdr server and point the plugin at it:
+## Test
 
 ```sh
-herdr --session inbox-test server &
-export HERDR_SOCKET_PATH=~/.config/herdr/sessions/inbox-test/herdr.sock HERDR_ENV=1
-export HERDR_PLUGIN_STATE_DIR=/tmp/inbox-state HERDR_PLUGIN_CONFIG_DIR=/tmp/inbox-config
-python3 main.py launch --machine Local --project <name> --harness claude --worktree --task 'Reply with one word: ok'
-python3 main.py list
-herdr session stop inbox-test && herdr session delete inbox-test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
 ```
 
-Worktrees Herdr creates during such a run live under `~/.herdr/worktrees/`;
-remove them with `git worktree remove` when done.
+- Behaviour lives in `App::update`, which does no I/O. Add a test in
+  `src/app/tests.rs` for any behaviour you change.
+- Drawing is tested on a `TestBackend`: text snapshots with `insta`
+  (`cargo insta review` after an intended change) plus explicit checks on the
+  colours that carry meaning.
+- Protocol code is tested against a fake Herdr server on a real Unix socket
+  (`src/testing.rs`), which keeps Herdr's connection rules: one request per
+  connection, long-lived subscriptions.
+- The end-to-end test starts a real Herdr server with every directory in a
+  temporary folder and drives the real binary in a pseudo-terminal.
 
 ## Style
 
-- No third-party dependencies, no build step.
-- Keep `inbox/relay.py` self-contained: it is shipped to remote hosts as source.
-- Every launch step journals before it mutates anything; keep that invariant.
-- Prefer small, named functions over flags; keep docstrings on modules and on
-  anything with a non-obvious contract.
-- Add or update a test for behaviour you change. Bump `version` in
-  `herdr-plugin.toml` and add a `CHANGELOG.md` entry for user-visible changes.
-
-## Reporting bugs
-
-Include `herdr status`, the plugin version, the machine kind (Local or saved
-SSH), and the relevant lines from `herdr plugin log list --plugin
-lucasscariot.herdr-inbox`. Launch journals under the plugin state directory
-(`threads/*.json`) contain the exact stage a launch reached.
+- No `unwrap()` outside tests.
+- Keep render pure: `ui::draw` reads `&App` only.
+- Herdr changes between releases: every type tolerates unknown fields, every
+  enum has a fallback, and nothing depends on Herdr's private protocol.

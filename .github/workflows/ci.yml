@@ -5,15 +5,69 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+  # The Herdr release the end-to-end tests run against.
+  HERDR_VERSION: v0.9.3
+
 jobs:
-  test:
-    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+  rust:
+    name: Rust · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
+  e2e:
+    name: End to end · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: herdr-linux-x86_64
+          - os: macos-latest
+            asset: herdr-macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Herdr ${{ env.HERDR_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/herdr"
+          gh release download "$HERDR_VERSION" -R herdrdev/herdr -p '${{ matrix.asset }}' -O "$RUNNER_TEMP/herdr/herdr"
+          chmod +x "$RUNNER_TEMP/herdr/herdr"
+          "$RUNNER_TEMP/herdr/herdr" --version
+      - name: Test against a real Herdr
+        run: HERDR_E2E=1 HERDR_BIN="$RUNNER_TEMP/herdr/herdr" cargo test --locked --test e2e -- --nocapture
+
+  legacy:
+    name: Legacy plugin · ${{ matrix.os }} · Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python: ["3.9", "3.13"]
+    defaults:
+      run:
+        working-directory: legacy
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,16 +77,8 @@ jobs:
         run: python -m compileall -q inbox main.py tests
       - name: Test
         run: python -m unittest discover -s tests -v
-
-  manifest:
-    name: Plugin manifest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
       - name: Validate herdr-plugin.toml
+        if: matrix.python == '3.13' && matrix.os == 'ubuntu-latest'
         run: |
           python - <<'EOF'
           import tomllib

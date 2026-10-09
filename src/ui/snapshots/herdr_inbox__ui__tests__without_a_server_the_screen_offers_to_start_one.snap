@@ -1,0 +1,12 @@
+---
+source: src/ui/tests.rs
+expression: "text(&render(&app, at(0)))"
+---
+
+
+
+                                   herdr inbox
+
+                           No Herdr server is running.
+
+                            Enter start one   q quit

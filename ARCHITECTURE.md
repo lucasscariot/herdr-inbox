@@ -1,66 +1,56 @@
 # Architecture
 
-Herdr Inbox is a Herdr plugin: Herdr runs `python3 main.py …` in a plugin pane
-with `HERDR_SOCKET_PATH`, `HERDR_PLUGIN_STATE_DIR`, and `HERDR_PLUGIN_CONFIG_DIR`
-set. Everything is standard-library Python 3.9+.
+Herdr Inbox is a single Rust binary. It owns no agent state: everything it
+shows comes from a Herdr server, and everything it does goes through Herdr's
+public interfaces.
 
 ```
-main.py              entrypoint: ui | open | discover | list | resume | launch
-inbox/ui.py          curses UI: composer and inbox views, key decoding, drawing
-inbox/text.py        cell widths, word wrapping, fuzzy ranking, formatting
-inbox/banner.py      the Braille knot and wordmark (cached per animation frame)
-inbox/herdr.py       Herdr transport: CLI calls, local socket requests, SSH command builder
-inbox/inventory.py   project and worktree discovery probe, harness and model catalogs
-inbox/threads.py     the launch state machine, startup-dialog resume, inbox rows
-inbox/opencode.py    OpenCode 2 session API calls
-inbox/relay.py       self-contained event watcher (runs locally and on remote hosts)
-inbox/live.py        one supervised relay link per machine, feeding a queue
-inbox/speech.py      dictation: recorders, transcription services, local tools
-inbox/meter.py       live microphone levels read from the growing WAV, equalizer rendering
-inbox/dictate.py     dictation into a running thread: headless engine and popup
-inbox/presets.py     named harness/model/thinking combinations
-inbox/store.py       config, preferences, presets, credentials, journals
+ crossterm events ──┐
+ link (Herdr API) ──┼──► App::update(input) ──► effects ──► runtime
+ terminal session ──┘          │                              │
+                               ▼                              ├─ herdr terminal session control
+                          ui::draw(&App)                      ├─ workspace.close
+                                                              └─ herdr server
 ```
 
-## Data flow
+## Modules
 
-**Discovery.** `inventory.PROBE` is a Python script sent to each machine
-(locally with `python3 -c`, remotely over SSH). It walks the configured roots,
-groups linked worktrees under their repository by reading `.git` pointers, and
-asks each installed harness CLI for its model catalog. Results are cached per
-machine in the state directory; catalogs are reused for 15 minutes.
+| Module | Role |
+| --- | --- |
+| `herdr::socket` | Resolves the server's socket like the `herdr` CLI: `--session`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, default. |
+| `herdr::api` | JSON socket API. One request per connection, because Herdr answers the first line and closes. |
+| `herdr::events` | `events.subscribe` streams. Each subscription owns its connection; Herdr resets one that receives anything else. |
+| `herdr::terminal` | Runs `herdr terminal session control <pane> --takeover` and speaks its JSON lines: base64 ANSI frames out, input/resize/scroll/mouse/release in. |
+| `link` | Keeps one server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots, a 30 s resync, reconnection with backoff. |
+| `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
+| `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
+| `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
+| `keys` | Encodes key presses as xterm bytes for the pane, honouring its cursor-key and bracketed-paste modes. |
+| `git` | Reads repository name and branch from `.git` files, without running git. |
+| `theme` | Herdr's built-in palettes and `config.toml` overrides. |
+| `ui` | Pure drawing from `&App`. |
+| `runtime` | Terminal setup, the event loop, effect execution. |
 
-**Launch.** `threads.launch` resolves the workspace choice, journals its intent,
-then creates the workspace or worktree, renames the tab, starts the harness,
-and submits the task, journaling after each step. A startup dialog turns the
-record into `startup_blocked`; `threads.resume` sends the task once the agent
-is idle. Failures become `needs_attention` rows the inbox can dismiss or
-relaunch.
+## Rules that keep it honest
 
-**Events.** `relay.Relay` opens one lifecycle subscription and one status
-subscription (every known agent pane) on dedicated socket connections, because
-Herdr resets a subscription connection that receives any other request. It
-emits `snapshot`, `agent`, `gone`, `ping`, and `error` lines. `live.Link` runs
-it in-process for Local and as `python3 -c <source>` over SSH for saved
-machines, restarts it with backoff, and pushes messages into a queue the UI
-drains on every loop iteration. The UI rebuilds rows only for machines that
-changed.
-
-**Dictation.** `speech.Recording` captures 16 kHz mono WAV with the first
-available recorder. Every recorder streams to disk, so `meter.Meter` tails the
-file for live band levels instead of opening the microphone twice; the UIs
-poll it fifteen times a second and the headless engine prints it as `level`
-events for the client. `speech.transcribe` picks the first usable backend: a
-configured command, a detected local tool, then hosted services by key.
-Credentials saved from the Dictation menu live in `credentials.json` with
-mode 0600 and override `config.json`.
-
-## Invariants worth keeping
-
-- Every mutation on a remote machine goes through Herdr's `--machine`
-  forwarding or an explicit SSH command; nothing falls back to Local.
-- A launch is journaled before its first mutation; an uncertain submission is
-  never replayed.
-- `relay.py` imports nothing from the package so it can be shipped as source.
-- The UI thread never blocks on I/O: launches, transcription, verification, and
-  installs run in the executor; events arrive through the queue.
+- **No polling for status.** Herdr only reports status transitions through
+  per-pane `pane.agent_status_changed` subscriptions. The link subscribes to
+  every agent pane on one connection and swaps it atomically: new
+  subscription first, then the old one closes. Herdr sends each pane's
+  current status when a subscription starts, so nothing falls between a
+  snapshot and its subscription.
+- **A refused subscription is not a lost server.** If a pane closes between a
+  snapshot and the subscribe, Herdr rejects the whole request; the link keeps
+  the connection and refreshes again.
+- **Generations.** Every attachment to a pane has a generation. Frames and
+  close messages from an older attachment are ignored, so switching threads
+  quickly never paints the wrong pane.
+- **Threads are tracked by identity.** The cursor follows its thread when the
+  list reorders, and lands on a neighbour when the thread disappears.
+- **Seen is local.** Herdr marks a finished pane seen when one of its own
+  windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
+  own record: opening a finished thread, or watching it finish, shows it as
+  idle until its status changes again.
+- **The emulator cannot crash the app.** vt100 panics on some edge cases (a
+  wrap in a one-row screen); the screen keeps at least 2×2 cells, catches a
+  panic while parsing, and resets until the next full frame.
