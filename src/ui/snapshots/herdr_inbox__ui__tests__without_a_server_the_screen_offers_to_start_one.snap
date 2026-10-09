@@ -10,3 +10,7 @@ expression: "text(&render(&app, at(0)))"
                            No Herdr server is running.
 
                             Enter start one   q quit
+
+
+
+ ⌃G updates

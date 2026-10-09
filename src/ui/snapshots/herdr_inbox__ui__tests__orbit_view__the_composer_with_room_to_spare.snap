@@ -45,4 +45,4 @@ expression: "text(&render(&app, at(7)))"
                                  │
                                  │
                                  │
-  NEW THREAD  esc back
+  NEW THREAD  esc back  ⌃G updates

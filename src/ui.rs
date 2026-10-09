@@ -36,7 +36,9 @@ pub fn draw(frame: &mut Frame, app: &App, palette: &Palette, now: SystemTime) {
                     None => cursor(app),
                 }
             };
-            if let Some((x, y)) = cursor {
+            if let Some((x, y)) = cursor
+                && !app.updates.visible
+            {
                 frame.set_cursor_position((x, y));
             }
         }
@@ -50,6 +52,10 @@ pub fn draw(frame: &mut Frame, app: &App, palette: &Palette, now: SystemTime) {
     match &app.dictation {
         Some(dictation) => dictation_bar(frame.buffer_mut(), app, dictation, palette, now),
         None => status_bar(frame.buffer_mut(), app, palette),
+    }
+    if app.updates.visible {
+        let area = frame.area();
+        updates::draw(frame.buffer_mut(), app, area, palette);
     }
 }
 
@@ -821,19 +827,28 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     // The mode badge is accent text, not a filled block: terminals extend the
     // last row's background into their padding.
     let (badge, hints): (&str, Vec<(&str, &str)>) = match (app.needs_server_screen(), app.focus) {
-        (true, _) => ("", vec![]),
+        (_, _) if app.updates.visible => ("UPDATES", vec![("esc", "back")]),
+        (true, _) => ("", vec![("⌃G", "updates")]),
         (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("y", "archive"), ("n", "keep")]),
         (_, _) if app.reply.is_some() => ("REPLY", vec![("↵", "send"), ("esc", "cancel")]),
         (_, Focus::List) if app.filtering => ("FILTER", vec![("↵", "keep"), ("esc", "clear")]),
         (_, Focus::List) => (
             "THREADS",
-            vec![("↵", "agent"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],
+            vec![
+                ("↵", "agent"),
+                ("j/k", "move"),
+                ("n", "new"),
+                ("x", "archive"),
+                ("⌃G", "updates"),
+                ("tab", "agent"),
+                ("q", "quit"),
+            ],
         ),
         (_, Focus::Terminal) if app.config.speech.space_hold_enabled() => {
             ("AGENT", vec![("tab", "threads"), ("hold ␣", "dictate")])
         }
         (_, Focus::Terminal) => ("AGENT", vec![("tab", "threads"), ("⌃T", "dictate")]),
-        (_, Focus::Composer) => ("NEW THREAD", vec![("esc", "back")]),
+        (_, Focus::Composer) => ("NEW THREAD", vec![("esc", "back"), ("⌃G", "updates")]),
     };
     let mut left: Vec<(String, Style)> = Vec::new();
     if !badge.is_empty() {
@@ -878,6 +893,7 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
 }
 
 mod composer;
+mod updates;
 
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,34 @@
+---
+source: src/ui/tests.rs
+expression: screen
+---
+ herdr inbox                     │
+ 1 needs input · 1 ready         │
+  +  New thread               n  │
+            ╭ Update Herdr Inbox ──────────────────────────────────────────────────────╮
+ NEEDS INPUT│ Running 1.0.0                                                            │
+▎cockpit    │ Latest stable 2.0.0                                                      │
+▎Fix the log│ Enter installs this release. Only the running Inbox binary changes.      │
+▎⎇ fix-login│                                                                          │
+            │ Release notes                                                            │
+ READY  1   │ ## Changes                                                               │
+▎site       │ Faster inbox navigation.                                                 │
+▎Review navi│ Safer updates.                                                           │
+▎⎇ feat/a-ve│                                                                          │
+            │                                                                          │
+ WORKING  1 │                                                                          │e…
+▎api        │                                                                          │
+▎Add invoice│                                                                          │
+▎⎇ main · Co│                                                                          │
+            │                                                                          │
+ IDLE  1    │                                                                          │
+▎scratch    │                                                                          │
+▎New Pi thre│                                                                          │
+▎Pi         │                                                                          │
+            │                                                                          │
+            │ Enter install  b GitHub                                                  │
+            │ ↑↓ notes  r recheck  Esc back                                            │
+            ╰──────────────────────────────────────────────────────────────────────────╯
+                                 │
+                                 │
+  UPDATES  esc back

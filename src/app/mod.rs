@@ -6,6 +6,7 @@ mod composer;
 mod dictation;
 mod input;
 mod layout;
+mod updates;
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
@@ -27,6 +28,7 @@ use crate::threads::{self, Activity, Source, Thread, ThreadId};
 pub use composer::{Choice, Composer, Field, Pick, Picker, WorkspaceSel};
 pub use dictation::{Dictation, Entry, Menu, MenuItem, Phase, SpeechStatus, Target, Then, menu_items};
 pub use layout::{Layout, Row, RowKind};
+pub use updates::{UpdatePhase, Updates, dialog as update_dialog};
 
 const NOTICE_TTL: Duration = Duration::from_secs(4);
 /// How long a server the user asked for may take to answer.
@@ -210,6 +212,8 @@ pub enum Effect {
         text: String,
     },
     OpenUrl(String),
+    CheckUpdate,
+    InstallUpdate(crate::update::Release),
     /// Read the clipboard for Ctrl+V in the composer or the reply box.
     ReadClipboard,
     VerifyKey {
@@ -295,6 +299,8 @@ pub enum Input {
         result: Result<Option<String>, String>,
         progress: Option<String>,
     },
+    UpdateChecked(Result<crate::update::Release, String>),
+    UpdateInstalled(Result<crate::update::Installed, String>),
     /// Something in the background failed in a way the user should know.
     Error(String),
     Tick,
@@ -350,6 +356,7 @@ pub struct App {
     pub speech: SpeechStatus,
     pub menu: Option<Menu>,
     pub credentials: crate::speech::backends::Credentials,
+    pub updates: Updates,
 }
 
 /// Text for an agent, written from the thread list.
@@ -423,6 +430,7 @@ impl App {
             speech: SpeechStatus::default(),
             menu: None,
             credentials: Default::default(),
+            updates: Updates::default(),
         }
     }
 
@@ -543,6 +551,8 @@ impl App {
             Input::Speech(status) => self.speech = status,
             Input::KeyVerified { service, key, result } => self.on_key_verified(service, key, result, &mut effects),
             Input::Whisper { result, progress } => self.on_whisper(result, progress, &mut effects),
+            Input::UpdateChecked(result) => self.updates.checked(result),
+            Input::UpdateInstalled(result) => self.updates.installed(result),
             Input::Tick => {
                 if self.notice.as_ref().is_some_and(|n| n.until <= now) {
                     self.notice = None;

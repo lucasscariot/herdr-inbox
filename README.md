@@ -34,8 +34,8 @@ the Herdr server you already run, through Herdr's public interfaces only:
   interface for third-party clients.
 
 It never replaces `herdr`, never starts a server unless you ask it to, and
-never updates anything. Plain `herdr` keeps working beside it, on the same
-sessions.
+only updates its own binary when you confirm an update. Plain `herdr` keeps
+working beside it, on the same sessions.
 
 ## Install
 
@@ -47,8 +47,8 @@ curl -fsSL https://raw.githubusercontent.com/lucasscariot/herdr-inbox/main/insta
 
 The installer downloads the prebuilt binary for Linux or macOS (x86_64 or
 arm64), checks its SHA-256, and puts it in `~/.local/bin`
-(`HERDR_INBOX_INSTALL_DIR` to change it). It never touches `herdr`. Run it
-again to update.
+(`HERDR_INBOX_INSTALL_DIR` to change it). It never touches `herdr`. To update,
+press **Ctrl+G** in the thread list or composer, or run the installer again.
 
 To build from source instead (Rust 1.88 or newer):
 
@@ -86,6 +86,7 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | | `d` | Dismiss a failed launch |
 | | `Ctrl+T` | Dictate to the thread under the cursor |
 | | `F10` | Dictation settings |
+| | `Ctrl+G` | Check GitHub releases and update Inbox |
 | | `Tab`, `Esc` | Back to the agent |
 | | `q`, `Ctrl+C` | Quit |
 | Agent | anything | Goes to the agent, including `Ctrl+C` and `Shift+Tab` |
@@ -109,6 +110,25 @@ unreachable.
 Herdr Inbox uses your Herdr theme: the same built-in themes, `[theme] name`,
 and `[theme.custom]` colours from `~/.config/herdr/config.toml`.
 
+### Updating Inbox
+
+Press **Ctrl+G** in the thread list or composer. From an agent, press Tab
+first; Ctrl+G inside an agent still goes to the agent. Updates also work
+without a running Herdr server.
+
+The dialog checks GitHub's latest stable release and shows your running
+version, the release version and its notes. Arrow keys scroll the notes,
+**B** opens that exact release in your browser, and **R** checks again.
+Checking never installs anything. Press **Enter** to confirm an available
+update, or Escape to return to your draft or thread.
+
+Inbox downloads the binary for this machine, verifies its SHA-256 and version,
+then replaces the binary you are running, including a custom install directory.
+A failed download or verification leaves the old binary intact. Restart Inbox
+after a successful update; your agents keep running. Nothing updates Herdr,
+your settings or saved SSH machines. The dialog needs `curl` to check GitHub.
+It does not install prereleases, unreleased `main` builds or older versions.
+
 ### Starting a thread
 
 Press `n`. Write the task, check the choices under it, press `Enter`. The
@@ -127,6 +147,7 @@ the background and its progress shows under **Launches**.
 | `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
 | `Ctrl+D` | Save the harness, model and thinking level as a preset |
 | `F5` | Rescan projects and model catalogs |
+| `Ctrl+G` | Check GitHub releases and update Inbox |
 | `Esc` | Close a list, then the composer (the draft stays) |
 
 **Presets** (`F7`) apply a saved harness, model and thinking level in one

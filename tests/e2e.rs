@@ -161,9 +161,13 @@ impl Inbox {
     }
 
     fn start_with(sandbox: &Sandbox, cols: u16, rows: u16, extra_env: &[(&str, &str)]) -> Self {
+        Self::start_binary(sandbox, cols, rows, extra_env, Path::new(env!("CARGO_BIN_EXE_herdr-inbox")))
+    }
+
+    fn start_binary(sandbox: &Sandbox, cols: u16, rows: u16, extra_env: &[(&str, &str)], binary: &Path) -> Self {
         let pty =
             native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).expect("openpty");
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr-inbox"));
+        let mut command = CommandBuilder::new(binary);
         command.args(["--herdr", &herdr_bin()]);
         for (key, _) in std::env::vars() {
             if key.starts_with("HERDR_") {
@@ -335,6 +339,112 @@ fn git_repo(root: &Path, name: &str, branch: &str) -> PathBuf {
     std::fs::create_dir_all(repo.join(".git")).expect("mkdir repo");
     std::fs::write(repo.join(".git/HEAD"), format!("ref: refs/heads/{branch}\n")).expect("HEAD");
     repo
+}
+
+#[test]
+fn updates_browse_and_install_a_checked_release_without_losing_the_draft_or_session() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    let bin = root.join("bin");
+    let inbox_binary = bin.join("herdr-inbox");
+    // Never replace the build's binary or the user's installed client.
+    assert!(Command::new("cp").arg(env!("CARGO_BIN_EXE_herdr-inbox")).arg(&inbox_binary).status().unwrap().success());
+    let stage = root.join("release-stage");
+    std::fs::create_dir(&stage).unwrap();
+    write_executable(&stage.join("herdr-inbox"), "#!/bin/sh\necho 'herdr-inbox 2.0.0'\n");
+    let asset = herdr_inbox::update::asset_name(std::env::consts::OS, std::env::consts::ARCH).unwrap();
+    let archive = root.join(&asset);
+    assert!(
+        Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&stage)
+            .arg("herdr-inbox")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let digest = Command::new("sh")
+        .args(["-c", "if command -v sha256sum >/dev/null; then sha256sum \"$1\"; else shasum -a 256 \"$1\"; fi", "sh"])
+        .arg(&archive)
+        .output()
+        .unwrap();
+    let hash = String::from_utf8_lossy(&digest.stdout).split_whitespace().next().unwrap().to_string();
+    std::fs::write(root.join(format!("{asset}.sha256")), format!("{hash}  {asset}\n")).unwrap();
+    let json = serde_json::json!({
+        "tag_name": "v2.0.0", "body": "A safer, faster inbox.",
+        "assets": [{"name": asset}, {"name": format!("{asset}.sha256")}]
+    });
+    std::fs::write(root.join("release.json"), json.to_string()).unwrap();
+    write_executable(
+        &bin.join("curl"),
+        &format!(
+            "#!/bin/sh\nurl=\nout=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2;;\n    https://*) url=\"$1\"; shift;;\n    *) shift;;\n  esac\ndone\ncase \"$url\" in\n  https://api.github.com/repos/lucasscariot/herdr-inbox/releases/latest)\n    if [ -f '{}/offline' ]; then echo 'network unavailable' >&2; exit 7; fi\n    cat '{}/release.json';;\n  https://github.com/lucasscariot/herdr-inbox/releases/download/v2.0.0/{asset}*)\n    cp '{}/'\"${{url##*/}}\" \"$out\";;\n  *) echo \"unexpected URL: $url\" >&2; exit 1;;\nesac\n",
+            root.display(),
+            root.display(),
+            root.display()
+        ),
+    );
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    write_executable(&bin.join(opener), &format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}/browser.url'\n", root.display()));
+    let config = root.join("config/herdr-inbox/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "roots = []\n").unwrap();
+    let created = sandbox.herdr(&[
+        "workspace",
+        "create",
+        "--cwd",
+        root.to_str().unwrap(),
+        "--label",
+        "kept-thread",
+        "--no-focus",
+    ]);
+    let pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    sandbox.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "claude", "--state", "idle", pane]);
+
+    let mut inbox = Inbox::start_binary(&sandbox, 110, 30, &[], &inbox_binary);
+    inbox.wait_for_text("THREADS");
+    inbox.press("n");
+    inbox.wait_for_text("NEW THREAD");
+    inbox.press("Keep this draft");
+    inbox.wait_for_text("Keep this draft");
+    std::fs::write(root.join("offline"), "offline").unwrap();
+    inbox.press("\x07");
+    inbox.wait_for_text("Could not check GitHub");
+    inbox.wait_for_text("network unavailable");
+    std::fs::remove_file(root.join("offline")).unwrap();
+    inbox.press("r");
+    inbox.wait_for_text("Latest stable 2.0.0");
+    inbox.wait_for_text("A safer, faster inbox.");
+    let version = Command::new(&inbox_binary).arg("--version").output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout).trim(),
+        format!("herdr-inbox {}", env!("CARGO_PKG_VERSION")),
+        "checking installs nothing"
+    );
+    inbox.press("b");
+    sandbox.wait_for(|| root.join("browser.url").exists(), "the release page to open");
+    assert_eq!(
+        std::fs::read_to_string(root.join("browser.url")).unwrap(),
+        "https://github.com/lucasscariot/herdr-inbox/releases/tag/v2.0.0"
+    );
+    inbox.press("\r");
+    inbox.wait_for_text("Installed 2.0.0");
+    inbox.wait_for_text("Restart Inbox");
+    let version = Command::new(&inbox_binary).arg("--version").output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), "herdr-inbox 2.0.0");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "roots = []\n");
+    let workspaces = sandbox.herdr(&["workspace", "list"]);
+    assert_eq!(workspaces["result"]["workspaces"].as_array().map(Vec::len), Some(1), "Herdr still owns the thread");
+    inbox.press("\x1b");
+    inbox.wait_until_gone("Update Herdr Inbox");
+    inbox.wait_for_text("Keep this draft");
+    inbox.press("\x07");
+    inbox.wait_for_text("Installed 2.0.0");
 }
 
 #[test]

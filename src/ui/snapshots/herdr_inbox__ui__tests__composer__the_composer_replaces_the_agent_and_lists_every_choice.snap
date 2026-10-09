@@ -31,4 +31,4 @@ expression: "text(&render(&app, at(1)))"
                                     │
                                     │
                                     │
-  NEW THREAD  esc back
+  NEW THREAD  esc back  ⌃G updates

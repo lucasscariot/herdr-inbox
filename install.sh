@@ -41,9 +41,9 @@ fi
 
 download() {
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$1" -o "$2"
+    curl -q -fsSL --connect-timeout 10 --max-time 300 "$1" -o "$2"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q "$1" -O "$2"
+    wget -q --timeout=30 --tries=1 "$1" -O "$2"
   else
     fail "curl or wget is needed to download herdr-inbox"
   fi
@@ -62,7 +62,8 @@ sha256() {
 work=$(mktemp -d)
 # Keep the script's own exit status: a cleanup that succeeds must never turn
 # a failure into a success.
-cleanup() { status=$?; rm -rf "$work"; exit "$status"; }
+staged=""
+cleanup() { status=$?; rm -rf "$work"; if [ -n "$staged" ]; then rm -rf "$staged"; fi; exit "$status"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -82,9 +83,15 @@ tar -xzf "$work/$asset" -C "$work"
 mkdir -p "$install_dir"
 # Copy next to the target, then rename: a running herdr-inbox keeps working
 # and a failed copy never leaves half a binary.
-cp "$work/herdr-inbox" "$install_dir/.herdr-inbox.new"
-chmod 755 "$install_dir/.herdr-inbox.new"
-mv -f "$install_dir/.herdr-inbox.new" "$install_dir/herdr-inbox"
+staged=$(mktemp -d "$install_dir/.herdr-inbox.XXXXXX")
+cp "$work/herdr-inbox" "$staged/herdr-inbox"
+chmod 755 "$staged/herdr-inbox"
+# The in-app updater also verifies the version before replacing its binary.
+if [ -n "${HERDR_INBOX_EXPECTED_VERSION:-}" ]; then
+  reported=$("$staged/herdr-inbox" --version) || fail "the downloaded binary cannot run: nothing was installed"
+  [ "$reported" = "herdr-inbox $HERDR_INBOX_EXPECTED_VERSION" ] || fail "downloaded version does not match $HERDR_INBOX_EXPECTED_VERSION: nothing was installed"
+fi
+mv -f "$staged/herdr-inbox" "$install_dir/herdr-inbox"
 
 installed=$("$install_dir/herdr-inbox" --version 2>/dev/null || echo herdr-inbox)
 say "Installed $installed to $install_dir/herdr-inbox"

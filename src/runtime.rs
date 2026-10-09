@@ -346,6 +346,18 @@ fn perform(
             }
         }
         Effect::OpenUrl(url) => open_url(&url),
+        Effect::CheckUpdate => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(Input::UpdateChecked(crate::update::check()));
+            });
+        }
+        Effect::InstallUpdate(release) => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(Input::UpdateInstalled(crate::update::install(&release)));
+            });
+        }
         Effect::ReadClipboard => {
             let tx = tx.clone();
             thread::spawn(move || {

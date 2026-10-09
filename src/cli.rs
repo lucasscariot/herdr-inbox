@@ -16,8 +16,13 @@ Options:
   -V, --version    Show the version
 
 Keys:
-  Threads   j/k move · Enter open · x archive · Tab agent · q quit
+  Threads   j/k move · Enter open · x archive · Ctrl+G updates · Tab agent · q quit
+  Composer  Ctrl+G updates · Ctrl+U clear text
   Agent     everything goes to the agent · Tab back to the threads
+
+Examples:
+  herdr-inbox
+  herdr-inbox --session work
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
