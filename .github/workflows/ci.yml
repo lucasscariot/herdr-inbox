@@ -74,7 +74,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential python3
+          apt-get install --yes --no-install-recommends build-essential python3 gh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -134,6 +134,12 @@ jobs:
       INSTALLER_RESULT: ${{ needs.installer.result }}
       TITLE_RESULT: ${{ needs.title.result }}
     steps:
+      - name: Install GitHub CLI in the runner container
+        run: |
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
       # pull_request_target check runs belong to the base SHA. Report the
       # result at the exact tested head so the PR and branch protection see it.
       - name: Report the actual test result

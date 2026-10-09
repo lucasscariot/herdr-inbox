@@ -51,6 +51,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Install GitHub CLI in the runner container
+        run: |
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
       - uses: googleapis/release-please-action@v5
         id: release
         with:
@@ -175,6 +181,12 @@ jobs:
       CHECKS_RESULT: ${{ needs.checks.result }}
       BUILD_RESULT: ${{ needs.build.result }}
     steps:
+      - name: Install GitHub CLI in the runner container
+        run: |
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
       - name: Report the actual build result
         run: |
           state=failure
@@ -205,6 +217,12 @@ jobs:
           pattern: herdr-inbox-*
           path: artifacts
           merge-multiple: true
+      - name: Install GitHub CLI in the runner container
+        run: |
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
       - name: Verify and publish
         env:
           GH_TOKEN: ${{ github.token }}
