@@ -44,6 +44,7 @@ public interfaces.
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
 | `ui` | Pure drawing from `&App`. |
 | `runtime` | Terminal setup, the event loop, effect execution. |
+| `runtime::redraw` | Applies inputs and schedules draws with a 16 ms frame limit. Forwarded keys wait for the agent's echo instead of redrawing an unchanged screen. |
 
 ## Rules that keep it honest
 
@@ -88,6 +89,14 @@ public interfaces.
   never in its arguments, and a key being typed is drawn as dots.
 - **Discovery and launches never block the UI.** They run on worker threads
   and report back as inputs.
+- **Spaces type immediately by default.** Ctrl+T dictates; only an explicit
+  `[speech] space_hold = true` enables key-repeat detection and its wait.
+- **Forwarding a key does not spend a frame.** A terminal key whose only
+  effects send input to the agent does not invalidate the screen, unless it
+  also changes focus or opens a dictation menu. Its returned ANSI frame does,
+  preserving the 16 ms limit for streaming output and any redraw already
+  pending. Clock-driven tests replay keys and echoes through this same scheduler;
+  PTY tests measure paused spaces and typing during continuous agent output.
 - **The emulator cannot crash the app.** vt100 panics on some edge cases (a
   wrap in a one-row screen); the screen keeps at least 2×2 cells, catches a
   panic while parsing, and resets until the next full frame.

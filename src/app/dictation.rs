@@ -135,7 +135,7 @@ impl App {
     /// Whether a space typed now could be the start of a held bar: wherever
     /// a space is text, and in the thread list, where it does nothing else.
     pub(crate) fn space_holds(&self) -> bool {
-        self.config.speech.space_hold != Some(false)
+        self.config.speech.space_hold_enabled()
             && self.menu.is_none()
             && self.dictation.is_none()
             && !self.needs_server_screen()

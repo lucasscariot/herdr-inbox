@@ -84,12 +84,12 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | | `/` | Filter by title, project, branch, harness or machine; `Esc` clears |
 | | `x`, `Delete`, `Backspace` | Archive: closes the thread's workspace, keeps its worktree on disk |
 | | `d` | Dismiss a failed launch |
-| | Hold `Space`, `Ctrl+T` | Dictate to the thread under the cursor |
+| | `Ctrl+T` | Dictate to the thread under the cursor |
 | | `F10` | Dictation settings |
 | | `Tab`, `Esc` | Back to the agent |
 | | `q`, `Ctrl+C` | Quit |
 | Agent | anything | Goes to the agent, including `Ctrl+C` and `Shift+Tab` |
-| | Hold `Space`, `Ctrl+T` | Dictate to the agent |
+| | `Ctrl+T` | Dictate to the agent |
 | | `Tab` | Back to the threads |
 
 Threads are grouped as **needs input**, **ready** (finished, not yet focused),
@@ -122,7 +122,7 @@ the background and its progress shows under **Launches**.
 | `Shift+Enter`, `Alt+Enter` | New line |
 | `Tab`, `Shift+Tab` | Move between the task and the choices |
 | `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
-| Hold `Space`, `Ctrl+T` | Dictate the task |
+| `Ctrl+T` | Dictate the task |
 | `Ctrl+V`, the desktop's paste | Paste a screenshot as `[Image #1]` |
 | `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
 | `Ctrl+D` | Save the harness, model and thinking level as a preset |
@@ -192,23 +192,26 @@ harness_args = { codex = ["--no-daemon", "--fast"] }
 
 ### Dictation
 
-Hold the space bar to talk, and let go to type the words. It works wherever
-a space would be typed: in the composer it dictates the task, on an agent it
-types into that agent's prompt (any harness, any machine), in a reply box it
-dictates the reply, and in the thread list it dictates to the thread under
-the cursor. Letting go types the words unsent, so you can read them before
-pressing Enter.
+Press `Ctrl+T` to talk, anywhere: the composer's task, an agent's prompt,
+a reply, or the thread under the cursor. Press `Ctrl+T` again to type the
+words unsent, so you can read them before pressing Enter. Ordinary spaces
+type immediately and never start dictation by default.
 
-Tapping space still types a space. The terminal reports key presses but not
-releases, so Herdr Inbox tells a held bar from typed spaces by the
-keyboard's auto-repeat, and a space waits until it is clear which it is. The
-next key types it at once, so typing is never held up; a space you type and
-then pause after appears a moment later (after your keyboard's repeat delay).
-A press only a little longer than a tap still types its space. Set
-`space_hold = false` under `[speech]` to keep space for typing only.
+Hold-to-dictate is optional. Enable it in `~/.config/herdr-inbox/config.toml`:
 
-`Ctrl+T` also starts dictation, anywhere. While the status bar shows `● REC`
-and the live meter:
+```toml
+[speech]
+space_hold = true
+```
+
+With this setting, hold Space to talk and let go to type the words unsent.
+Herdr Inbox detects a hold from keyboard auto-repeat, so a tapped space
+followed by a pause waits about 700 ms initially. The next key types any
+waiting spaces before itself. After a hold, the wait adapts to your keyboard's
+repeat delay. Omit `space_hold` or set it to `false` for immediate spaces;
+Ctrl+T still works.
+
+While the status bar shows `● REC` and the live meter:
 
 | Key | Action |
 | --- | --- |
@@ -229,7 +232,7 @@ Recording uses `pw-record`, `arecord`, `parecord`, `sox` or `ffmpeg`,
 whichever is installed; hosted services are called with `curl`.
 
 `[speech]` in the config can force a backend, pin a language or model, turn
-off `space_hold`, or hold keys; `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
+on `space_hold`, or hold keys; `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
 `MISTRAL_API_KEY` and `DEEPGRAM_API_KEY` work too.
 
 ### Coming from the plugin

@@ -143,6 +143,29 @@ fn status_colors_carry_meaning() {
 }
 
 #[test]
+fn idle_threads_and_dividers_stay_faint() {
+    let app = loaded(100, 24);
+    let terminal = render(&app, at(0));
+    let palette = Palette::default();
+    let buffer = terminal.backend().buffer();
+    let (x, y) = find(&terminal, "○ idle");
+    let idle = &buffer[(x, y)];
+    assert_eq!(idle.fg, palette.overlay1);
+    assert!(idle.modifier.contains(Modifier::DIM), "an idle badge is the quietest status");
+    assert!(buffer[(0, y)].modifier.contains(Modifier::DIM), "and so is its marker");
+    let heading = &buffer[find(&terminal, "IDLE")];
+    assert!(heading.modifier.contains(Modifier::DIM | Modifier::BOLD), "the idle group heading too");
+    assert!(
+        !buffer[find(&terminal, "◐ working")].modifier.contains(Modifier::DIM),
+        "live statuses keep their full tone"
+    );
+    let separator = &buffer[(app.layout.sidebar.width, 5)];
+    assert_eq!(separator.symbol(), "│");
+    assert_eq!(separator.fg, palette.surface1);
+    assert!(separator.modifier.contains(Modifier::DIM), "the sidebar divider is a hairline, not a white bar");
+}
+
+#[test]
 fn the_selected_discussion_is_highlighted_and_accented_while_browsing() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Char('j'));
@@ -511,6 +534,24 @@ mod composer {
     }
 
     #[test]
+    fn the_task_frame_is_a_softened_accent_with_focus_and_a_hairline_without() {
+        let mut app = composing(110, 30);
+        let palette = Palette::default();
+        let terminal = render(&app, at(1));
+        let buffer = terminal.backend().buffer();
+        let (x, y) = find(&terminal, "╭");
+        let focused = &buffer[(x, y)];
+        assert_eq!(focused.fg, palette.accent);
+        assert!(focused.modifier.contains(Modifier::DIM), "a full-strength accent box drowns the task");
+        key(&mut app, KeyCode::Tab);
+        let terminal = render(&app, at(1));
+        let blurred = &terminal.backend().buffer()[(x, y)];
+        assert_eq!(blurred.fg, palette.surface1);
+        assert!(blurred.modifier.contains(Modifier::DIM), "without focus the frame is a hairline");
+        assert_eq!(blurred.symbol(), "╭");
+    }
+
+    #[test]
     fn the_new_thread_button_sits_in_the_sidebar_and_opens_the_composer() {
         let mut app = loaded(100, 24);
         let screen = text(&render(&app, at(0)));
@@ -858,7 +899,7 @@ mod orbit_view {
         );
         assert!(cells.iter().all(|&(x, _, _)| x > app.layout.terminal.x));
         assert!(prompt - title - 2 <= 14 + 1, "the orbit stays small enough to keep the task high:\n{screen}");
-        for line in ["Workspace", "hold ␣ dictate"] {
+        for line in ["Workspace", "⌃T dictate"] {
             assert!(screen.contains(line), "everything under the task still shows: {line}");
         }
         let colours: Vec<Color> = cells.iter().map(|c| c.2).collect();
@@ -974,14 +1015,21 @@ mod space_hold_hints {
     }
 
     #[test]
-    fn the_agent_and_composer_show_the_hold_unless_it_is_off() {
-        let mut app = loaded(110, 30);
-        app.focus = crate::app::Focus::Terminal;
-        assert!(bar(&app).contains("tab threads  hold ␣ dictate"), "{}", bar(&app));
-        app.config.speech = SpeechConfig { space_hold: Some(false), ..SpeechConfig::default() };
-        assert!(!bar(&app).contains("hold ␣"), "{}", bar(&app));
-        app.focus = crate::app::Focus::Composer;
-        let screen = text(&render(&app, at(3)));
-        assert!(screen.contains("⌃T dictate") && !screen.contains("hold ␣"), "{screen}");
+    fn the_agent_and_composer_show_ctrl_t_unless_hold_is_enabled() {
+        for space_hold in [None, Some(false), Some(true)] {
+            let mut app = loaded(110, 30);
+            app.config.speech = SpeechConfig { space_hold, ..SpeechConfig::default() };
+            let (hint, absent) = if space_hold == Some(true) {
+                ("hold ␣ dictate", "⌃T dictate")
+            } else {
+                ("⌃T dictate", "hold ␣")
+            };
+            app.focus = crate::app::Focus::Terminal;
+            let line = bar(&app);
+            assert!(line.contains(hint) && !line.contains(absent), "{line}");
+            app.focus = crate::app::Focus::Composer;
+            let screen = text(&render(&app, at(3)));
+            assert!(screen.contains(hint) && !screen.contains(absent), "{screen}");
+        }
     }
 }
