@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthStr;
 
 use std::time::SystemTime;
 
-use super::{clip, fill, orbit_in, split_line};
+use super::{clip, fill, frame, orbit_in, split_line};
 use crate::app::{App, Field, LaunchState};
 use crate::orbit;
 use crate::theme::Palette;
@@ -98,19 +98,10 @@ fn body(buf: &mut Buffer, app: &App, area: Rect, mut y: u16, palette: &Palette) 
     let rows = (lines.len() as u16).clamp(TASK_MIN_ROWS, TASK_MAX_ROWS);
     let focused = composer.field == Field::Task && composer.picker.is_none();
     let dictating = app.dictation.as_ref().is_some_and(|d| d.target == crate::app::Target::Composer);
-    let border = if dictating {
-        palette.red
-    } else if focused {
-        palette.accent
-    } else {
-        palette.surface1
-    };
+    // Recording is the one state loud enough for a full-strength frame.
+    let border = if dictating { Style::new().fg(palette.red) } else { frame(palette, focused) };
     let task_box = Rect::new(x, y, width, rows + 2);
-    Block::new()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border))
-        .render(task_box, buf);
+    Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(border).render(task_box, buf);
     // Keep the cursor's row visible when the task is longer than the box.
     let scroll = cursor_row.saturating_sub(rows - 1);
     for (index, line) in lines.iter().skip(scroll as usize).take(rows as usize).enumerate() {

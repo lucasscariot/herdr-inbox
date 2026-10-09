@@ -49,6 +49,10 @@ never changes it.
   while a thread needs input. It animates only while on screen.
 - Prebuilt binaries for Linux and macOS on every release, and a one-line
   installer that checks their SHA-256.
+- A quieter frame: the sidebar divider and an unfocused task box are faint
+  hairlines, the focused task box and the reply box wear a softened accent,
+  and idle threads (badge, marker, heading, orbit bead) are faint. Themes that
+  map these tones to plain ANSI white or grey no longer draw white bars.
 
 ### Removed
 

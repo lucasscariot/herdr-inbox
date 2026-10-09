@@ -276,6 +276,33 @@ pub fn status_color(status: AgentStatus, palette: &Palette) -> Color {
     }
 }
 
+/// A status as text: its colour, faint when there is nothing to act on. An
+/// idle thread should be the quietest thing on screen, and `overlay1` is pure
+/// white in the terminal theme.
+pub fn status_style(status: AgentStatus, palette: &Palette) -> Style {
+    let style = Style::new().fg(status_color(status, palette));
+    match status {
+        AgentStatus::Idle | AgentStatus::Unknown => style.add_modifier(Modifier::DIM),
+        _ => style,
+    }
+}
+
+/// Lines that divide without shouting: the sidebar separator and a frame that
+/// does not have focus. Faint, because `surface1` is a plain ANSI grey in the
+/// terminal theme and renders as a bright line in many terminal palettes.
+pub fn hairline(palette: &Palette) -> Style {
+    Style::new().fg(palette.surface1).add_modifier(Modifier::DIM)
+}
+
+/// The frame of a text box: the accent while it has focus, softened so the
+/// text inside stays the brightest thing; a hairline otherwise.
+pub fn frame(palette: &Palette, focused: bool) -> Style {
+    match focused {
+        true => Style::new().fg(palette.accent).add_modifier(Modifier::DIM),
+        false => hairline(palette),
+    }
+}
+
 pub fn badge(status: AgentStatus) -> &'static str {
     match status {
         AgentStatus::Blocked => "● input",
@@ -451,15 +478,15 @@ fn summary(app: &App, palette: &Palette) -> Vec<(String, Style)> {
 }
 
 fn heading(buf: &mut Buffer, x: u16, y: u16, width: u16, group: Group, count: usize, palette: &Palette) {
-    let color = match group {
-        Group::NeedsInput => palette.red,
-        Group::Ready => palette.teal,
-        Group::Working => palette.yellow,
-        Group::Idle => palette.overlay1,
-        Group::Unknown => palette.overlay0,
+    let style = match group {
+        Group::NeedsInput => Style::new().fg(palette.red),
+        Group::Ready => Style::new().fg(palette.teal),
+        Group::Working => Style::new().fg(palette.yellow),
+        Group::Idle => status_style(AgentStatus::Idle, palette),
+        Group::Unknown => status_style(AgentStatus::Unknown, palette),
     };
     let parts = [
-        (group.heading().to_uppercase(), Style::new().fg(color).add_modifier(Modifier::BOLD)),
+        (group.heading().to_uppercase(), style.add_modifier(Modifier::BOLD)),
         (format!("  {count}"), Style::new().fg(palette.overlay0)),
     ];
     split_line(buf, x, y, width, &parts, &[]);
@@ -485,8 +512,8 @@ fn thread_line(
     palette: &Palette,
     now: SystemTime,
 ) {
-    let color = status_color(thread.status, palette);
-    buf.set_string(area.x, area.y, "▎", Style::new().fg(color));
+    let status = status_style(thread.status, palette);
+    buf.set_string(area.x, area.y, "▎", status);
     let x = area.x + 1;
     let width = area.width.saturating_sub(2);
     let dim = Style::new().fg(palette.overlay0);
@@ -497,7 +524,7 @@ fn thread_line(
             area.y,
             width,
             &[(thread.project.clone(), Style::new().fg(palette.subtext0))],
-            &[(badge(thread.status).to_string(), Style::new().fg(color))],
+            &[(badge(thread.status).to_string(), status)],
         ),
         1 => {
             let mut style = Style::new().fg(palette.text).add_modifier(Modifier::BOLD);
@@ -583,7 +610,7 @@ fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &P
         ratatui::widgets::Block::new()
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
-            .border_style(Style::new().fg(palette.accent).bg(palette.surface0))
+            .border_style(frame(palette, true).bg(palette.surface0))
             .title(format!(" Reply to “{}” ", clip(&title, inner_width.saturating_sub(12) as usize))),
         rect,
         buf,
@@ -616,7 +643,7 @@ fn separator(buf: &mut Buffer, app: &App, palette: &Palette) {
         return;
     }
     for y in 0..app.layout.sidebar.height {
-        buf.set_string(x, y, "│", Style::new().fg(palette.surface1));
+        buf.set_string(x, y, "│", hairline(palette));
     }
 }
 
@@ -687,7 +714,7 @@ fn orbit_in(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         let (x, y) = (at.x + index as u16 % cols, at.y + index as u16 / cols);
         let style = match cell.ink {
             Ink::Core => Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
-            Ink::Bead(status) => Style::new().fg(status_color(status, palette)),
+            Ink::Bead(status) => status_style(status, palette),
             Ink::Ring { front: false, .. } => Style::new().fg(palette.surface1),
             Ink::Ring { link: Link::Down, front: true } => Style::new().fg(palette.red),
             Ink::Ring { front: true, .. } => Style::new().fg(palette.overlay0),

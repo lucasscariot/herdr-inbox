@@ -143,6 +143,29 @@ fn status_colors_carry_meaning() {
 }
 
 #[test]
+fn idle_threads_and_dividers_stay_faint() {
+    let app = loaded(100, 24);
+    let terminal = render(&app, at(0));
+    let palette = Palette::default();
+    let buffer = terminal.backend().buffer();
+    let (x, y) = find(&terminal, "○ idle");
+    let idle = &buffer[(x, y)];
+    assert_eq!(idle.fg, palette.overlay1);
+    assert!(idle.modifier.contains(Modifier::DIM), "an idle badge is the quietest status");
+    assert!(buffer[(0, y)].modifier.contains(Modifier::DIM), "and so is its marker");
+    let heading = &buffer[find(&terminal, "IDLE")];
+    assert!(heading.modifier.contains(Modifier::DIM | Modifier::BOLD), "the idle group heading too");
+    assert!(
+        !buffer[find(&terminal, "◐ working")].modifier.contains(Modifier::DIM),
+        "live statuses keep their full tone"
+    );
+    let separator = &buffer[(app.layout.sidebar.width, 5)];
+    assert_eq!(separator.symbol(), "│");
+    assert_eq!(separator.fg, palette.surface1);
+    assert!(separator.modifier.contains(Modifier::DIM), "the sidebar divider is a hairline, not a white bar");
+}
+
+#[test]
 fn the_cursor_row_is_highlighted_in_the_list_and_the_open_title_is_accented() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Char('j'));
@@ -507,6 +530,24 @@ mod composer {
         key(&mut app, KeyCode::Enter);
         let screen = text(&render(&app, at(1)));
         assert!(screen.contains("Write a task first."), "{screen}");
+    }
+
+    #[test]
+    fn the_task_frame_is_a_softened_accent_with_focus_and_a_hairline_without() {
+        let mut app = composing(110, 30);
+        let palette = Palette::default();
+        let terminal = render(&app, at(1));
+        let buffer = terminal.backend().buffer();
+        let (x, y) = find(&terminal, "╭");
+        let focused = &buffer[(x, y)];
+        assert_eq!(focused.fg, palette.accent);
+        assert!(focused.modifier.contains(Modifier::DIM), "a full-strength accent box drowns the task");
+        key(&mut app, KeyCode::Tab);
+        let terminal = render(&app, at(1));
+        let blurred = &terminal.backend().buffer()[(x, y)];
+        assert_eq!(blurred.fg, palette.surface1);
+        assert!(blurred.modifier.contains(Modifier::DIM), "without focus the frame is a hairline");
+        assert_eq!(blurred.symbol(), "╭");
     }
 
     #[test]
