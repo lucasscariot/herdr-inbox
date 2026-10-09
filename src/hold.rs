@@ -15,8 +15,9 @@ use std::time::{Duration, SystemTime};
 
 /// Repeats come faster than this; people pressing the same key, slower.
 const FAST: Duration = Duration::from_millis(110);
-/// Repeats are this even; people are not.
-const JITTER: Duration = Duration::from_millis(20);
+/// Repeats are about this even, even when a busy machine delivers them late;
+/// people pressing one key this fast are not.
+const JITTER: Duration = Duration::from_millis(50);
 /// How long a space waits for a repeat before it is typed, until a hold has
 /// shown the actual repeat delay. Long enough for common defaults (X11 waits
 /// 660 ms before repeating, GNOME 500, macOS about 375).

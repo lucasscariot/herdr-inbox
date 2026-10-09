@@ -542,14 +542,16 @@ fn holding_space_dictates_into_the_composer_and_typed_spaces_still_type() {
     std::thread::sleep(Duration::from_millis(250));
     let held = Instant::now();
     let (mut recording, mut hint) = (false, false);
+    let mut sent = Vec::new();
     while held.elapsed() < Duration::from_millis(1_500) {
         inbox.press(" ");
+        sent.push(held.elapsed().as_millis());
         let text = inbox.text();
         recording |= text.contains("● REC");
         hint |= text.contains("release type");
         std::thread::sleep(Duration::from_millis(25));
     }
-    assert!(recording && hint, "recording while held; screen:\n{}", inbox.text());
+    assert!(recording && hint, "recording while held; repeats sent at {sent:?} ms; screen:\n{}", inbox.text());
     // Let go: the words are typed after a single space, unsent.
     inbox.wait_for_text("│ fix it the login loop ");
     inbox.wait_until_gone("● REC");

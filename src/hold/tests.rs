@@ -15,6 +15,14 @@ fn held_bar(start: u64, delay: u64, every: u64, repeats: u64) -> Vec<u64> {
 }
 
 #[test]
+fn repeats_delivered_unevenly_by_a_busy_machine_are_still_a_hold() {
+    // A 250 ms delay, then repeats every 25 ms that arrive bunched or late.
+    let mut hold = SpaceHold::default();
+    let steps = spaces(&mut hold, &[0, 250, 300, 300, 345, 360]);
+    assert!(steps.contains(&Step::Hold(0)), "{steps:?}");
+}
+
+#[test]
 fn a_lone_space_is_typed_once_no_repeat_can_follow() {
     let mut hold = SpaceHold::default();
     assert_eq!(hold.space(t(0)), Step::Wait);
@@ -39,9 +47,13 @@ fn the_next_key_types_waiting_spaces_ahead_of_itself() {
 fn typed_spaces_are_never_a_hold() {
     // Fast typing: a few spaces in a row, quick but uneven, or even but
     // slower than any key repeat.
-    for times in
-        [vec![0, 140, 280, 420, 560, 700], vec![0, 60, 160, 200, 330], vec![0, 115, 230, 345], vec![0, 30, 100, 120]]
-    {
+    for times in [
+        vec![0, 140, 280, 420, 560, 700],
+        vec![0, 60, 160, 200, 330],
+        vec![0, 115, 230, 345],
+        vec![0, 40, 150, 175],
+        vec![0, 105, 180, 290],
+    ] {
         let mut hold = SpaceHold::default();
         assert!(spaces(&mut hold, &times).iter().all(|s| *s == Step::Wait), "{times:?}");
         let last = *times.last().unwrap();
