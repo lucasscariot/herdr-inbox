@@ -1,2 +1,0 @@
-#!/bin/sh
-exec env HERDR_INBOX_MODE=1 "$HOME/.local/share/herdr-inbox/bin/herdr" "$@"

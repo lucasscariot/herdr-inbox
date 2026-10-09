@@ -1,7 +1,6 @@
 # Contributing
 
 Herdr Inbox is a Rust binary (`src/`) that talks to a running Herdr server.
-The original Python plugin lives in `legacy/` with its own guide.
 
 ## Build and run
 
