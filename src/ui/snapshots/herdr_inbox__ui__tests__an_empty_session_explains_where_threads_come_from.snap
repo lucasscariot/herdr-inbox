@@ -6,19 +6,19 @@ expression: "text(&render(&app, at(0)))"
  0 threads                       │
   +  New thread               n  │
                                  │
- No agent threads yet.           │
- Start one in Herdr; it shows up │
- here.                           │
+ No agent threads yet.           │                         ⢀⡀
+ Start one in Herdr; it shows up │                    ⢀⡴⠚⠉⠉⠁⠉⠉⠉⠉⠒⠲⠤⣄⡀
+ here.                           │                    ⢸             ⠉⠑⠢⣄⡀
+                                 │                    ⠸⡄          ⢀⣀    ⠉⠲⢄
+                                 │                     ⠙⢄       ⢀⣾⣿⣿⣗⠄     ⠙⢦⡀
+                                 │                      ⠈⠳⣄     ⠘⢿⢟⠟⠕⠁       ⠑⣄
+                                 │                         ⠑⠦⣀    ⠁⠁⠁         ⠘⡆
+                                 │                           ⠈⠙⠢⢄⣀             ⡇
+                                 │                               ⠈⠙⠒⠦⠤⣀⣀⣀⣀⢀⣀⣀⡤⠞⠁
+                                 │                                       ⠈⠁
+                                 │
                                  │
                                  │
                                  │       Agent threads you start in Herdr appear on the left.
-                                 │
-                                 │
-                                 │
-                                 │
-                                 │
-                                 │
-                                 │
-                                 │
                                  │
   THREADS  ↵ open  j/k move  n new  x archive  tab agent  q quit

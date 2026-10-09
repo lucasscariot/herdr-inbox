@@ -1,6 +1,6 @@
 //! Drawing. Pure: reads the app and the palette, writes a frame.
 
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -10,8 +10,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Connection, Focus, NoticeKind, RowKind, StreamState, TAKEN_OVER};
+use crate::app::{App, Connection, Focus, LAUNCH_PREFIX, NoticeKind, RowKind, StreamState, TAKEN_OVER};
 use crate::herdr::types::AgentStatus;
+use crate::orbit::{self, Ink, Link};
 use crate::theme::Palette;
 use crate::threads::{Group, Thread};
 
@@ -27,9 +28,9 @@ pub fn draw(frame: &mut Frame, app: &App, palette: &Palette, now: SystemTime) {
             sidebar(buf, app, palette, now);
             separator(buf, app, palette);
             let cursor = if app.focus == Focus::Composer {
-                composer::draw(buf, app, app.layout.terminal, palette).cursor
+                composer::draw(buf, app, app.layout.terminal, palette, now).cursor
             } else {
-                terminal(buf, app, palette);
+                terminal(buf, app, palette, now);
                 match &app.reply {
                     Some(reply) => reply_box(buf, app, reply, palette),
                     None => cursor(app),
@@ -614,7 +615,7 @@ fn separator(buf: &mut Buffer, app: &App, palette: &Palette) {
     }
 }
 
-fn terminal(buf: &mut Buffer, app: &App, palette: &Palette) {
+fn terminal(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     let area = app.layout.terminal;
     if area.width == 0 || area.height == 0 {
         return;
@@ -628,7 +629,13 @@ fn terminal(buf: &mut Buffer, app: &App, palette: &Palette) {
             _ if app.threads.is_empty() => "Agent threads you start in Herdr appear on the left.",
             _ => "Pick a thread on the left and press Enter.",
         };
-        centered(buf, area, &[Line::styled(message, Style::new().fg(palette.overlay0))]);
+        let message = [Line::styled(message, Style::new().fg(palette.overlay0))];
+        // The orbit above the message, both centred, when there is room.
+        let room = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(3));
+        match orbit_in(buf, app, room, palette, now) {
+            Some(drawn) => centered(buf, Rect::new(area.x, drawn.bottom(), area.width, 1), &message),
+            None => centered(buf, area, &message),
+        }
         return;
     };
     open.screen.render(area, buf);
@@ -640,6 +647,51 @@ fn terminal(buf: &mut Buffer, app: &App, palette: &Palette) {
         StreamState::Closed { reason } => closed_card(buf, area, reason.as_deref(), palette),
         _ => {}
     }
+}
+
+/// The orbit as the app sees it: a ring per machine, a bead per thread.
+pub fn orbit_fleet(app: &App) -> orbit::Fleet {
+    let rings = app
+        .machines
+        .iter()
+        .map(|machine| {
+            let link = match machine.connection {
+                Connection::Live => Link::Live,
+                Connection::Connecting | Connection::Starting(_) => Link::Connecting,
+                Connection::NoServer | Connection::Lost(_) => Link::Down,
+            };
+            // Ordered by id, so a bead keeps its place when its status, and
+            // with it the list order, changes.
+            let mut threads: Vec<&Thread> =
+                app.threads.iter().filter(|t| t.machine_id == machine.id && !t.id.starts_with(LAUNCH_PREFIX)).collect();
+            threads.sort_by(|a, b| a.id.cmp(&b.id));
+            orbit::Ring { link, beads: threads.iter().map(|t| t.status).collect() }
+        })
+        .collect();
+    orbit::Fleet { rings }
+}
+
+/// Draws the orbit centred in `area` if it fits there, and says where.
+fn orbit_in(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: SystemTime) -> Option<Rect> {
+    let (cols, rows) = orbit::fit(area.width, area.height)?;
+    let at = Rect::new(area.x + (area.width - cols) / 2, area.y + (area.height - rows) / 2, cols, rows);
+    let millis = now.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let frame = orbit::render(&orbit_fleet(app), millis, cols, rows);
+    for (index, cell) in frame.iter().enumerate() {
+        let Some(cell) = cell else { continue };
+        let (x, y) = (at.x + index as u16 % cols, at.y + index as u16 / cols);
+        let style = match cell.ink {
+            Ink::Core => Style::new().fg(palette.accent).add_modifier(Modifier::BOLD),
+            Ink::Bead(status) => Style::new().fg(status_color(status, palette)),
+            Ink::Ring { front: false, .. } => Style::new().fg(palette.surface1),
+            Ink::Ring { link: Link::Down, front: true } => Style::new().fg(palette.red),
+            Ink::Ring { front: true, .. } => Style::new().fg(palette.overlay0),
+        };
+        if let Some(target) = buf.cell_mut((x, y)) {
+            target.set_char(cell.glyph).set_style(style);
+        }
+    }
+    Some(at)
 }
 
 fn closed_card(buf: &mut Buffer, area: Rect, reason: Option<&str>, palette: &Palette) {

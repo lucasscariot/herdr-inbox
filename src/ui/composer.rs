@@ -6,21 +6,26 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 use unicode_width::UnicodeWidthStr;
 
-use super::{clip, fill, split_line};
+use std::time::SystemTime;
+
+use super::{clip, fill, orbit_in, split_line};
 use crate::app::{App, Field, LaunchState};
+use crate::orbit;
 use crate::theme::Palette;
 
 /// Rows of the task box's text area, before it grows with the task.
 const TASK_MIN_ROWS: u16 = 3;
 const TASK_MAX_ROWS: u16 = 8;
 const LABEL_WIDTH: u16 = 11;
+/// The orbit above the task stays small enough to keep the task near the top.
+const ORBIT_MAX_ROWS: u16 = 14;
 
 /// Where things landed, for the cursor.
 pub struct Drawn {
     pub cursor: Option<(u16, u16)>,
 }
 
-pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn {
+pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: SystemTime) -> Drawn {
     fill(buf, area, Style::new());
     if area.width < 20 || area.height < 8 {
         split_line(
@@ -33,12 +38,10 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
         );
         return Drawn { cursor: None };
     }
-    let ctx = app.composer_context();
-    let composer = &app.composer;
     let x = area.x + 2;
     let width = area.width.saturating_sub(4);
     let dim = Style::new().fg(palette.overlay0);
-    let mut y = area.y + 1;
+    let y = area.y + 1;
 
     // Title and what discovery is doing.
     let scanning: Vec<String> =
@@ -56,7 +59,36 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
         &[("New thread".into(), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD))],
         &status,
     );
-    y += 2;
+
+    // The orbit sits between the title and the task, in whatever room the
+    // rest leaves: lay the rest out once off screen to measure it.
+    let top = y + 2;
+    let mut scratch = Buffer::empty(area);
+    let height = body(&mut scratch, app, area, top, palette).bottom - top;
+    let spare = area.bottom().saturating_sub(top + height);
+    // A blank row under the orbit, and one at the bottom of the screen.
+    let top = match orbit::fit(area.width, spare.saturating_sub(2).min(ORBIT_MAX_ROWS)) {
+        Some((_, rows)) => {
+            orbit_in(buf, app, Rect::new(area.x, top, area.width, rows), palette, now);
+            top + rows + 1
+        }
+        None => top,
+    };
+    body(buf, app, area, top, palette).drawn
+}
+
+/// The composer under its title, from row `y` down, and the row it ended on.
+struct Body {
+    drawn: Drawn,
+    bottom: u16,
+}
+
+fn body(buf: &mut Buffer, app: &App, area: Rect, mut y: u16, palette: &Palette) -> Body {
+    let ctx = app.composer_context();
+    let composer = &app.composer;
+    let x = area.x + 2;
+    let width = area.width.saturating_sub(4);
+    let dim = Style::new().fg(palette.overlay0);
     split_line(buf, x, y, width, &[("What should we build?".into(), Style::new().fg(palette.subtext0))], &[]);
     y += 1;
 
@@ -243,5 +275,5 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
             );
         }
     }
-    Drawn { cursor }
+    Body { drawn: Drawn { cursor }, bottom: y.min(area.bottom()) }
 }

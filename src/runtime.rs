@@ -38,6 +38,8 @@ use crate::threads;
 const TICK: Duration = Duration::from_millis(500);
 /// The shortest time between two draws while events stream in.
 const FRAME: Duration = Duration::from_millis(16);
+/// How often the orbit moves while it is on screen.
+const ANIMATION: Duration = Duration::from_millis(100);
 
 pub fn run(options: Options) -> anyhow::Result<()> {
     let env = SocketEnv::from_process();
@@ -189,7 +191,11 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
             last_draw = Instant::now();
             dirty = false;
         }
-        let timeout = if dirty { FRAME.saturating_sub(last_draw.elapsed()) } else { TICK };
+        let timeout = match (dirty, app.animating()) {
+            (true, _) => FRAME.saturating_sub(last_draw.elapsed()),
+            (false, true) => ANIMATION,
+            (false, false) => TICK,
+        };
         let input = match rx.recv_timeout(timeout) {
             Ok(input) => input,
             Err(RecvTimeoutError::Timeout) => {

@@ -35,6 +35,10 @@ never changes it.
   (`e`), and failed launches as rows to retry or dismiss (`d`).
 - The plugin's remembered choices, presets, history and dictation keys are
   copied on first start.
+- The orbit, the inbox's logo: a turning armillary sphere drawn in Braille
+  above the composer's task and when no thread is open. Each ring is a
+  machine and each bead a thread in its status colour; the core breathes
+  while a thread needs input. It animates only while on screen.
 - Prebuilt binaries for Linux and macOS on every release, and a one-line
   installer that checks their SHA-256.
 

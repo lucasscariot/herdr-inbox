@@ -797,6 +797,12 @@ impl App {
         self.machines.len() == 1
     }
 
+    /// Whether the screen shows the orbit, which moves on its own and so
+    /// needs frames without any input.
+    pub fn animating(&self) -> bool {
+        !self.needs_server_screen() && (self.focus == Focus::Composer || self.open.is_none())
+    }
+
     pub fn needs_server_screen(&self) -> bool {
         self.local_only() && matches!(self.local().connection, Connection::NoServer | Connection::Starting(_))
     }
