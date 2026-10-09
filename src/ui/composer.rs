@@ -164,10 +164,11 @@ fn body(buf: &mut Buffer, app: &App, area: Rect, mut y: u16, palette: &Palette) 
     y += 1;
     if y < area.bottom() {
         let key = Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD);
+        let dictate = if app.config.speech.space_hold == Some(false) { "⌃T" } else { "hold ␣" };
         let hints = [
             ("↵", "send"),
             ("⌃S", "send & keep"),
-            ("⌃T", "dictate"),
+            (dictate, "dictate"),
             ("⇥", "fields"),
             ("F7", "presets"),
             ("F10", "voice"),

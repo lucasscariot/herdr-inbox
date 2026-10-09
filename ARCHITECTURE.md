@@ -37,6 +37,7 @@ public interfaces.
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
 | `keys` | Encodes key presses as xterm bytes for the pane, honouring its cursor-key and bracketed-paste modes. |
 | `git` | Reads repository name and branch from `.git` files, without running git. |
+| `hold` | Telling a held space bar from typed spaces by key-repeat timing. Pure. |
 | `orbit` | The orbit logo: the fleet as rings and beads, rendered to Braille cells. Pure, a function of the time. |
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
 | `ui` | Pure drawing from `&App`. |

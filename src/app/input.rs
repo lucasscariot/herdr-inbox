@@ -12,6 +12,7 @@ use ratatui::crossterm::event::{
 
 use super::{App, Connection, Effect, Field, Focus, Pick, StreamState};
 use crate::herdr::terminal::{Control, MouseAction, MouseButton as PaneButton, ScrollDirection};
+use crate::hold::Step;
 use crate::keys;
 
 /// Lines per mouse wheel notch.
@@ -21,6 +22,42 @@ pub(super) fn key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut V
     if key.kind == KeyEventKind::Release {
         return;
     }
+    // A space may be the start of a held bar: it waits until that is clear.
+    if is_space(key) && (app.hold.held() || app.space_holds()) {
+        match app.hold.space(now) {
+            Step::Hold(typed) => {
+                type_spaces(app, typed, now, effects);
+                app.hold_space(now, effects);
+            }
+            Step::Type(typed) => type_spaces(app, typed, now, effects),
+            Step::Wait | Step::Release => {}
+        }
+        return;
+    }
+    let waiting = app.hold.interrupt();
+    type_spaces(app, waiting, now, effects);
+    dispatch(app, key, now, effects);
+}
+
+fn is_space(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char(' ') && key.modifiers.is_empty()
+}
+
+/// Types spaces that turned out to be typed, not held, where a space would
+/// have gone.
+pub(super) fn type_spaces(app: &mut App, count: usize, now: SystemTime, effects: &mut Vec<Effect>) {
+    for _ in 0..count {
+        dispatch(app, KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), now, effects);
+    }
+}
+
+/// Types any spaces still waiting, before something else arrives.
+pub(super) fn settle_spaces(app: &mut App, now: SystemTime, effects: &mut Vec<Effect>) {
+    let waiting = app.hold.interrupt();
+    type_spaces(app, waiting, now, effects);
+}
+
+fn dispatch(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     if app.menu.is_some() {
         return app.menu_key(key, effects);
     }

@@ -19,6 +19,7 @@ fn saved_credentials_win_over_the_config_and_keys_merge() {
         language: Some("fr".into()),
         model: None,
         keys: BTreeMap::from([("openai".into(), "sk-config".into()), ("groq".into(), "gsk-config".into())]),
+        space_hold: None,
     };
     let saved = Credentials {
         backend: "groq".into(),

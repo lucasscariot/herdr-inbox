@@ -30,6 +30,8 @@ pub struct SpeechConfig {
     pub model: Option<String>,
     #[serde(default)]
     pub keys: BTreeMap<String, String>,
+    /// Holding the space bar dictates; `false` keeps space for typing only.
+    pub space_hold: Option<bool>,
 }
 
 /// What the dictation menu saved: `credentials.json`, in the legacy format.

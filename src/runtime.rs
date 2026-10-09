@@ -34,12 +34,8 @@ use crate::state::State;
 use crate::theme;
 use crate::threads;
 
-/// How often the screen refreshes on its own, for ages and notices.
-const TICK: Duration = Duration::from_millis(500);
 /// The shortest time between two draws while events stream in.
 const FRAME: Duration = Duration::from_millis(16);
-/// How often the orbit moves while it is on screen.
-const ANIMATION: Duration = Duration::from_millis(100);
 
 pub fn run(options: Options) -> anyhow::Result<()> {
     let env = SocketEnv::from_process();
@@ -184,6 +180,7 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
     let mut session: Option<(u64, Session)> = None;
     let mut last_draw = Instant::now() - FRAME;
     let mut dirty = true;
+    let mut last_tick = Instant::now();
     loop {
         if dirty && last_draw.elapsed() >= FRAME {
             let now = SystemTime::now();
@@ -191,24 +188,21 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
             last_draw = Instant::now();
             dirty = false;
         }
-        let timeout = match (dirty, app.animating()) {
-            (true, _) => FRAME.saturating_sub(last_draw.elapsed()),
-            (false, true) => ANIMATION,
-            (false, false) => TICK,
-        };
-        let input = match rx.recv_timeout(timeout) {
-            Ok(input) => input,
-            Err(RecvTimeoutError::Timeout) => {
-                if !dirty {
-                    app.update(Input::Tick, SystemTime::now());
-                    dirty = true;
-                }
-                continue;
-            }
+        let tick_in = app.tick_every().saturating_sub(last_tick.elapsed());
+        let timeout = if dirty { FRAME.saturating_sub(last_draw.elapsed()).min(tick_in) } else { tick_in };
+        let mut inputs = match rx.recv_timeout(timeout) {
+            // Handle everything already queued before drawing again.
+            Ok(input) => std::iter::once(input).chain(drain(&rx)).collect(),
+            Err(RecvTimeoutError::Timeout) => Vec::new(),
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
         };
-        // Handle everything already queued before drawing again.
-        for input in std::iter::once(input).chain(drain(&rx)) {
+        // Ticks run on the app's schedule however busy the inputs are: a
+        // waiting space or a released space bar must not wait for quiet.
+        if last_tick.elapsed() >= app.tick_every() {
+            inputs.push(Input::Tick);
+            last_tick = Instant::now();
+        }
+        for input in inputs {
             let effects = app.update(input, SystemTime::now());
             for effect in effects {
                 if !perform(effect, &mut session, herdr, &fleet, &work) {
@@ -219,8 +213,8 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
                     return Ok(());
                 }
             }
+            dirty = true;
         }
-        dirty = true;
     }
 }
 

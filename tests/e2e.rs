@@ -236,6 +236,13 @@ impl Inbox {
         }
     }
 
+    /// Writes keys with no pause after, for timing-sensitive input.
+    fn press(&mut self, bytes: &str) {
+        let mut writer = self.writer.lock().unwrap();
+        writer.write_all(bytes.as_bytes()).expect("write keys");
+        writer.flush().expect("flush keys");
+    }
+
     fn keys(&mut self, bytes: &str) {
         let mut writer = self.writer.lock().unwrap();
         writer.write_all(bytes.as_bytes()).expect("write keys");
@@ -503,4 +510,48 @@ fn without_a_server_the_inbox_offers_to_start_one() {
     inbox.keys("\r");
     inbox.wait_for_text("No agent threads yet.");
     assert!(sandbox.socket().exists());
+}
+
+#[test]
+fn holding_space_dictates_into_the_composer_and_typed_spaces_still_type() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    write_executable(
+        &root.join("bin/pw-record"),
+        "#!/bin/sh\nfor out; do :; done\ntrap 'exit 0' INT\nprintf 'RIFF\\044\\000\\000\\000WAVEfmt \\020\\000\\000\\000\\001\\000\\001\\000\\200>\\000\\000\\000}\\000\\000\\002\\000\\020\\000data\\000\\000\\000\\000' > \"$out\"\nhead -c 64000 /dev/urandom >> \"$out\"\nwhile true; do sleep 0.05; done\n",
+    );
+    let config = "[speech]\ncommand = \"printf 'the login loop' # {file}\"\n";
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
+    std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 30);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("What should we build?");
+    // Typed at a brisk pace, spaces included.
+    for key in "fix it".chars() {
+        inbox.press(&key.to_string());
+        std::thread::sleep(Duration::from_millis(90));
+    }
+    inbox.wait_for_text("│ fix it ");
+    // Hold the bar the way a keyboard repeats it: a pause, then 40 a second.
+    inbox.press(" ");
+    std::thread::sleep(Duration::from_millis(250));
+    let held = Instant::now();
+    let (mut recording, mut hint) = (false, false);
+    while held.elapsed() < Duration::from_millis(1_500) {
+        inbox.press(" ");
+        let text = inbox.text();
+        recording |= text.contains("● REC");
+        hint |= text.contains("release type");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(recording && hint, "recording while held; screen:\n{}", inbox.text());
+    // Let go: the words are typed after a single space, unsent.
+    inbox.wait_for_text("│ fix it the login loop ");
+    inbox.wait_until_gone("● REC");
+    inbox.wait_for_text("What should we build?");
 }
