@@ -10,10 +10,11 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use super::{App, Connection, Effect, Field, Focus, Pick, StreamState};
+use super::{App, Connection, Effect, Field, Focus, NoticeKind, Pick, StreamState};
+use crate::clipboard::Clip;
 use crate::herdr::terminal::{Control, MouseAction, MouseButton as PaneButton, ScrollDirection};
 use crate::hold::Step;
-use crate::keys;
+use crate::{images, keys};
 
 /// Lines per mouse wheel notch.
 const WHEEL_LINES: u16 = 3;
@@ -154,6 +155,9 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
         KeyCode::Char('e') if ctrl => editor.end(),
         KeyCode::Char('u') if ctrl => editor.clear(),
         KeyCode::Char('w') if ctrl => editor.delete_word(),
+        // Ghostty hands over Ctrl+Shift+V (the desktop's paste) as a key when
+        // the clipboard holds an image and no text.
+        KeyCode::Char('v' | 'V') if ctrl => effects.push(Effect::ReadClipboard),
         KeyCode::Backspace if alt || ctrl => editor.delete_word(),
         KeyCode::Char(c) if !ctrl => {
             let mut buffer = [0; 4];
@@ -306,7 +310,7 @@ fn terminal_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
 
 fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     if app.reply.is_some() {
-        return reply_key(app, key, effects);
+        return reply_key(app, key, now, effects);
     }
     if app.filtering {
         return filter_key(app, key);
@@ -412,10 +416,10 @@ fn start_reply(app: &mut App, now: SystemTime) {
         );
         return;
     }
-    app.reply = Some(super::Reply { thread: thread.id, editor: crate::editor::Editor::default() });
+    app.reply = Some(super::Reply::new(thread.id));
 }
 
-fn reply_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
+fn reply_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     let Some(reply) = app.reply.as_mut() else {
         return;
     };
@@ -429,20 +433,22 @@ fn reply_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
             if reply.editor.is_blank() {
                 return;
             }
-            let text = reply.editor.text().trim().to_string();
+            let text = reply.message();
             let id = reply.thread.clone();
             app.reply = None;
-            if let Some(thread) = app.thread(&id) {
+            if let Some(thread) = app.thread(&id).cloned() {
+                app.warn_if_images_stay_here(&thread.machine_id, &text, now);
                 effects.push(Effect::Prompt {
-                    machine: thread.machine_id.clone(),
-                    pane_id: thread.pane_id.clone(),
-                    title: thread.title.clone(),
+                    machine: thread.machine_id,
+                    pane_id: thread.pane_id,
+                    title: thread.title,
                     text,
                 });
             }
         }
         KeyCode::Char('w') if ctrl => reply.editor.delete_word(),
         KeyCode::Char('u') if ctrl => reply.editor.clear(),
+        KeyCode::Char('v' | 'V') if ctrl => effects.push(Effect::ReadClipboard),
         KeyCode::Char(c) if !ctrl => {
             let mut buffer = [0; 4];
             reply.editor.insert(c.encode_utf8(&mut buffer));
@@ -514,6 +520,25 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
             generation: open.generation,
             control: Control::Input(keys::paste(text, open.screen.modes())),
         });
+    }
+}
+
+/// The clipboard read for Ctrl+V: an image joins the reply or the task being
+/// written as `[Image #N]`, text is pasted there like any paste.
+pub(super) fn clipboard(app: &mut App, result: Result<Clip, String>, now: SystemTime, effects: &mut Vec<Effect>) {
+    let writing_task =
+        app.focus == Focus::Composer && app.composer.picker.is_none() && app.composer.field == Field::Task;
+    if app.reply.is_none() && !writing_task {
+        return;
+    }
+    match result {
+        Ok(Clip::Image(path)) => match app.reply.as_mut() {
+            Some(reply) => images::attach(&mut reply.editor, &mut reply.images, path),
+            None => images::attach(&mut app.composer.task, &mut app.composer.images, path),
+        },
+        Ok(Clip::Text(text)) => paste(app, &text, effects),
+        Ok(Clip::Empty) => app.notify("The clipboard is empty.", NoticeKind::Info, now),
+        Err(error) => app.notify(error, NoticeKind::Error, now),
     }
 }
 

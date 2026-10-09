@@ -257,7 +257,7 @@ impl App {
                             machine: thread.machine_id.clone(),
                             pane_id: thread.pane_id.clone(),
                             title: thread.title.clone(),
-                            text: reply.editor.text().trim().to_string(),
+                            text: reply.message(),
                         });
                     }
                 }

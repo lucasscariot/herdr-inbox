@@ -22,6 +22,8 @@ const STARTUP_BLOCKED: &str = "blocked during startup";
 /// Herdr accepted the prompt but saw no state change within its window.
 const PROMPT_STALLED: &str = "agent_prompt_stalled";
 const TITLE_LIMIT: usize = 72;
+/// How long an agent gets to attach a pasted image before the next paste.
+const IMAGE_SETTLE: Duration = Duration::from_millis(400);
 const BRANCH_SLUG_LIMIT: usize = 32;
 const FILLER: &[&str] = &["a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "with", "please", "can", "you"];
 
@@ -109,6 +111,12 @@ pub struct Plan {
     pub start_timeout_ms: u64,
 }
 
+/// The task without its pasted images, for titles and branch names.
+pub fn task_words(task: &str) -> String {
+    let words = crate::images::strip(task);
+    if words.is_empty() { "image".into() } else { words }
+}
+
 /// A thread title: the task on one line, at most 72 characters.
 pub fn task_title(task: &str) -> String {
     let collapsed = task.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -187,6 +195,7 @@ pub fn plan(
     if task.is_empty() {
         return Err("Write a task before launching.".into());
     }
+    let words = task_words(task);
     let (workspace, branch, cwd) = match &request.workspace {
         WorkspaceChoice::NewWorktree { branch } => {
             let taken = request.project.taken_branches();
@@ -199,7 +208,7 @@ pub fn plan(
                     }
                     named.to_string()
                 }
-                None => branch_name(task, &taken, &settings.branch_prefix),
+                None => branch_name(&words, &taken, &settings.branch_prefix),
             };
             validate_branch(&branch)?;
             ("worktree", branch, String::new())
@@ -230,7 +239,7 @@ pub fn plan(
         args = strip_flag(args, &[flag]);
         args.extend([flag.to_string(), level.clone()]);
     }
-    let title = task_title(task);
+    let title = task_title(&words);
     let slug: String = title
         .to_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -492,19 +501,9 @@ fn submit(runner: &Runner, record: &mut Record, journal: &dyn Fn(&Record)) -> Re
     let pane = record.pane_id.clone().ok_or("the launch has no pane")?;
     record.stage = Stage::Submitting;
     journal(record);
-    let prompt = [
-        "agent",
-        "prompt",
-        &pane,
-        &record.task,
-        "--wait",
-        "--until",
-        "working",
-        "--until",
-        "blocked",
-        "--timeout",
-        "15000",
-    ];
+    let last = paste_leading(runner, &pane, &record.task)?;
+    let prompt =
+        ["agent", "prompt", &pane, &last, "--wait", "--until", "working", "--until", "blocked", "--timeout", "15000"];
     match herdr(runner, &prompt, Duration::from_secs(30)) {
         Ok(_) => {}
         // Herdr typed the task but saw no state change in time: a fast answer
@@ -517,11 +516,42 @@ fn submit(runner: &Runner, record: &mut Record, journal: &dyn Fn(&Record)) -> Re
     Ok(())
 }
 
+/// Pastes all of a text with saved images but its last part, each part on its
+/// own, and returns that last part for `agent prompt` to paste and submit. An
+/// image pasted alone arrives as a lone path, which Claude Code and Codex
+/// turn into an attachment, like their own Ctrl+V. Text without images is
+/// returned untouched.
+fn paste_leading(runner: &Runner, pane: &str, text: &str) -> Result<String, String> {
+    use crate::images::Segment;
+    let segments = crate::images::segments(text);
+    if !segments.iter().any(|s| matches!(s, Segment::Image(_))) {
+        return Ok(text.to_string());
+    }
+    let Some((last, leading)) = segments.split_last() else {
+        return Ok(text.to_string());
+    };
+    let part = |segment: &Segment| match *segment {
+        Segment::Text(part) | Segment::Image(part) => part.to_string(),
+    };
+    let bracketed = crate::keys::Modes { bracketed_paste: true, ..Default::default() };
+    for segment in leading {
+        let paste = String::from_utf8_lossy(&crate::keys::paste(&part(segment), bracketed)).into_owned();
+        herdr(runner, &["pane", "send-text", pane, &paste], Duration::from_secs(15)).map_err(|e| e.message)?;
+        if matches!(segment, Segment::Image(_)) {
+            // Claude Code attaches an image in the background: text pasted
+            // right after it would land before its placeholder.
+            std::thread::sleep(IMAGE_SETTLE);
+        }
+    }
+    Ok(part(last))
+}
+
 /// Sends text to an agent and waits until it reacts. `Ok(true)` means Herdr
 /// typed it but saw no reaction in time.
 pub fn prompt(runner: &Runner, pane: &str, text: &str) -> Result<bool, String> {
+    let last = paste_leading(runner, pane, text)?;
     let args =
-        ["agent", "prompt", pane, text, "--wait", "--until", "working", "--until", "blocked", "--timeout", "8000"];
+        ["agent", "prompt", pane, &last, "--wait", "--until", "working", "--until", "blocked", "--timeout", "8000"];
     match herdr(runner, &args, Duration::from_secs(20)) {
         Ok(_) => Ok(false),
         Err(error) if error.code.as_deref() == Some(PROMPT_STALLED) => Ok(true),

@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod cli;
+pub mod clipboard;
 pub mod config;
 pub mod discovery;
 pub mod editor;
@@ -10,6 +11,7 @@ pub mod fuzzy;
 pub mod git;
 pub mod herdr;
 pub mod hold;
+pub mod images;
 pub mod keys;
 pub mod launch;
 pub mod link;

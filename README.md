@@ -118,6 +118,7 @@ the background and its progress shows under **Launches**.
 | `Tab`, `Shift+Tab` | Move between the task and the choices |
 | `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
 | Hold `Space`, `Ctrl+T` | Dictate the task |
+| `Ctrl+V`, the desktop's paste | Paste a screenshot as `[Image #1]` |
 | `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
 | `Ctrl+D` | Save the harness, model and thinking level as a preset |
 | `F5` | Rescan projects and model catalogs |
@@ -138,6 +139,14 @@ the list does not know can still be used: type its id and pick **Use …**.
 - **Workspace** is a new git worktree by default, its branch named after the
   task (shown as `⎇ branch`), or one you name, or an existing checkout.
   Herdr creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.
+
+**Screenshots.** Paste an image into the task or a reply (`r`) and it shows
+as `[Image #1]`. It is saved under `~/.cache/herdr-inbox/images` (kept 30
+days) and reaches the agent the way its own paste would: Claude Code and Codex
+attach it, other agents get its path. In an open thread the agent reads the
+clipboard itself. Images work for threads on this machine; on a saved SSH
+machine the agent would get a path it cannot open. On Linux this needs
+`wl-clipboard` (Wayland) or `xclip` (X11).
 
 The composer remembers per project which machine, harness and workspace mode
 you used, and per machine and harness which model and thinking level, so

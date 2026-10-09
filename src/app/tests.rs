@@ -1453,6 +1453,18 @@ mod conveniences {
     }
 
     #[test]
+    fn e_brings_a_launchs_images_back_as_placeholders() {
+        let (mut app, _) = loaded();
+        let mut launch = record("a1", Some("w2:p1"), Stage::Submitted);
+        launch.task = "fix /h/.cache/herdr-inbox/images/image-9.png now".into();
+        app.update(Input::Journals(vec![launch]), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.task.text(), "fix [Image #1] now");
+        assert_eq!(app.composer.images, ["/h/.cache/herdr-inbox/images/image-9.png"]);
+    }
+
+    #[test]
     fn e_fills_the_composer_from_the_threads_launch() {
         let (mut app, _) = loaded();
         app.update(Input::Journals(vec![record("a1", Some("w2:p1"), Stage::Submitted)]), at(1));
@@ -2119,5 +2131,201 @@ mod space_bar {
         assert_eq!(config.speech.space_hold, Some(false));
         let config: crate::config::Config = toml::from_str("[speech]\nlanguage = \"fr\"\n").unwrap();
         assert_eq!(config.speech.space_hold, None, "on by default");
+    }
+}
+
+mod pasted_images {
+    use super::*;
+    use crate::clipboard::Clip;
+    use crate::discovery::{CheckoutEntry, Inventory, Project};
+    use std::collections::BTreeMap;
+
+    const A: &str = "/home/u/.cache/herdr-inbox/images/image-1.png";
+    const B: &str = "/home/u/.cache/herdr-inbox/images/image-2.png";
+
+    fn composing(history: Vec<String>) -> App {
+        let (app, _) = loaded();
+        let mut app = app.with_memory(Vec::new(), history);
+        app.update(press(KeyCode::Char('n')), at(1));
+        let inventory = Inventory {
+            projects: vec![Project {
+                name: "cockpit".into(),
+                path: "/w/cockpit".into(),
+                branch: "main".into(),
+                checkouts: vec![CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false }],
+            }],
+            harnesses: vec!["claude".into()],
+            models: BTreeMap::new(),
+            models_at: 0,
+        };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        app
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.update(press(KeyCode::Char(c)), at(1));
+        }
+    }
+
+    fn image(path: &str) -> Input {
+        Input::Clipboard(Ok(Clip::Image(path.into())))
+    }
+
+    fn launched_task(effects: &[Effect]) -> String {
+        effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Launch { plan, .. } => Some(plan.record.task.clone()),
+                _ => None,
+            })
+            .expect("a launch")
+    }
+
+    #[test]
+    fn ctrl_v_and_the_desktop_paste_read_the_clipboard_from_the_task() {
+        let mut app = composing(Vec::new());
+        type_text(&mut app, "hi");
+        for key in [
+            press_with(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            // Ghostty hands Ctrl+Shift+V over as a key when only an image is copied.
+            press_with(KeyCode::Char('V'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(app.update(key, at(1)), vec![Effect::ReadClipboard]);
+        }
+        assert_eq!(app.composer.task.text(), "hi", "nothing is typed while the clipboard is read");
+    }
+
+    #[test]
+    fn a_pasted_image_shows_as_a_placeholder_and_is_sent_as_its_path() {
+        let mut app = composing(Vec::new());
+        type_text(&mut app, "why");
+        app.update(image(A), at(2));
+        assert_eq!(app.composer.task.text(), "why [Image #1] ");
+        type_text(&mut app, "and");
+        app.update(image(B), at(2));
+        type_text(&mut app, "broken");
+        assert_eq!(app.composer.task.text(), "why [Image #1] and [Image #2] broken");
+        let effects = app.update(press(KeyCode::Enter), at(3));
+        let task = format!("why {A} and {B} broken");
+        assert_eq!(launched_task(&effects), task);
+        assert!(effects.contains(&Effect::SaveHistory(task)), "the history keeps the images");
+        assert_eq!(app.launches[0].title, "why and broken");
+        assert_eq!(app.composer.task.text(), "");
+        assert!(app.notice.is_none(), "images for this machine need no warning");
+    }
+
+    #[test]
+    fn numbering_restarts_once_no_placeholder_is_left() {
+        let mut app = composing(Vec::new());
+        app.update(image(A), at(1));
+        app.update(press_with(KeyCode::Char('u'), KeyModifiers::CONTROL), at(1));
+        app.update(image(B), at(1));
+        assert_eq!(app.composer.task.text(), "[Image #1] ");
+        assert_eq!(app.composer.images, [B]);
+    }
+
+    #[test]
+    fn ctrl_s_keeps_the_images_for_the_next_launch() {
+        let mut app = composing(Vec::new());
+        app.update(image(A), at(1));
+        type_text(&mut app, "twice");
+        let first = app.update(press_with(KeyCode::Char('s'), KeyModifiers::CONTROL), at(2));
+        let second = app.update(press(KeyCode::Enter), at(3));
+        assert_eq!(launched_task(&first), format!("{A} twice"));
+        assert_eq!(launched_task(&second), format!("{A} twice"));
+    }
+
+    #[test]
+    fn the_history_brings_images_back_as_placeholders() {
+        let mut app = composing(vec![format!("{A} older task")]);
+        app.update(image(B), at(1));
+        type_text(&mut app, "draft");
+        app.update(press_with(KeyCode::Char('p'), KeyModifiers::CONTROL), at(1));
+        assert_eq!(app.composer.task.text(), "[Image #1] older task");
+        assert_eq!(app.composer.images, [A]);
+        app.update(press_with(KeyCode::Char('n'), KeyModifiers::CONTROL), at(1));
+        assert_eq!(app.composer.task.text(), "[Image #1] draft", "the draft keeps its own image");
+        let effects = app.update(press(KeyCode::Enter), at(2));
+        assert_eq!(launched_task(&effects), format!("{B} draft"));
+    }
+
+    #[test]
+    fn clipboard_text_is_pasted_and_problems_are_said() {
+        let mut app = composing(Vec::new());
+        app.update(Input::Clipboard(Ok(Clip::Text("copied\ntext".into()))), at(1));
+        assert_eq!(app.composer.task.text(), "copied\ntext");
+        app.update(Input::Clipboard(Ok(Clip::Empty)), at(1));
+        assert_eq!(app.notice.as_ref().unwrap().text, "The clipboard is empty.");
+        app.update(Input::Clipboard(Err("Install wl-clipboard to paste images.".into())), at(1));
+        let notice = app.notice.as_ref().unwrap();
+        assert_eq!(notice.text, "Install wl-clipboard to paste images.");
+        assert_eq!(notice.kind, NoticeKind::Error);
+        assert_eq!(app.composer.task.text(), "copied\ntext");
+    }
+
+    #[test]
+    fn a_clipboard_read_that_lands_after_leaving_is_dropped() {
+        let mut app = composing(Vec::new());
+        app.update(press(KeyCode::Esc), at(1));
+        assert!(app.update(image(A), at(1)).is_empty());
+        assert!(
+            app.update(Input::Clipboard(Ok(Clip::Text("ls\n".into()))), at(1)).is_empty(),
+            "never typed into an agent"
+        );
+        assert_eq!(app.composer.task.text(), "");
+        assert!(app.composer.images.is_empty());
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn a_reply_takes_images_too() {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        type_text(&mut app, "see");
+        let effects = app.update(press_with(KeyCode::Char('v'), KeyModifiers::CONTROL), at(1));
+        assert_eq!(effects, vec![Effect::ReadClipboard]);
+        app.update(image(A), at(1));
+        assert_eq!(app.reply.as_ref().unwrap().editor.text(), "see [Image #1] ");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(
+            effects,
+            vec![Effect::Prompt {
+                machine: LOCAL.into(),
+                pane_id: "w3:p1".into(),
+                title: "Docs".into(),
+                text: format!("see {A}"),
+            }]
+        );
+    }
+
+    #[test]
+    fn images_sent_to_another_machine_say_they_stay_here() {
+        let mut app = fleet();
+        app.cursor = Some("studio/w2:p1".into());
+        app.update(press(KeyCode::Char('r')), at(1));
+        app.update(image(A), at(1));
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert!(matches!(&effects[..], [Effect::Prompt { machine, text, .. }] if machine == "studio" && text == A));
+        let notice = app.notice.as_ref().expect("a warning");
+        assert_eq!(notice.text, "Pasted images stay on this machine: Mac Studio only gets their paths.");
+
+        app.notice = None;
+        app.cursor = Some("studio/w2:p1".into());
+        app.update(press(KeyCode::Char('r')), at(1));
+        type_text(&mut app, "no image");
+        app.update(press(KeyCode::Enter), at(1));
+        assert!(app.notice.is_none(), "plain text goes quietly");
+    }
+
+    #[test]
+    fn an_open_agent_still_gets_ctrl_v_itself() {
+        // Claude Code, Codex and Pi read the clipboard on Ctrl+V on their own.
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Enter), at(1));
+        let effects = app.update(press_with(KeyCode::Char('V'), KeyModifiers::CONTROL | KeyModifiers::SHIFT), at(1));
+        assert_eq!(effects, vec![Effect::Send { generation: 1, control: Control::Input(vec![0x16]) }]);
     }
 }
