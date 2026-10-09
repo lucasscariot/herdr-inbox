@@ -4,11 +4,15 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
+use std::collections::HashMap;
+
 use super::*;
+use crate::app::MachineInfo;
 use crate::app::{Input, StreamState};
 use crate::git::Checkout;
 use crate::herdr::terminal::{Frame, Message};
 use crate::herdr::types::{AgentInfo, SessionSnapshot};
+use crate::threads::LOCAL;
 
 fn at(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -35,29 +39,39 @@ fn agent(pane: &str, status: AgentStatus, title: &str, cwd: &str, kind: &str) ->
     }
 }
 
-fn checkout(path: &std::path::Path) -> Option<Checkout> {
-    let path = path.to_str()?;
-    let (repo, branch) = match path {
-        "/w/cockpit" => ("cockpit", "fix-login-redirect"),
-        "/w/api" => ("api", "main"),
-        "/w/site" => ("site", "feat/a-very-long-branch-name-that-will-not-fit"),
-        _ => return None,
-    };
-    Some(Checkout { repo: repo.into(), branch: Some(branch.into()), root: path.into() })
+fn checkouts() -> HashMap<String, Checkout> {
+    [
+        ("/w/cockpit", "cockpit", "fix-login-redirect"),
+        ("/w/api", "api", "main"),
+        ("/w/site", "site", "feat/a-very-long-branch-name-that-will-not-fit"),
+    ]
+    .into_iter()
+    .map(|(path, repo, branch)| {
+        (path.to_string(), Checkout { repo: repo.into(), branch: Some(branch.into()), root: path.into() })
+    })
+    .collect()
+}
+
+fn snapshot(machine: &str, agents: Vec<AgentInfo>) -> Input {
+    Input::Snapshot {
+        machine: machine.into(),
+        snapshot: SessionSnapshot { agents, ..SessionSnapshot::default() },
+        checkouts: checkouts(),
+    }
 }
 
 fn loaded(width: u16, height: u16) -> App {
-    let mut app = App::new(width, height, Box::new(checkout));
+    let mut app = App::new(width, height, vec![]);
     app.update(
-        Input::Snapshot(SessionSnapshot {
-            agents: vec![
+        snapshot(
+            LOCAL,
+            vec![
                 agent("w1:p1", AgentStatus::Blocked, "Fix the login redirect loop on mobile", "/w/cockpit", "claude"),
                 agent("w2:p1", AgentStatus::Working, "Add invoice export", "/w/api", "codex"),
                 agent("w3:p1", AgentStatus::Done, "Review navigation", "/w/site", "opencode"),
                 agent("w4:p1", AgentStatus::Idle, "lucas@host:~", "/tmp/scratch", "pi"),
             ],
-            ..SessionSnapshot::default()
-        }),
+        ),
         at(0),
     );
     app
@@ -165,13 +179,16 @@ fn long_titles_and_branches_are_clipped_with_an_ellipsis() {
 fn ages_show_once_a_change_was_seen() {
     let mut app = loaded(100, 24);
     app.update(
-        Input::Status(crate::herdr::types::AgentStatusChange {
-            pane_id: "w2:p1".into(),
-            agent_status: AgentStatus::Blocked,
-            agent: None,
-            display_agent: None,
-            title: None,
-        }),
+        Input::Status {
+            machine: LOCAL.into(),
+            change: crate::herdr::types::AgentStatusChange {
+                pane_id: "w2:p1".into(),
+                agent_status: AgentStatus::Blocked,
+                agent: None,
+                display_agent: None,
+                title: None,
+            },
+        },
         at(100),
     );
     let screen = text(&render(&app, at(100 + 125)));
@@ -265,22 +282,25 @@ fn notices_replace_nothing_but_the_right_of_the_status_bar() {
 
 #[test]
 fn an_empty_session_explains_where_threads_come_from() {
-    let mut app = App::new(100, 20, Box::new(|_| None));
-    app.update(Input::Snapshot(SessionSnapshot::default()), at(0));
+    let mut app = App::new(100, 20, vec![]);
+    app.update(snapshot(LOCAL, vec![]), at(0));
     insta::assert_snapshot!(text(&render(&app, at(0))));
 }
 
 #[test]
 fn without_a_server_the_screen_offers_to_start_one() {
-    let mut app = App::new(80, 12, Box::new(|_| None));
-    app.update(Input::Connection(Connection::NoServer), at(0));
+    let mut app = App::new(80, 12, vec![]);
+    app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
     insta::assert_snapshot!(text(&render(&app, at(0))));
 }
 
 #[test]
 fn a_lost_connection_is_visible_everywhere() {
     let mut app = loaded(100, 20);
-    app.update(Input::Connection(Connection::Lost("server closed the socket".into())), at(1));
+    app.update(
+        Input::Connection { machine: LOCAL.into(), connection: Connection::Lost("server closed the socket".into()) },
+        at(1),
+    );
     let screen = text(&render(&app, at(1)));
     assert!(screen.contains("reconnecting…"));
     assert!(screen.contains("Lost the connection to Herdr. Retrying…"));
@@ -293,15 +313,15 @@ fn narrow_and_tiny_windows_render_without_panicking() {
         let mut app = loaded(w, h);
         press(&mut app, KeyCode::Char('x'));
         let _ = render(&app, at(0));
-        app.update(Input::Connection(Connection::NoServer), at(0));
+        app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
         let _ = render(&app, at(0));
     }
 }
 
 #[test]
 fn centred_messages_wrap_instead_of_being_cut() {
-    let mut app = App::new(60, 12, Box::new(|_| None));
-    app.update(Input::Snapshot(SessionSnapshot::default()), at(0));
+    let mut app = App::new(60, 12, vec![]);
+    app.update(snapshot(LOCAL, vec![]), at(0));
     let screen = text(&render(&app, at(0)));
     let right: Vec<&str> = screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").trim()).collect();
     let message = right.iter().filter(|l| !l.is_empty()).copied().collect::<Vec<_>>().join(" ");
@@ -332,4 +352,58 @@ fn clip_respects_display_width() {
     assert_eq!(clip("hello", 0), "");
     assert_eq!(clip("日本語テキスト", 7), "日本語…");
     assert_eq!(clip("日本語", 6), "日本語");
+}
+
+fn fleet(width: u16, height: u16) -> App {
+    let mut app = App::new(
+        width,
+        height,
+        vec![
+            MachineInfo { id: "studio".into(), label: "Mac Studio".into() },
+            MachineInfo { id: "book".into(), label: "MacBook".into() },
+        ],
+    );
+    app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
+    app.update(
+        snapshot("studio", vec![agent("w1:p1", AgentStatus::Blocked, "Ship the release", "/w/api", "codex")]),
+        at(0),
+    );
+    app.update(Input::Connection { machine: "book".into(), connection: Connection::Lost("timed out".into()) }, at(0));
+    app
+}
+
+#[test]
+fn remote_threads_name_their_machine() {
+    let app = fleet(110, 16);
+    let screen = text(&render(&app, at(0)));
+    assert!(screen.contains("⎇ main · Mac Studio · Codex"), "{screen}");
+}
+
+#[test]
+fn the_status_bar_shows_every_machine_and_how_to_start_a_missing_local_server() {
+    let app = fleet(120, 16);
+    let terminal = render(&app, at(0));
+    let last = text(&terminal).lines().last().unwrap().to_string();
+    assert!(last.ends_with("○ Local s start  ● Mac Studio  ✗ MacBook"), "{last}");
+    let palette = Palette::default();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[find(&terminal, "● Mac Studio")].fg, palette.green);
+    assert_eq!(buffer[find(&terminal, "✗ MacBook")].fg, palette.red);
+    assert_eq!(buffer[find(&terminal, "○ Local")].fg, palette.red);
+}
+
+#[test]
+fn a_missing_local_server_is_not_a_full_screen_when_other_machines_exist() {
+    let app = fleet(110, 16);
+    let screen = text(&render(&app, at(0)));
+    assert!(!screen.contains("No Herdr server is running."), "{screen}");
+    assert!(screen.contains("Ship the release"), "{screen}");
+}
+
+#[test]
+fn a_notice_takes_the_place_of_the_machine_strip() {
+    let mut app = fleet(110, 16);
+    app.update(Input::Archived { title: "x".into(), result: Ok(()) }, at(1));
+    let last = text(&render(&app, at(1))).lines().last().unwrap().to_string();
+    assert!(last.ends_with("Archived “x”") && !last.contains("Mac Studio"), "{last}");
 }

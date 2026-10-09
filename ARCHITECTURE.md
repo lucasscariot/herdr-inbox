@@ -21,7 +21,10 @@ public interfaces.
 | `herdr::api` | JSON socket API. One request per connection, because Herdr answers the first line and closes. |
 | `herdr::events` | `events.subscribe` streams. Each subscription owns its connection; Herdr resets one that receives anything else. |
 | `herdr::terminal` | Runs `herdr terminal session control <pane> --takeover` and speaks its JSON lines: base64 ANSI frames out, input/resize/scroll/mouse/release in. |
-| `link` | Keeps one server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots, a 30 s resync, reconnection with backoff. |
+| `herdr::ssh` | Builds SSH commands for a saved machine: one ControlMaster connection per host, `sh -lc` with the usual install directories on PATH, a ready marker before `exec herdr` so login noise is skipped, single-quoted arguments that bash, zsh and fish read alike. |
+| `herdr::transport` | One machine's API calls, subscriptions, `herdr` runner and git probe. Local goes to the socket; remote runs `herdr remote-api-bridge` over SSH, one process per call and one per subscription. |
+| `machines` | Reads enabled saved machines from `herdr machine list --json`. |
+| `link` | One per machine. Keeps that server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots with the git facts of their checkouts (cached 15 s), a 30 s resync, reconnection with backoff. |
 | `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
@@ -45,6 +48,13 @@ public interfaces.
 - **Generations.** Every attachment to a pane has a generation. Frames and
   close messages from an older attachment are ignored, so switching threads
   quickly never paints the wrong pane.
+- **Machines are independent.** A thread's id is `machine/pane`. Each machine
+  has its own link and connection state; one going down removes only its
+  threads, and the thread that was open on it re-opens when it comes back.
+  Herdr's change counters are per server and never compared across machines.
+- **No filesystem access in the app.** The link reads repository and branch
+  for each thread's checkout (directly on this machine, with one batched git
+  probe over SSH elsewhere) and hands them over with the snapshot.
 - **Threads are tracked by identity.** The cursor follows its thread when the
   list reorders, and lands on a neighbour when the thread disappears.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own

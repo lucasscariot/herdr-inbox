@@ -66,7 +66,7 @@ fn normalize(path: &Path) -> PathBuf {
 
 /// A repository is named after the directory holding its common `.git`
 /// directory; a bare common dir `name.git` is named `name`.
-fn repo_name(common_dir: &Path) -> Option<String> {
+pub fn repo_name(common_dir: &Path) -> Option<String> {
     if common_dir.file_name()? == ".git" {
         return common_dir.parent()?.file_name()?.to_str().map(str::to_string);
     }

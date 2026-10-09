@@ -1,6 +1,7 @@
 //! Runs the inbox: owns the terminal, the link to Herdr and the agent's live
 //! session, and performs the app's effects.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -17,11 +18,13 @@ use ratatui::crossterm::{execute, terminal};
 
 use crate::app::{App, Effect, Input};
 use crate::cli::Options;
-use crate::herdr::Api;
 use crate::herdr::socket::{self, Endpoint, SocketEnv};
 use crate::herdr::terminal::{HerdrCommand, Session};
+use crate::herdr::transport::Transport;
 use crate::link::{Link, Request};
+use crate::machines::{self, Remote};
 use crate::theme;
+use crate::threads;
 
 /// How often the screen refreshes on its own, for ages and notices.
 const TICK: Duration = Duration::from_millis(500);
@@ -85,6 +88,31 @@ fn install_panic_hook() {
     }));
 }
 
+/// Every machine's transport and link, by machine id.
+struct Fleet {
+    machines: HashMap<String, (Transport, Link)>,
+}
+
+impl Fleet {
+    fn start(local: Transport, remotes: Vec<Remote>, tx: &Sender<Input>) -> Self {
+        let mut machines = HashMap::new();
+        let mut all = vec![(threads::LOCAL.to_string(), local)];
+        all.extend(remotes.into_iter().map(|r| (r.info.id, Transport::Ssh(r.ssh))));
+        for (id, transport) in all {
+            let deliver = tx.clone();
+            let link = Link::spawn(id.clone(), transport.clone(), move |input| {
+                let _ = deliver.send(input);
+            });
+            machines.insert(id, (transport, link));
+        }
+        Self { machines }
+    }
+
+    fn get(&self, id: &str) -> Option<&(Transport, Link)> {
+        self.machines.get(id)
+    }
+}
+
 fn event_loop(
     terminal: &mut DefaultTerminal,
     endpoint: &Endpoint,
@@ -92,16 +120,23 @@ fn event_loop(
     palette: &theme::Palette,
 ) -> anyhow::Result<()> {
     let size = terminal.size()?;
-    let mut app = App::new(size.width, size.height, Box::new(crate::git::checkout));
+    let local = Transport::Local { socket: endpoint.api_socket.clone(), herdr: herdr.clone() };
+    let mut remotes = machines::load(&local.runner());
+    // A different ssh program, for wrappers and for tests.
+    if let Some(ssh) = std::env::var_os("HERDR_INBOX_SSH").filter(|v| !v.is_empty()) {
+        for remote in &mut remotes {
+            remote.ssh.ssh = ssh.clone().into();
+        }
+    }
+    if !remotes.is_empty() {
+        let dir = crate::herdr::ssh::default_control_dir();
+        // Without a private control directory SSH still works, just slower.
+        let _ = crate::herdr::ssh::prepare_control_dir(&dir);
+    }
+    let mut app = App::new(size.width, size.height, remotes.iter().map(|r| r.info.clone()).collect());
     let (tx, rx) = mpsc::channel::<Input>();
     spawn_input_reader(tx.clone());
-    let link = {
-        let tx = tx.clone();
-        Link::spawn(endpoint.api_socket.clone(), move |input| {
-            let _ = tx.send(input);
-        })
-    };
-    let api = Api::new(endpoint.api_socket.clone());
+    let fleet = Fleet::start(local, remotes, &tx);
     let mut session: Option<(u64, Session)> = None;
     let mut last_draw = Instant::now() - FRAME;
     let mut dirty = true;
@@ -128,7 +163,7 @@ fn event_loop(
         for input in std::iter::once(input).chain(drain(&rx)) {
             let effects = app.update(input, SystemTime::now());
             for effect in effects {
-                if !perform(effect, &mut session, herdr, &api, &link, &tx) {
+                if !perform(effect, &mut session, herdr, &fleet, &tx) {
                     if let Some((_, mut session)) = session.take() {
                         session.release();
                     }
@@ -149,8 +184,7 @@ fn perform(
     effect: Effect,
     session: &mut Option<(u64, Session)>,
     herdr: &HerdrCommand,
-    api: &Api,
-    link: &Link,
+    fleet: &Fleet,
     tx: &Sender<Input>,
 ) -> bool {
     match effect {
@@ -160,22 +194,27 @@ fn perform(
                 old.release();
             }
         }
-        Effect::Attach { generation, pane_id, cols, rows } => {
+        Effect::Attach { generation, machine, pane_id, cols, rows } => {
             if let Some((_, mut old)) = session.take() {
                 old.release();
             }
+            let closed = |reason: String| Input::Terminal {
+                generation,
+                message: crate::herdr::terminal::Message::Closed { reason: Some(reason) },
+            };
+            let Some((transport, _)) = fleet.get(&machine) else {
+                let _ = tx.send(closed(format!("unknown machine {machine}")));
+                return true;
+            };
+            let runner = transport.runner();
             let deliver = tx.clone();
-            let spawned = Session::spawn(herdr, &pane_id, cols, rows, move |message| {
+            let spawned = Session::spawn(&runner, &pane_id, cols, rows, move |message| {
                 let _ = deliver.send(Input::Terminal { generation, message });
             });
             match spawned {
                 Ok(new) => *session = Some((generation, new)),
                 Err(err) => {
-                    let reason = format!("cannot run {}: {err}", herdr.program.display());
-                    let _ = tx.send(Input::Terminal {
-                        generation,
-                        message: crate::herdr::terminal::Message::Closed { reason: Some(reason) },
-                    });
+                    let _ = tx.send(closed(format!("cannot run {}: {err}", runner.program())));
                 }
             }
         }
@@ -188,18 +227,26 @@ fn perform(
                 let _ = live.send(&control);
             }
         }
-        Effect::Archive { workspace_id, title, .. } => {
-            let api = api.clone();
+        Effect::Archive { machine, workspace_id, title, .. } => {
+            let Some((transport, link)) = fleet.get(&machine) else {
+                return true;
+            };
+            let transport = transport.clone();
             let tx = tx.clone();
             thread::spawn(move || {
-                let result = api.workspace_close(&workspace_id).map_err(|err| err.to_string());
+                let result = transport
+                    .call("workspace.close", serde_json::json!({"workspace_id": workspace_id, "close_group": false}))
+                    .map(|_| ())
+                    .map_err(|err| err.to_string());
                 let _ = tx.send(Input::Archived { title, result });
             });
             link.request(Request::Refresh);
         }
         Effect::StartServer => {
             start_server(herdr);
-            link.request(Request::Refresh);
+            if let Some((_, link)) = fleet.get(threads::LOCAL) {
+                link.request(Request::Refresh);
+            }
         }
     }
     true

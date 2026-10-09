@@ -183,6 +183,8 @@ mod tests {
     fn thread(id: &str, status: AgentStatus) -> Thread {
         Thread {
             id: id.into(),
+            machine_id: crate::threads::LOCAL.into(),
+            machine_label: None,
             pane_id: id.into(),
             workspace_id: "w".into(),
             status,

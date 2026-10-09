@@ -45,6 +45,19 @@ impl Sandbox {
         sandbox
     }
 
+    /// Saves `remote` as an SSH machine in this sandbox's Herdr, the way
+    /// `herdr machine add` would, without connecting anywhere.
+    fn save_machine(&self, id: &str, label: &str) {
+        let dir = self.root.path().join("state/herdr/client");
+        std::fs::create_dir_all(&dir).expect("mkdir client state");
+        let profiles = serde_json::json!({"version": 1, "ssh": [
+            {"id": id, "label": label, "target": "studio", "session": "default", "enabled": true}
+        ]});
+        std::fs::write(dir.join("endpoints.json"), profiles.to_string()).expect("write endpoints");
+        let listed = self.herdr(&["machine", "list", "--json"]);
+        assert_eq!(listed[0]["label"], label, "herdr accepts the saved machine");
+    }
+
     fn env_for(root: &Path) -> Vec<(String, String)> {
         vec![
             ("XDG_CONFIG_HOME".into(), root.join("config").display().to_string()),
@@ -116,6 +129,10 @@ struct Inbox {
 
 impl Inbox {
     fn start(sandbox: &Sandbox, cols: u16, rows: u16) -> Self {
+        Self::start_with(sandbox, cols, rows, &[])
+    }
+
+    fn start_with(sandbox: &Sandbox, cols: u16, rows: u16, extra_env: &[(&str, &str)]) -> Self {
         let pty =
             native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).expect("openpty");
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr-inbox"));
@@ -126,6 +143,9 @@ impl Inbox {
             }
         }
         for (key, value) in sandbox.env() {
+            command.env(key, value);
+        }
+        for (key, value) in extra_env {
             command.env(key, value);
         }
         let child = pty.slave.spawn_command(command).expect("spawn herdr-inbox");
@@ -251,6 +271,77 @@ fn the_inbox_shows_threads_drives_an_agent_and_archives() {
     inbox.wait_for_text("Archived “Fix the login loop”");
     inbox.wait_for_text("No agent threads yet.");
     let workspaces = sandbox.herdr(&["workspace", "list"]);
+    assert_eq!(workspaces["result"]["workspaces"].as_array().map(Vec::len), Some(0));
+}
+
+/// A fake `ssh` that runs the remote command locally, against `remote`'s
+/// Herdr server: the inbox's whole SSH path, minus the network.
+fn fake_ssh(local: &Sandbox, remote: &Sandbox) -> PathBuf {
+    let home = remote.root.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir home");
+    let herdr_dir = Command::new("sh")
+        .args(["-c", &format!("dirname \"$(command -v {})\"", herdr_bin())])
+        .output()
+        .expect("locate herdr");
+    let herdr_dir = String::from_utf8_lossy(&herdr_dir.stdout).trim().to_string();
+    let mut exports = String::new();
+    for (key, value) in remote.env() {
+        exports.push_str(&format!("export {key}='{value}'\n"));
+    }
+    let script = format!(
+        "#!/bin/sh\nwhile [ \"$1\" != \"-T\" ]; do shift; done\nshift\nshift\n{exports}export HOME='{home}'\nexport PATH='{herdr_dir}':\"$PATH\"\necho 'Last login: today'\nexec sh -c \"$1\"\n",
+        home = home.display(),
+    );
+    let path = local.root.path().join("ssh");
+    // Written by a child `sh`, so no parallel test thread can inherit an open
+    // write handle and make the script "text file busy" when it runs.
+    let mut writer = Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(&path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn sh");
+    writer.stdin.take().expect("stdin").write_all(script.as_bytes()).expect("write fake ssh");
+    assert!(writer.wait().expect("wait").success());
+    path
+}
+
+#[test]
+fn threads_on_a_saved_machine_open_live_over_ssh() {
+    if !enabled() {
+        return;
+    }
+    let local = Sandbox::start();
+    let remote = Sandbox::start();
+    let repo = git_repo(remote.root.path(), "api", "release");
+    let created =
+        remote.herdr(&["workspace", "create", "--cwd", repo.to_str().unwrap(), "--label", "api", "--no-focus"]);
+    let pane = created["result"]["root_pane"]["pane_id"].as_str().expect("pane id").to_string();
+    remote.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "codex", "--state", "blocked", &pane]);
+    remote.herdr(&["pane", "report-metadata", &pane, "--source", "e2e", "--token", "thread=Ship the release"]);
+    local.save_machine("0123456789abcdef0123456789abcdef", "Studio");
+    let ssh = fake_ssh(&local, &remote);
+
+    let mut inbox = Inbox::start_with(&local, 110, 24, &[("HERDR_INBOX_SSH", ssh.to_str().unwrap())]);
+    inbox.wait_for_text("Ship the release");
+    inbox.wait_for_text("Studio · Codex");
+    inbox.wait_for_text("● Local  ● Studio");
+
+    // The remote thread is the only one, so it opened on its own.
+    inbox.keys("\r");
+    inbox.wait_for_text("AGENT");
+    inbox.keys("echo remote-$((40 + 2))\r");
+    inbox.wait_for_text("remote-42");
+
+    remote.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "codex", "--state", "working", &pane]);
+    inbox.wait_for_text("WORKING");
+
+    inbox.keys("\t");
+    inbox.keys("x");
+    inbox.wait_for_text("Archive this thread?");
+    inbox.keys("y");
+    inbox.wait_for_text("Archived “Ship the release”");
+    let workspaces = remote.herdr(&["workspace", "list"]);
     assert_eq!(workspaces["result"]["workspaces"].as_array().map(Vec::len), Some(0));
 }
 

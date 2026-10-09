@@ -37,10 +37,11 @@ It never replaces `herdr`, never starts a server unless you ask it to, and
 never updates anything. Plain `herdr` keeps working beside it, on the same
 sessions.
 
-> **Status.** The standalone client is being rebuilt in stages. This stage
-> covers threads on the local machine: the live list, the interactive terminal,
-> and archiving. Other machines, the composer for new threads, and dictation
-> follow. The original Python plugin lives in [`legacy/`](legacy/) until then.
+> **Status.** The standalone client is being rebuilt in stages. It already
+> covers threads on this machine and on every saved SSH machine: the live list,
+> the interactive terminal, and archiving. The composer for new threads and
+> dictation follow. The original Python plugin lives in [`legacy/`](legacy/)
+> until then.
 
 ## Install
 
@@ -76,6 +77,20 @@ at), **working** and **idle**. The most recent change in each group comes first.
 
 Herdr Inbox uses your Herdr theme: the same built-in themes, `[theme] name`,
 and `[theme.custom]` colours from `~/.config/herdr/config.toml`.
+
+### Other machines
+
+Every enabled machine you saved in Herdr (`herdr machine add`, listed by
+`herdr machine list`) joins the same list. Each remote row names its machine,
+and the status bar shows each machine's state: `●` live, `◌` connecting, `✗`
+unreachable. Opening a remote thread streams it live over SSH, and typing
+reaches it the same way.
+
+Herdr Inbox reaches a machine with your own SSH setup, one shared connection
+per host. On the remote side it needs `herdr` on the PATH of a login shell, or
+in `~/.local/bin`, `~/.cargo/bin`, Homebrew or mise. A machine that cannot be
+reached never blocks the others. Without a local Herdr server, the remote
+threads stay usable, and `s` starts the local server.
 
 ### When another window has the thread
 

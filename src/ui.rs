@@ -18,12 +18,12 @@ use crate::threads::{Group, Thread};
 pub fn draw(frame: &mut Frame, app: &App, palette: &Palette, now: SystemTime) {
     let area = frame.area();
     let buf = frame.buffer_mut();
-    match app.connection {
-        Connection::NoServer | Connection::Starting(_) => {
+    match app.needs_server_screen() {
+        true => {
             fill(buf, area, Style::new());
             no_server(buf, area, app, palette);
         }
-        _ => {
+        false => {
             sidebar(buf, app, palette, now);
             separator(buf, app, palette);
             terminal(buf, app, palette);
@@ -182,7 +182,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
             }
         }
     }
-    if app.threads.is_empty() && list.height > 0 && app.connection == Connection::Live {
+    if app.threads.is_empty() && list.height > 0 && app.overall_connection().is_live() {
         let text = Paragraph::new(vec![
             Line::styled("No agent threads yet.", Style::new().fg(palette.subtext0)),
             Line::styled("Start one in Herdr; it shows up here.", Style::new().fg(palette.overlay0)),
@@ -194,7 +194,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
 
 fn summary(app: &App, palette: &Palette) -> Vec<(String, Style)> {
     let dim = Style::new().fg(palette.overlay0);
-    match &app.connection {
+    match app.overall_connection() {
         Connection::Connecting => return vec![("connecting…".into(), dim)],
         Connection::Lost(_) => return vec![("reconnecting…".into(), Style::new().fg(palette.red))],
         _ => {}
@@ -294,6 +294,10 @@ fn thread_line(
                 left.push((format!("⎇ {branch}"), Style::new().fg(palette.mauve)));
                 left.push((" · ".into(), dim));
             }
+            if let Some(machine) = &thread.machine_label {
+                left.push((machine.clone(), Style::new().fg(palette.subtext0)));
+                left.push((" · ".into(), dim));
+            }
             left.push((thread.harness.clone(), dim));
             let right = thread.changed_at.map(|changed| vec![(age(changed, now), dim)]).unwrap_or_default();
             split_line(buf, x, area.y, width, &left, &right);
@@ -319,7 +323,7 @@ fn terminal(buf: &mut Buffer, app: &App, palette: &Palette) {
     // Agent output uses the terminal's own background, so the area does too.
     fill(buf, area, Style::new());
     let Some(open) = &app.open else {
-        let message = match app.connection {
+        let message = match app.overall_connection() {
             Connection::Connecting => "Connecting to Herdr…",
             Connection::Lost(_) => "Lost the connection to Herdr. Retrying…",
             _ if app.threads.is_empty() => "Agent threads you start in Herdr appear on the left.",
@@ -376,7 +380,7 @@ fn centered(buf: &mut Buffer, area: Rect, lines: &[Line]) {
 
 fn no_server(buf: &mut Buffer, area: Rect, app: &App, palette: &Palette) {
     let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-    let lines = match app.connection {
+    let lines = match app.local().connection {
         Connection::Starting(_) => vec![Line::styled("Starting Herdr…", Style::new().fg(palette.subtext0))],
         _ => vec![
             Line::from(vec![
@@ -397,6 +401,28 @@ fn no_server(buf: &mut Buffer, area: Rect, app: &App, palette: &Palette) {
     centered(buf, body, &lines);
 }
 
+/// One mark per machine: live, connecting, no server, unreachable.
+fn machine_strip(app: &App, palette: &Palette) -> Vec<(String, Style)> {
+    let mut parts = Vec::new();
+    for (index, machine) in app.machines.iter().enumerate() {
+        if index > 0 {
+            parts.push(("  ".into(), Style::new()));
+        }
+        let (mark, color) = match &machine.connection {
+            Connection::Live => ("●", palette.green),
+            Connection::Connecting | Connection::Starting(_) => ("◌", palette.overlay0),
+            Connection::NoServer => ("○", palette.red),
+            Connection::Lost(_) => ("✗", palette.red),
+        };
+        parts.push((format!("{mark} "), Style::new().fg(color)));
+        parts.push((machine.label.clone(), Style::new().fg(palette.subtext0)));
+        if machine.connection == Connection::NoServer {
+            parts.push((" s start".into(), Style::new().fg(palette.overlay0)));
+        }
+    }
+    parts
+}
+
 fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     let area = app.layout.bar;
     if area.width == 0 || area.height == 0 {
@@ -407,8 +433,8 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     let text = Style::new().fg(palette.overlay0);
     // The mode badge is accent text, not a filled block: terminals extend the
     // last row's background into their padding.
-    let (badge, hints): (&str, Vec<(&str, &str)>) = match (&app.connection, app.focus) {
-        (Connection::NoServer | Connection::Starting(_), _) => ("", vec![]),
+    let (badge, hints): (&str, Vec<(&str, &str)>) = match (app.needs_server_screen(), app.focus) {
+        (true, _) => ("", vec![]),
         (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("y", "archive"), ("n", "keep")]),
         (_, Focus::List) => {
             ("THREADS", vec![("↵", "open"), ("j/k", "move"), ("x", "archive"), ("tab", "agent"), ("q", "quit")])
@@ -427,17 +453,20 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
         left.push(((*k).into(), key));
         left.push((format!(" {label}"), text));
     }
-    let right = match (&app.notice, &app.connection) {
-        (Some(notice), _) => {
+    let right = match &app.notice {
+        Some(notice) => {
             let color = match notice.kind {
                 NoticeKind::Info => palette.green,
                 NoticeKind::Error => palette.red,
             };
             vec![(notice.text.clone(), Style::new().fg(color))]
         }
-        (None, Connection::Lost(reason)) => vec![(format!("✗ {reason}"), Style::new().fg(palette.red))],
-        (None, Connection::Connecting) => vec![("◌ connecting".into(), text)],
-        _ => vec![],
+        None if !app.local_only() => machine_strip(app, palette),
+        None => match &app.local().connection {
+            Connection::Lost(reason) => vec![(format!("✗ {reason}"), Style::new().fg(palette.red))],
+            Connection::Connecting => vec![("◌ connecting".into(), text)],
+            _ => vec![],
+        },
     };
     // A long notice takes the room of the hints rather than being cut.
     let right_width: usize = right.iter().map(|(t, _)| t.width()).sum();
