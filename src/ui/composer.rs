@@ -6,7 +6,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 use unicode_width::UnicodeWidthStr;
 
-use super::{clip, fill, split_line};
+use std::time::SystemTime;
+
+use super::{clip, fill, orbit_in, split_line};
 use crate::app::{App, Field, LaunchState};
 use crate::theme::Palette;
 
@@ -20,7 +22,7 @@ pub struct Drawn {
     pub cursor: Option<(u16, u16)>,
 }
 
-pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn {
+pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: SystemTime) -> Drawn {
     fill(buf, area, Style::new());
     if area.width < 20 || area.height < 8 {
         split_line(
@@ -186,6 +188,12 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
             y += 1;
         }
     }
+
+    // The orbit fills the room left under everything else; a picker may
+    // cover it.
+    let below = (y + 1).min(area.bottom());
+    let room = Rect::new(area.x, below, area.width, (area.bottom() - below).saturating_sub(1));
+    orbit_in(buf, app, room, palette, now);
 
     // The picker floats over the fields, under its own row.
     if let Some(picker) = &composer.picker {

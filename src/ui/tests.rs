@@ -320,7 +320,8 @@ fn narrow_and_tiny_windows_render_without_panicking() {
 
 #[test]
 fn centred_messages_wrap_instead_of_being_cut() {
-    let mut app = App::new(60, 12, vec![]);
+    // Short enough that no orbit sits above the message.
+    let mut app = App::new(60, 10, vec![]);
     app.update(snapshot(LOCAL, vec![]), at(0));
     let screen = text(&render(&app, at(0)));
     let right: Vec<&str> = screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").trim()).collect();
@@ -738,5 +739,163 @@ mod voice {
         assert!(!screen.contains("gsk_secret"), "the key is never drawn");
         let (x, y) = find(&terminal, "••••••••••");
         terminal.backend_mut().assert_cursor_position((x + 10, y));
+    }
+}
+
+mod orbit_view {
+    use super::*;
+    use crate::orbit::{Link, Ring};
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.update(
+            Input::Key(KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            at(1),
+        );
+    }
+
+    /// Cells drawn in Braille, which only the orbit uses.
+    fn braille(terminal: &Terminal<TestBackend>) -> Vec<(u16, u16, Color)> {
+        let buffer = terminal.backend().buffer();
+        let mut cells = Vec::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.symbol().chars().next().is_some_and(|c| ('\u{2801}'..='\u{28FF}').contains(&c)) {
+                    cells.push((x, y, cell.fg));
+                }
+            }
+        }
+        cells
+    }
+
+    #[test]
+    fn each_machine_is_a_ring_and_each_thread_a_bead_in_a_stable_order() {
+        let app = fleet(110, 16);
+        let fleet = orbit_fleet(&app);
+        assert_eq!(
+            fleet.rings,
+            vec![
+                Ring { link: Link::Down, beads: vec![] },
+                Ring { link: Link::Live, beads: vec![AgentStatus::Blocked] },
+                Ring { link: Link::Down, beads: vec![] },
+            ],
+            "local has no server, the studio is live, the laptop is lost"
+        );
+        // Beads go by thread id, not by the list's attention order, so a
+        // status change never reshuffles them.
+        let app = loaded(110, 30);
+        let ids: Vec<&str> = app.threads.iter().map(|t| t.id.as_str()).collect();
+        assert_ne!(
+            ids,
+            {
+                let mut sorted = ids.clone();
+                sorted.sort();
+                sorted
+            },
+            "the list is not in id order"
+        );
+        let mut by_id: Vec<_> = app.threads.iter().map(|t| (t.id.clone(), t.status)).collect();
+        by_id.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(orbit_fleet(&app).rings[0].beads, by_id.into_iter().map(|(_, s)| s).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_connecting_machine_has_a_connecting_ring() {
+        let app = App::new(110, 30, vec![MachineInfo { id: "studio".into(), label: "Mac Studio".into() }]);
+        let rings = orbit_fleet(&app).rings;
+        assert_eq!(rings.iter().map(|r| r.link).collect::<Vec<_>>(), vec![Link::Connecting, Link::Connecting]);
+    }
+
+    #[test]
+    fn failed_launches_are_not_beads() {
+        let mut app = loaded(110, 30);
+        let mut failed = app.threads[0].clone();
+        failed.id = format!("{LAUNCH_PREFIX}abc");
+        app.threads.push(failed);
+        assert_eq!(orbit_fleet(&app).rings[0].beads.len(), 4);
+    }
+
+    #[test]
+    fn the_screen_animates_only_while_the_orbit_shows() {
+        let mut app = App::new(110, 30, vec![]);
+        app.update(snapshot(LOCAL, vec![]), at(0));
+        assert!(app.open.is_none());
+        assert!(app.animating(), "an empty session shows the orbit");
+        let mut app = loaded(110, 30);
+        assert!(app.open.is_some(), "the first thread opens on its own");
+        assert!(!app.animating(), "an agent's terminal does not need frames");
+        key(&mut app, KeyCode::Char('n'));
+        assert!(app.animating(), "the composer shows the orbit");
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.animating());
+        let mut app = App::new(110, 30, vec![]);
+        app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
+        assert!(app.needs_server_screen());
+        assert!(!app.animating(), "the start-a-server screen has no orbit");
+    }
+
+    #[test]
+    fn the_composer_draws_the_orbit_in_the_room_under_it_in_theme_colours() {
+        let mut app = loaded(110, 50);
+        key(&mut app, KeyCode::Char('n'));
+        let terminal = render(&app, at(1));
+        let cells = braille(&terminal);
+        assert!(!cells.is_empty(), "{}", text(&terminal));
+        let palette = Palette::default();
+        let hints = text(&terminal).lines().position(|l| l.contains("⌃T dictate")).expect("hints");
+        assert!(cells.iter().all(|&(x, y, _)| y as usize > hints && x > app.layout.terminal.x), "below the composer");
+        let colours: Vec<Color> = cells.iter().map(|c| c.2).collect();
+        assert!(colours.contains(&palette.accent), "the core");
+        assert!(colours.contains(&palette.surface1) && colours.contains(&palette.overlay0), "a ring's back and front");
+        for status in [AgentStatus::Blocked, AgentStatus::Working, AgentStatus::Done] {
+            let colour = status_color(status, &palette);
+            // Beads move; over a few moments each shows.
+            let seen = (0..12).any(|step| braille(&render(&app, at(1 + step * 5))).iter().any(|c| c.2 == colour));
+            assert!(seen, "a {status:?} bead");
+        }
+    }
+
+    #[test]
+    fn the_composer_with_room_to_spare() {
+        let mut app = loaded(100, 44);
+        key(&mut app, KeyCode::Char('n'));
+        insta::assert_snapshot!(text(&render(&app, at(7))));
+    }
+
+    #[test]
+    fn the_orbit_moves_with_the_clock() {
+        let mut app = loaded(110, 50);
+        key(&mut app, KeyCode::Char('n'));
+        let a = text(&render(&app, at(1)));
+        let b = text(&render(&app, SystemTime::UNIX_EPOCH + Duration::from_millis(1_100)));
+        assert_ne!(a, b, "a tenth of a second later the frame differs");
+        assert_eq!(a, text(&render(&app, at(61))), "and a minute later it is the same again");
+    }
+
+    #[test]
+    fn without_room_there_is_no_orbit() {
+        let mut app = loaded(110, 24);
+        key(&mut app, KeyCode::Char('n'));
+        assert!(braille(&render(&app, at(1))).is_empty(), "the fields fill a 24-row window");
+        let mut app = App::new(34, 30, vec![]);
+        app.update(snapshot(LOCAL, vec![]), at(0));
+        assert!(app.layout.terminal.width < orbit::MIN_ROWS * 2);
+        assert!(braille(&render(&app, at(1))).is_empty(), "too narrow beside the list");
+    }
+
+    #[test]
+    fn an_open_picker_covers_the_orbit() {
+        let mut app = loaded(110, 50);
+        key(&mut app, KeyCode::Char('n'));
+        let before = braille(&render(&app, at(1))).len();
+        key(&mut app, KeyCode::F(3));
+        assert!(app.composer.picker.is_some());
+        let terminal = render(&app, at(1));
+        assert!(braille(&terminal).len() <= before, "{}", text(&terminal));
     }
 }

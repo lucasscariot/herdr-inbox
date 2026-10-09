@@ -13,6 +13,7 @@ pub mod keys;
 pub mod launch;
 pub mod link;
 pub mod machines;
+pub mod orbit;
 pub mod presets;
 pub mod runtime;
 pub mod screen;

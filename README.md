@@ -95,6 +95,11 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 Threads are grouped as **needs input**, **ready** (finished, not yet looked
 at), **working** and **idle**. The most recent change in each group comes first.
 
+When the composer has room, or no thread is open, the orbit turns beside the
+list: the core is the inbox, each ring a machine, each bead a thread in its
+status colour. The core breathes while a thread needs input, and a ring goes
+dashed while its machine connects or red when it is unreachable.
+
 Herdr Inbox uses your Herdr theme: the same built-in themes, `[theme] name`,
 and `[theme.custom]` colours from `~/.config/herdr/config.toml`.
 
