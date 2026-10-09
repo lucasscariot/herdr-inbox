@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests.rs
-assertion_line: 467
 expression: "text(&render(&app, at(1)))"
 ---
  herdr inbox                        │
@@ -21,7 +20,7 @@ expression: "text(&render(&app, at(1)))"
 ▎api                      ◐ working │    Thinking   Default                                               F8
 ▎Add invoice export                 │    Workspace  New worktree  ⎇ fix-login-redirect-loop               F9
 ▎⎇ main · Codex                     │
-                                    │  ↵ send   ⌃S send & keep   hold ␣ dictate   ⇥ fields   F7 presets   F…
+                                    │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
  IDLE  1                            │
 ▎scratch                     ○ idle │
 ▎New Pi thread                      │

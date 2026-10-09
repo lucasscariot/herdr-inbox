@@ -1865,6 +1865,40 @@ mod voice {
     }
 }
 
+#[test]
+fn spaces_type_immediately_by_default_in_an_agent_and_the_composer() {
+    for transcriber in [None, Some("Groq Whisper".to_string())] {
+        let (mut app, _) = loaded();
+        app.update(Input::Speech(SpeechStatus { ready: transcriber, tools: vec![] }), at(0));
+        app.update(press(KeyCode::Enter), at(1));
+        let effects = app.update(press(KeyCode::Char(' ')), at(2));
+        assert_eq!(effects, vec![Effect::Send { generation: 1, control: Control::Input(b" ".to_vec()) }]);
+        assert!(!app.hold.busy(), "spaces never wait for the repeat timer by default");
+        assert!(app.update(Input::Tick, at(3)).is_empty(), "no delayed or duplicate space");
+
+        app.update(press(KeyCode::Tab), at(4));
+        app.update(press(KeyCode::Char('n')), at(5));
+        app.update(press(KeyCode::Char('a')), at(6));
+        app.update(press(KeyCode::Char(' ')), at(7));
+        assert_eq!(app.composer.task.text(), "a ");
+        assert_eq!(app.composer.task.cursor(), 2);
+        assert!(!app.hold.busy());
+    }
+}
+
+#[test]
+fn repeated_spaces_do_not_start_dictation_by_default() {
+    let (mut app, _) = loaded();
+    app.update(Input::Speech(SpeechStatus { ready: Some("Groq Whisper".into()), tools: vec![] }), at(0));
+    app.update(press(KeyCode::Enter), at(1));
+    for ms in [0, 250, 275, 300] {
+        let effects = app.update(press(KeyCode::Char(' ')), at(2) + Duration::from_millis(ms));
+        assert_eq!(effects, vec![Effect::Send { generation: 1, control: Control::Input(b" ".to_vec()) }]);
+    }
+    assert!(app.dictation.is_none());
+    assert!(!app.hold.busy());
+}
+
 mod space_bar {
     use super::*;
     use crate::app::{Phase, SpeechStatus, Target, Then};
@@ -1877,6 +1911,7 @@ mod space_bar {
 
     fn ready(mut app: App) -> App {
         app.update(Input::Speech(SpeechStatus { ready: Some("Groq Whisper".into()), tools: vec![] }), at(0));
+        app.config.speech.space_hold = Some(true);
         app
     }
 
@@ -2074,6 +2109,7 @@ mod space_bar {
     #[test]
     fn without_a_transcriber_a_hold_opens_the_menu_and_types_nowhere() {
         let (mut app, _) = loaded();
+        app.config.speech.space_hold = Some(true);
         app.update(press(KeyCode::Enter), at(1));
         assert!(hold(&mut app, 0, 300).is_empty());
         let menu = app.menu.as_ref().expect("the dictation menu");
@@ -2128,9 +2164,12 @@ mod space_bar {
     #[test]
     fn the_space_hold_setting_reads_from_the_speech_section() {
         let config: crate::config::Config = toml::from_str("[speech]\nspace_hold = false\n").unwrap();
-        assert_eq!(config.speech.space_hold, Some(false));
+        assert!(!config.speech.space_hold_enabled());
+        let config: crate::config::Config = toml::from_str("[speech]\nspace_hold = true\n").unwrap();
+        assert!(config.speech.space_hold_enabled());
         let config: crate::config::Config = toml::from_str("[speech]\nlanguage = \"fr\"\n").unwrap();
-        assert_eq!(config.speech.space_hold, None, "on by default");
+        assert!(!config.speech.space_hold_enabled(), "off when omitted");
+        assert!(!crate::config::Config::default().speech.space_hold_enabled(), "off without a config");
     }
 }
 

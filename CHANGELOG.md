@@ -30,10 +30,10 @@ never changes it.
 - Dictation everywhere with `Ctrl+T`: the composer's task, a reply, or any
   agent, with a live meter. Enter sends, Ctrl+T types, Esc discards. `F10`
   connects Groq, Gemini, OpenAI, Mistral or Deepgram, or builds whisper.cpp.
-- Hold the space bar to dictate, and let go to type the words, into the
-  composer, a reply or any agent. Tapping space still types a space; a held
-  bar is told apart by the keyboard's auto-repeat, so it works in every
-  terminal and over SSH. `space_hold = false` under `[speech]` turns it off.
+- Optional hold-to-dictate: set `space_hold = true` under `[speech]`, hold
+  Space to talk, and let go to type the words into the composer, a reply or
+  any agent. A held bar is told apart by keyboard auto-repeat, so it works
+  in every terminal and over SSH.
 - Presets (`F7`, `Ctrl+D`), task history (`Ctrl+P`/`Ctrl+N`), a list filter
   (`/`), replies without opening a thread (`r`), sending a thread's task again
   (`e`), and failed launches as rows to retry or dismiss (`d`).
@@ -53,6 +53,14 @@ never changes it.
   hairlines, the focused task box and the reply box wear a softened accent,
   and idle threads (badge, marker, heading, orbit bead) are faint. Themes that
   map these tones to plain ANSI white or grey no longer draw white bars.
+
+### Changed
+
+- Ordinary spaces type immediately by default; Ctrl+T remains the dictation
+  shortcut. Hold-to-dictate now needs an explicit `space_hold = true`.
+- Forwarded agent keys no longer redraw the unchanged screen before their
+  echo arrives, avoiding an extra 16 ms wait. The frame limit for streaming
+  output stays in place. Runtime scheduling and PTY latency tests cover both.
 
 ### Removed
 

@@ -34,8 +34,8 @@ use crate::state::State;
 use crate::theme;
 use crate::threads;
 
-/// The shortest time between two draws while events stream in.
-const FRAME: Duration = Duration::from_millis(16);
+mod redraw;
+use redraw::Redraw;
 
 pub fn run(options: Options) -> anyhow::Result<()> {
     let env = SocketEnv::from_process();
@@ -178,18 +178,16 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
     let work = Work { state, config, voice, labels, tx: tx.clone() };
     work.restore(&mut app);
     let mut session: Option<(u64, Session)> = None;
-    let mut last_draw = Instant::now() - FRAME;
-    let mut dirty = true;
+    let mut redraw = Redraw::new(Instant::now());
     let mut last_tick = Instant::now();
     loop {
-        if dirty && last_draw.elapsed() >= FRAME {
+        if redraw.draw_in(Instant::now()) == Some(Duration::ZERO) {
             let now = SystemTime::now();
             terminal.draw(|frame| crate::ui::draw(frame, &app, palette, now))?;
-            last_draw = Instant::now();
-            dirty = false;
+            redraw.drawn(Instant::now());
         }
         let tick_in = app.tick_every().saturating_sub(last_tick.elapsed());
-        let timeout = if dirty { FRAME.saturating_sub(last_draw.elapsed()).min(tick_in) } else { tick_in };
+        let timeout = redraw.draw_in(Instant::now()).unwrap_or(tick_in).min(tick_in);
         let mut inputs = match rx.recv_timeout(timeout) {
             // Handle everything already queued before drawing again.
             Ok(input) => std::iter::once(input).chain(drain(&rx)).collect(),
@@ -203,7 +201,7 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
             last_tick = Instant::now();
         }
         for input in inputs {
-            let effects = app.update(input, SystemTime::now());
+            let effects = redraw.update(&mut app, input, SystemTime::now());
             for effect in effects {
                 if !perform(effect, &mut session, herdr, &fleet, &work) {
                     if let Some((_, mut session)) = session.take() {
@@ -213,7 +211,6 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
                     return Ok(());
                 }
             }
-            dirty = true;
         }
     }
 }

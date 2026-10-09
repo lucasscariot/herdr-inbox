@@ -31,6 +31,12 @@ HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
   connection, long-lived subscriptions.
 - The end-to-end test starts a real Herdr server with every directory in a
   temporary folder and drives the real binary in a pseudo-terminal.
+- Typing latency has two checks: `runtime::redraw` replays keys and echoes
+  with a controlled clock, including the 16 ms frame limit; the PTY tests
+  measure cursor movement after each key, including a paused space and
+  continuous agent output. Their 250 ms deadline catches the old 700 ms
+  delay without relying on sub-frame wall-clock timing on shared CI runners.
+  Run `HERDR_E2E=1 cargo test --test e2e -- --nocapture` to see the samples.
 
 ## Style
 

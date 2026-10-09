@@ -829,10 +829,10 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
             "THREADS",
             vec![("↵", "open"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],
         ),
-        (_, Focus::Terminal) if app.config.speech.space_hold != Some(false) => {
+        (_, Focus::Terminal) if app.config.speech.space_hold_enabled() => {
             ("AGENT", vec![("tab", "threads"), ("hold ␣", "dictate")])
         }
-        (_, Focus::Terminal) => ("AGENT", vec![("tab", "threads")]),
+        (_, Focus::Terminal) => ("AGENT", vec![("tab", "threads"), ("⌃T", "dictate")]),
         (_, Focus::Composer) => ("NEW THREAD", vec![("esc", "back")]),
     };
     let mut left: Vec<(String, Style)> = Vec::new();

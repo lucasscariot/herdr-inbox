@@ -898,7 +898,7 @@ mod orbit_view {
         );
         assert!(cells.iter().all(|&(x, _, _)| x > app.layout.terminal.x));
         assert!(prompt - title - 2 <= 14 + 1, "the orbit stays small enough to keep the task high:\n{screen}");
-        for line in ["Workspace", "hold ␣ dictate"] {
+        for line in ["Workspace", "⌃T dictate"] {
             assert!(screen.contains(line), "everything under the task still shows: {line}");
         }
         let colours: Vec<Color> = cells.iter().map(|c| c.2).collect();
@@ -1014,14 +1014,21 @@ mod space_hold_hints {
     }
 
     #[test]
-    fn the_agent_and_composer_show_the_hold_unless_it_is_off() {
-        let mut app = loaded(110, 30);
-        app.focus = crate::app::Focus::Terminal;
-        assert!(bar(&app).contains("tab threads  hold ␣ dictate"), "{}", bar(&app));
-        app.config.speech = SpeechConfig { space_hold: Some(false), ..SpeechConfig::default() };
-        assert!(!bar(&app).contains("hold ␣"), "{}", bar(&app));
-        app.focus = crate::app::Focus::Composer;
-        let screen = text(&render(&app, at(3)));
-        assert!(screen.contains("⌃T dictate") && !screen.contains("hold ␣"), "{screen}");
+    fn the_agent_and_composer_show_ctrl_t_unless_hold_is_enabled() {
+        for space_hold in [None, Some(false), Some(true)] {
+            let mut app = loaded(110, 30);
+            app.config.speech = SpeechConfig { space_hold, ..SpeechConfig::default() };
+            let (hint, absent) = if space_hold == Some(true) {
+                ("hold ␣ dictate", "⌃T dictate")
+            } else {
+                ("⌃T dictate", "hold ␣")
+            };
+            app.focus = crate::app::Focus::Terminal;
+            let line = bar(&app);
+            assert!(line.contains(hint) && !line.contains(absent), "{line}");
+            app.focus = crate::app::Focus::Composer;
+            let screen = text(&render(&app, at(3)));
+            assert!(screen.contains(hint) && !screen.contains(absent), "{screen}");
+        }
     }
 }
