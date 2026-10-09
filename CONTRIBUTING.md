@@ -38,6 +38,11 @@ HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
   delay without relying on sub-frame wall-clock timing on shared CI runners.
   Run `HERDR_E2E=1 cargo test --test e2e -- --nocapture` to see the samples.
 
+The checks run on the self-hosted Blueprint Linux runners and a dedicated
+macOS runner on Mac Studio. The release workflow also tests all four packaged
+binaries. Fork PRs never run code on these machines; after review, a maintainer
+can move the changes to a branch in this repository. See [CI and releases](docs/ci.md).
+
 ## Style
 
 - No `unwrap()` outside tests.

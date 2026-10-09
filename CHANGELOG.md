@@ -49,6 +49,10 @@ never changes it.
   while a thread needs input. It animates only while on screen.
 - Prebuilt binaries for Linux and macOS on every release, and a one-line
   installer that checks their SHA-256.
+- Release Please maintains Rust version bumps and release notes. CI and
+  four-platform release builds use the self-hosted Blueprint Linux runners
+  and a dedicated macOS runner. Releases stay draft until tests and all
+  binaries and checksums pass; fork PRs never run on the personal runners.
 - Ctrl+G in the thread list or composer checks GitHub's latest stable release,
   shows its notes and opens its page with B. Enter confirms installation of
   that exact release into the running binary's directory, after verifying

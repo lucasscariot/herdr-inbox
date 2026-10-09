@@ -48,6 +48,25 @@ public interfaces.
 | `runtime` | Terminal setup, the event loop, effect execution. |
 | `runtime::redraw` | Applies inputs and schedules draws with a 16 ms frame limit. Forwarded keys wait for the agent's echo instead of redrawing an unchanged screen. |
 
+## Build and release
+
+Release Please's Rust strategy updates the crate, lockfile, changelog and
+release manifest in a reviewed PR. Merging it creates a tagged draft release.
+The same workflow tests that commit, builds four archives, verifies their
+checksums and publishes the draft only after every job succeeds. Keeping
+publication in one workflow avoids GitHub's suppression of tag events created
+by `GITHUB_TOKEN`.
+
+Linux jobs run in the Blueprint's ARM64 Docker runners on Mac Studio. BuildKit
+builds static musl binaries for both CPU architectures from a narrow source
+context, with emulation for x86_64. macOS jobs use a dedicated native ARM64
+runner and Xcode, with Rosetta to check the x86_64 binary. Both platforms use
+`scripts/package-release.sh` to keep the installer's archive layout unchanged.
+
+PR workflows use `pull_request_target` and reject fork heads before checkout.
+Only branches in this repository can run source on the personal runners.
+[CI and releases](docs/ci.md) records the setup and recovery commands.
+
 ## Rules that keep it honest
 
 - **No polling for status.** Herdr only reports status transitions through

@@ -3,55 +3,88 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
+  # Use the base branch's workflow, never a fork's modified workflow.
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: The trusted commit to test.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 env:
   CARGO_TERM_COLOR: always
-  # The Herdr release the end-to-end tests run against.
+  CARGO_BUILD_JOBS: 4
   HERDR_VERSION: v0.9.3
 
 jobs:
+  title:
+    name: Conventional Commit title
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    steps:
+      - name: Check the PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([a-z0-9_-]+\))?!?: [a-z].+'
+          [[ "$PR_TITLE" =~ $pattern ]] || {
+            echo 'Use a Conventional Commit title, for example: fix(threads): keep the selected task'
+            exit 1
+          }
+
   rust:
-    name: Rust · ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Rust and end to end · ${{ matrix.os }}
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: Linux
+            runner: [self-hosted, Linux, ARM64, blueprint]
+            asset: herdr-linux-aarch64
+          - os: macOS
+            runner: [self-hosted, macOS, ARM64, herdr-inbox]
+            asset: herdr-macos-aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ matrix.os }}
       - name: Format
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
-
-  e2e:
-    name: End to end · ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            asset: herdr-linux-x86_64
-          - os: macos-latest
-            asset: herdr-macos-aarch64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - name: Install Herdr ${{ env.HERDR_VERSION }}
         env:
           GH_TOKEN: ${{ github.token }}
+          HERDR_ASSET: ${{ matrix.asset }}
         run: |
           mkdir -p "$RUNNER_TEMP/herdr"
-          gh release download "$HERDR_VERSION" -R herdrdev/herdr -p '${{ matrix.asset }}' -O "$RUNNER_TEMP/herdr/herdr"
+          gh release download "$HERDR_VERSION" -R herdrdev/herdr -p "$HERDR_ASSET" -O "$RUNNER_TEMP/herdr/herdr" --clobber
           chmod +x "$RUNNER_TEMP/herdr/herdr"
           "$RUNNER_TEMP/herdr/herdr" --version
       - name: Test against a real Herdr
@@ -59,8 +92,19 @@ jobs:
 
   installer:
     name: Installer
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Shellcheck
-        run: shellcheck install.sh
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install ShellCheck in the runner container
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends shellcheck
+          fi
+      - name: ShellCheck
+        run: shellcheck install.sh scripts/package-release.sh
