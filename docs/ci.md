@@ -28,7 +28,11 @@ The native macOS runner lives at
 `~/goinfre/actions-runners/herdr-inbox-macos`. Its background LaunchAgent is
 `fr.scariot.herdr-inbox-runner` in the `user/501` domain, with its plist in
 `~/Library/LaunchAgents/`. It runs without a GUI login, uses Xcode and Rosetta,
-and restarts after an unexpected exit. Its HOME, Rust toolchains and config
+and restarts after an unexpected exit. Use `ProcessType=Standard` while keeping
+`LimitLoadToSessionType=Background`: background scheduling coalesced 25 ms test
+keypresses into intervals above 150 ms and broke hold-to-dictate checks. Standard
+scheduling preserves a headless service without throttling input timers.
+Its HOME, Rust toolchains and config
 live inside the runner directory, separate from personal development settings.
 Logs are in the runner's `logs/` and `_diag/` directories. A full reboot has not
 been tested.
@@ -98,7 +102,9 @@ tag or bump versions alongside Release Please.
 
 CI runs formatting, Clippy, unit and integration tests, ShellCheck, and the real
 Herdr end-to-end tests on Linux and macOS. Each test starts isolated Herdr state;
-no job connects to personal sessions. Herdr is pinned in `ci.yml`. Subprocess
+no job connects to personal sessions. The PTY tests run serially so concurrent
+TUIs do not distort their input timing. Their 250 ms latency limit is unchanged.
+Herdr is pinned in `ci.yml`. Subprocess
 fixtures wait for readiness before release or SIGINT rather than assuming a
 short startup time on a busy self-hosted Mac.
 
@@ -111,7 +117,8 @@ The release workflow builds these unchanged installer asset names:
 
 Each archive has an adjacent `.sha256` file and contains only `herdr-inbox`,
 `LICENSE` and `README.md`. Packaging tests cover names, layout, executable
-permissions, checksums and invalid inputs.
+permissions, checksums and invalid inputs. The packager normalizes the binary
+to mode 755 and documents to 644, even with the native runner's private umask.
 
 Publication waits for CI and all four builds, checks that the tag matches the
 crate version, verifies every archive's checksum, uploads all eight assets,

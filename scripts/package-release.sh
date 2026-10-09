@@ -20,6 +20,9 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$output"
 cp "$binary" "$stage/herdr-inbox"
 cp "$root/LICENSE" "$root/README.md" "$stage/"
+# The native runner has a private umask; published files must still be usable.
+chmod 755 "$stage/herdr-inbox"
+chmod 644 "$stage/LICENSE" "$stage/README.md"
 name="herdr-inbox-$asset.tar.gz"
 tar -czf "$output/$name" -C "$stage" herdr-inbox LICENSE README.md
 (

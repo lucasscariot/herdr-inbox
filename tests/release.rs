@@ -16,7 +16,7 @@ fn each_platform_has_a_flat_archive_and_a_portable_checksum() {
     let temp = tempfile::tempdir().unwrap();
     let binary = temp.path().join("a binary");
     fs::write(&binary, "#!/bin/sh\necho herdr-inbox 1.0.0\n").unwrap();
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
     let output = temp.path().join("release assets");
     for asset in ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-aarch64"] {
         let result = package(&binary, asset, &output);
@@ -48,7 +48,10 @@ fn each_platform_has_a_flat_archive_and_a_portable_checksum() {
             Command::new("tar").arg("-xzf").arg(output.join(&archive)).arg("-C").arg(&extracted).status().unwrap();
         assert!(extraction.success());
         assert_eq!(fs::read(extracted.join("herdr-inbox")).unwrap(), fs::read(&binary).unwrap());
-        assert_ne!(fs::metadata(extracted.join("herdr-inbox")).unwrap().permissions().mode() & 0o111, 0);
+        assert_eq!(fs::metadata(extracted.join("herdr-inbox")).unwrap().permissions().mode() & 0o777, 0o755);
+        for document in ["LICENSE", "README.md"] {
+            assert_eq!(fs::metadata(extracted.join(document)).unwrap().permissions().mode() & 0o777, 0o644);
+        }
     }
 }
 

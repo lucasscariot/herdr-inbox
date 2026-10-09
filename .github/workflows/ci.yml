@@ -97,7 +97,8 @@ jobs:
           chmod +x "$RUNNER_TEMP/herdr/herdr"
           "$RUNNER_TEMP/herdr/herdr" --version
       - name: Test against a real Herdr
-        run: HERDR_E2E=1 HERDR_BIN="$RUNNER_TEMP/herdr/herdr" cargo test --locked --test e2e -- --nocapture
+        # Each PTY test measures real input timing; do not run several TUIs at once.
+        run: HERDR_E2E=1 HERDR_BIN="$RUNNER_TEMP/herdr/herdr" cargo test --locked --test e2e -- --test-threads=1 --nocapture
 
   installer:
     name: Installer
