@@ -30,6 +30,8 @@ public interfaces.
 | `discovery` | An embedded Python probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs. Models are cached 15 minutes. |
 | `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. |
 | `editor`, `fuzzy` | The composer's text box and its pickers' ranking. |
+| `presets` | Named harness, model and thinking combinations, in the plugin's `presets.json` format. |
+| `speech` | Dictation: `recorder` (whatever is installed, stopped with SIGINT so the WAV is finalized), `meter` (an FFT over the file being written, twelve bands, an adaptive noise floor), `backends` (a command, voxtype, whisper.cpp, or a hosted service through `curl` with the key on stdin), `whisper` (builds whisper.cpp and downloads a model). |
 | `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
@@ -72,6 +74,11 @@ public interfaces.
   the user answers, the inbox waits until Herdr reports the agent idle and
   ready twice in a row (an agent can look idle while it is still starting)
   and only then sends it. Another dialog sends it back to waiting.
+- **Dictated words are never lost.** Recording refuses to start without a
+  way to transcribe; a delivery that fails keeps the transcript in its
+  notice; while the microphone is open no key reaches an agent.
+- **Secrets stay out of sight.** API keys go to `curl` on its standard input,
+  never in its arguments, and a key being typed is drawn as dots.
 - **Discovery and launches never block the UI.** They run on worker threads
   and report back as inputs.
 - **The emulator cannot crash the app.** vt100 panics on some edge cases (a

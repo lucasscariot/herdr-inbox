@@ -30,14 +30,208 @@ pub fn draw(frame: &mut Frame, app: &App, palette: &Palette, now: SystemTime) {
                 composer::draw(buf, app, app.layout.terminal, palette).cursor
             } else {
                 terminal(buf, app, palette);
-                cursor(app)
+                match &app.reply {
+                    Some(reply) => reply_box(buf, app, reply, palette),
+                    None => cursor(app),
+                }
             };
             if let Some((x, y)) = cursor {
                 frame.set_cursor_position((x, y));
             }
         }
     }
-    status_bar(frame.buffer_mut(), app, palette);
+    if app.menu.is_some() {
+        let area = frame.area();
+        if let Some(cursor) = menu(frame.buffer_mut(), app, area, palette) {
+            frame.set_cursor_position(cursor);
+        }
+    }
+    match &app.dictation {
+        Some(dictation) => dictation_bar(frame.buffer_mut(), app, dictation, palette, now),
+        None => status_bar(frame.buffer_mut(), app, palette),
+    }
+}
+
+/// The status bar while dictating: the live meter and what each key does.
+fn dictation_bar(buf: &mut Buffer, app: &App, dictation: &crate::app::Dictation, palette: &Palette, now: SystemTime) {
+    use crate::app::Phase;
+    let area = app.layout.bar;
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    fill(buf, area, Style::new());
+    let key = Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD);
+    let text = Style::new().fg(palette.overlay0);
+    let mut left: Vec<(String, Style)> = Vec::new();
+    match dictation.phase {
+        Phase::Transcribing => {
+            left.push(("⟳ Transcribing…".into(), Style::new().fg(palette.yellow).add_modifier(Modifier::BOLD)));
+            left.push(("  ".into(), text));
+            left.push(("esc".into(), key));
+            left.push((" discard".into(), text));
+        }
+        Phase::Starting | Phase::Recording => {
+            let secs = now.duration_since(dictation.started).map(|d| d.as_secs()).unwrap_or(0);
+            left.push((
+                format!("● REC {}:{:02}", secs / 60, secs % 60),
+                Style::new().fg(palette.red).add_modifier(Modifier::BOLD),
+            ));
+            left.push((" ".into(), text));
+            let levels = if dictation.levels.is_empty() {
+                vec![0.0; crate::speech::meter::BANDS]
+            } else {
+                dictation.levels.clone()
+            };
+            for level in &levels {
+                let color = match crate::speech::meter::shade(*level) {
+                    2 => palette.red,
+                    1 => palette.accent,
+                    _ => palette.green,
+                };
+                left.push((crate::speech::meter::line(&[*level]), Style::new().fg(color)));
+            }
+            left.push(("  ".into(), text));
+            for (index, (k, label)) in [("↵", "send"), ("⌃T", "type"), ("esc", "discard")].iter().enumerate() {
+                if index > 0 {
+                    left.push(("  ".into(), text));
+                }
+                left.push(((*k).into(), key));
+                left.push((format!(" {label}"), text));
+            }
+        }
+    }
+    let target = match &dictation.target {
+        crate::app::Target::Composer => "into the task".to_string(),
+        crate::app::Target::Reply => "into the reply".to_string(),
+        crate::app::Target::Thread(id) => app.thread(id).map(|t| format!("to “{}”", t.title)).unwrap_or_default(),
+    };
+    let right = if dictation.quiet && dictation.phase == Phase::Recording {
+        vec![("no sound is reaching the microphone".to_string(), Style::new().fg(palette.yellow))]
+    } else {
+        vec![(target, text)]
+    };
+    split_line(buf, area.x + 1, area.y, area.width.saturating_sub(2), &left, &right);
+}
+
+/// The dictation menu, centered. Returns the cursor of a key or command entry.
+fn menu(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Option<(u16, u16)> {
+    use crate::app::{Entry, MenuItem};
+    use crate::speech::backends::service;
+    let menu = app.menu.as_ref()?;
+    let items = crate::app::menu_items();
+    let width = 64.min(area.width.saturating_sub(2));
+    let height = (items.len() as u16 + 9).min(area.height.saturating_sub(2));
+    if width < 30 || height < 8 {
+        return None;
+    }
+    let rect =
+        Rect::new(area.x + (area.width - width) / 2, area.y + area.height.saturating_sub(height) / 2, width, height);
+    let bg = Style::new().bg(palette.surface0);
+    fill(buf, rect, bg);
+    ratatui::widgets::Widget::render(
+        ratatui::widgets::Block::new()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(palette.accent).bg(palette.surface0))
+            .title(" Dictation "),
+        rect,
+        buf,
+    );
+    let x = rect.x + 2;
+    let inner = rect.width.saturating_sub(4);
+    let dim = Style::new().fg(palette.overlay0).bg(palette.surface0);
+    let mut y = rect.y + 1;
+    let using = match &app.speech.ready {
+        Some(label) => vec![
+            ("Transcribing with ".to_string(), dim),
+            (label.clone(), Style::new().fg(palette.green).bg(palette.surface0)),
+        ],
+        None => {
+            vec![("No transcription yet. Connect one:".to_string(), Style::new().fg(palette.text).bg(palette.surface0))]
+        }
+    };
+    split_line(buf, x, y, inner, &using, &[]);
+    y += 2;
+    for (index, item) in items.iter().enumerate() {
+        if y + 1 >= rect.bottom() {
+            break;
+        }
+        let selected = index == menu.selected && menu.entry.is_none();
+        let row_bg = if selected { palette.selection_bg } else { palette.surface0 };
+        fill(buf, Rect::new(rect.x + 1, y, rect.width.saturating_sub(2), 1), Style::new().bg(row_bg));
+        let (label, detail) = match item {
+            MenuItem::Service(id) => {
+                let service = service(id);
+                let connected = app.credentials.keys.get(*id).is_some_and(|k| !k.is_empty());
+                let label = service.map(|s| s.label).unwrap_or(id).to_string();
+                let detail = if connected {
+                    "connected ✓".to_string()
+                } else {
+                    service.map(|s| s.detail.to_string()).unwrap_or_default()
+                };
+                (format!("Connect {label}"), detail)
+            }
+            MenuItem::BuildWhisper => ("Build whisper.cpp here".to_string(), "offline, about 500 MB".to_string()),
+            MenuItem::Command => ("Custom command…".to_string(), "{file} is the recording".to_string()),
+            MenuItem::Disconnect => ("Disconnect".to_string(), String::new()),
+        };
+        split_line(
+            buf,
+            x,
+            y,
+            inner,
+            &[(label, Style::new().fg(palette.text).bg(row_bg))],
+            &[(detail, Style::new().fg(palette.overlay0).bg(row_bg))],
+        );
+        y += 1;
+    }
+    let mut cursor = None;
+    let entry_y = rect.bottom().saturating_sub(3);
+    match &menu.entry {
+        Some(Entry::Key { service: id, editor }) => {
+            let label = service(id).map(|s| s.label).unwrap_or(id);
+            // A key is a secret: show only how much was typed.
+            let masked: String = "•".repeat(editor.text().chars().count());
+            let prompt = format!("{label} key › ");
+            split_line(
+                buf,
+                x,
+                entry_y,
+                inner,
+                &[(prompt.clone(), dim), (masked.clone(), Style::new().fg(palette.text).bg(palette.surface0))],
+                &[],
+            );
+            cursor = Some((x + prompt.width() as u16 + masked.chars().count() as u16, entry_y));
+        }
+        Some(Entry::Command { editor }) => {
+            let prompt = "Command › ";
+            split_line(
+                buf,
+                x,
+                entry_y,
+                inner,
+                &[
+                    (prompt.into(), dim),
+                    (editor.text().to_string(), Style::new().fg(palette.text).bg(palette.surface0)),
+                ],
+                &[],
+            );
+            cursor = Some((x + prompt.width() as u16 + editor.text().width() as u16, entry_y));
+        }
+        None => {}
+    }
+    if let Some((status, error)) = &menu.status {
+        let color = if *error { palette.red } else { palette.subtext0 };
+        split_line(
+            buf,
+            x,
+            rect.bottom().saturating_sub(2),
+            inner,
+            &[(status.clone(), Style::new().fg(color).bg(palette.surface0))],
+            &[],
+        );
+    }
+    cursor.map(|(cx, cy)| (cx.min(rect.right().saturating_sub(2)), cy))
 }
 
 /// Where the real terminal cursor goes: the agent's cursor, when the agent
@@ -216,6 +410,14 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
 
 fn summary(app: &App, palette: &Palette) -> Vec<(String, Style)> {
     let dim = Style::new().fg(palette.overlay0);
+    if app.filtering || !app.filter.is_empty() {
+        let caret = if app.filtering { "▏" } else { "" };
+        return vec![
+            ("/ ".into(), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
+            (format!("{}{caret}", app.filter), Style::new().fg(palette.text)),
+            (format!("  {} shown", app.threads.len()), dim),
+        ];
+    }
     match app.overall_connection() {
         Connection::Connecting => return vec![("connecting…".into(), dim)],
         Connection::Lost(_) => return vec![("reconnecting…".into(), Style::new().fg(palette.red))],
@@ -310,6 +512,15 @@ fn thread_line(
             ],
             &[],
         ),
+        _ if note_line(thread).is_some() => {
+            let (text, color) = note_line(thread).unwrap_or_default();
+            let color = match color {
+                NoteColor::Red => palette.red,
+                NoteColor::Yellow => palette.yellow,
+                NoteColor::Dim => palette.overlay0,
+            };
+            split_line(buf, x, area.y, width, &[(text, Style::new().fg(color))], &[]);
+        }
         _ => {
             let mut left = Vec::new();
             if let Some(branch) = &thread.branch {
@@ -325,6 +536,72 @@ fn thread_line(
             split_line(buf, x, area.y, width, &left, &right);
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum NoteColor {
+    Red,
+    Yellow,
+    #[default]
+    Dim,
+}
+
+/// The third row of a thread whose launch has something to say.
+fn note_line(thread: &Thread) -> Option<(String, NoteColor)> {
+    use crate::threads::LaunchNote;
+    match thread.note.as_ref()? {
+        LaunchNote::Failed(error) => Some((format!("failed: {error}"), NoteColor::Red)),
+        LaunchNote::Waiting => Some(("waiting: answer its prompt".into(), NoteColor::Yellow)),
+        // Once the agent reacts, the doubt is gone.
+        LaunchNote::Unverified if matches!(thread.status, AgentStatus::Idle | AgentStatus::Unknown) => {
+            Some(("sent, not confirmed yet".into(), NoteColor::Dim))
+        }
+        LaunchNote::Unverified => None,
+    }
+}
+
+/// The reply box, over the bottom of the terminal area. Returns the cursor.
+fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &Palette) -> Option<(u16, u16)> {
+    let area = app.layout.terminal;
+    if area.width < 12 || area.height < 6 {
+        return None;
+    }
+    let inner_width = area.width.saturating_sub(6);
+    let (lines, (row, col)) = reply.editor.layout(inner_width);
+    let rows = (lines.len() as u16).clamp(1, 6);
+    let height = rows + 3;
+    let rect = Rect::new(area.x + 1, area.bottom().saturating_sub(height), area.width.saturating_sub(2), height);
+    fill(buf, rect, Style::new().bg(palette.surface0));
+    let title = app.thread(&reply.thread).map(|t| t.title.clone()).unwrap_or_default();
+    ratatui::widgets::Widget::render(
+        ratatui::widgets::Block::new()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(palette.accent).bg(palette.surface0))
+            .title(format!(" Reply to “{}” ", clip(&title, inner_width.saturating_sub(12) as usize))),
+        rect,
+        buf,
+    );
+    let scroll = row.saturating_sub(rows - 1);
+    for (index, line) in lines.iter().skip(scroll as usize).take(rows as usize).enumerate() {
+        buf.set_stringn(
+            rect.x + 2,
+            rect.y + 1 + index as u16,
+            line,
+            inner_width as usize,
+            Style::new().fg(palette.text).bg(palette.surface0),
+        );
+    }
+    let hint = "↵ send · ⇧↵ new line · esc cancel";
+    split_line(
+        buf,
+        rect.x + 2,
+        rect.bottom().saturating_sub(2),
+        inner_width,
+        &[],
+        &[(hint.into(), Style::new().fg(palette.overlay0).bg(palette.surface0))],
+    );
+    Some((rect.x + 2 + col.min(inner_width), rect.y + 1 + row - scroll))
 }
 
 fn separator(buf: &mut Buffer, app: &App, palette: &Palette) {
@@ -462,6 +739,8 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     let (badge, hints): (&str, Vec<(&str, &str)>) = match (app.needs_server_screen(), app.focus) {
         (true, _) => ("", vec![]),
         (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("y", "archive"), ("n", "keep")]),
+        (_, _) if app.reply.is_some() => ("REPLY", vec![("↵", "send"), ("esc", "cancel")]),
+        (_, Focus::List) if app.filtering => ("FILTER", vec![("↵", "keep"), ("esc", "clear")]),
         (_, Focus::List) => (
             "THREADS",
             vec![("↵", "open"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],

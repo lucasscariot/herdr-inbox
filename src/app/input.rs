@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use super::{App, Connection, Effect, Field, Focus, StreamState};
+use super::{App, Connection, Effect, Field, Focus, Pick, StreamState};
 use crate::herdr::terminal::{Control, MouseAction, MouseButton as PaneButton, ScrollDirection};
 use crate::keys;
 
@@ -20,6 +20,19 @@ const WHEEL_LINES: u16 = 3;
 pub(super) fn key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     if key.kind == KeyEventKind::Release {
         return;
+    }
+    if app.menu.is_some() {
+        return app.menu_key(key, effects);
+    }
+    if app.dictation_key(key, effects) {
+        return;
+    }
+    let ctrl_t = key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL);
+    if ctrl_t && !app.needs_server_screen() {
+        return app.start_dictation(now, effects);
+    }
+    if key.code == KeyCode::F(10) && matches!(app.focus, Focus::List | Focus::Composer) && !app.needs_server_screen() {
+        return app.open_menu();
     }
     if app.needs_server_screen() {
         match app.local().connection {
@@ -44,7 +57,7 @@ fn close_composer(app: &mut App) {
 
 fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     if app.composer.picker.is_some() {
-        return picker_key(app, key);
+        return picker_key(app, key, effects);
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -60,6 +73,27 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
             return;
         }
         KeyCode::Char('s') if ctrl => return app.send(true, now, effects),
+        KeyCode::Char('d') if ctrl => {
+            let suggested = app.composer.suggested_preset_name(&app.composer_context());
+            match suggested {
+                Some(name) => {
+                    app.composer.open_picker(Field::Preset, &name);
+                    if let Some(picker) = app.composer.picker.as_mut() {
+                        picker.saving = true;
+                    }
+                }
+                None => app.composer.error = Some("Pick a model first to save a preset.".into()),
+            }
+            return;
+        }
+        KeyCode::Char('p') if ctrl && app.composer.field == Field::Task => {
+            let history = app.history.clone();
+            return app.composer.browse_history(&history, true);
+        }
+        KeyCode::Char('n') if ctrl && app.composer.field == Field::Task => {
+            let history = app.history.clone();
+            return app.composer.browse_history(&history, false);
+        }
         KeyCode::Enter if ctrl => return app.send(true, now, effects),
         KeyCode::Tab => return app.with_composer(|c, ctx| c.next_field(ctx, true)),
         KeyCode::BackTab => return app.with_composer(|c, ctx| c.next_field(ctx, false)),
@@ -123,11 +157,11 @@ fn field_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn picker_key(app: &mut App, key: KeyEvent) {
+fn picker_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
     let Some(picker) = app.composer.picker.clone() else {
         return;
     };
-    let choices = app.composer.choices(&app.composer_context(), picker.field, &picker.query);
+    let choices = app.composer.choices_with_actions(&app.composer_context(), picker.field, &picker.query);
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let mut picker = picker;
     match key.code {
@@ -139,9 +173,38 @@ fn picker_key(app: &mut App, key: KeyEvent) {
             if let Some(choice) = choices.get(picker.selected).filter(|c| c.enabled) {
                 let pick = choice.pick.clone();
                 app.composer.close_picker();
-                app.with_composer(|c, ctx| c.apply(ctx, pick));
+                match pick {
+                    Pick::SavePreset(name) => {
+                        let preset = crate::presets::Preset {
+                            name,
+                            harness: app.composer.harness.clone().unwrap_or_default(),
+                            model: app.composer.model.clone().unwrap_or_default(),
+                            thinking: app.composer.thinking.clone().unwrap_or_default(),
+                        };
+                        let next = crate::presets::save(&app.presets, preset);
+                        app.change_presets(next, effects);
+                    }
+                    Pick::RenamePreset { from, to } => {
+                        let next = crate::presets::rename(&app.presets, &from, &to);
+                        app.change_presets(next, effects);
+                    }
+                    pick => app.with_composer(|c, ctx| c.apply(ctx, pick)),
+                }
             }
             return;
+        }
+        KeyCode::Delete if picker.field == Field::Preset => {
+            if let Some(Pick::Preset(name)) = choices.get(picker.selected).map(|c| c.pick.clone()) {
+                let next = crate::presets::remove(&app.presets, &name);
+                app.change_presets(Ok(next), effects);
+            }
+        }
+        KeyCode::Char('r') if ctrl && picker.field == Field::Preset => {
+            if let Some(Pick::Preset(name)) = choices.get(picker.selected).map(|c| c.pick.clone()) {
+                picker.query = name.clone();
+                picker.renaming = Some(name);
+                picker.selected = 0;
+            }
         }
         KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
         KeyCode::Char('p') if ctrl => picker.selected = picker.selected.saturating_sub(1),
@@ -158,7 +221,8 @@ fn picker_key(app: &mut App, key: KeyEvent) {
         _ => return,
     }
     // Re-rank for the new query and keep the selection on the list.
-    let count = app.composer.choices(&app.composer_context(), picker.field, &picker.query).len();
+    app.composer.picker = Some(picker.clone());
+    let count = app.composer.choices_with_actions(&app.composer_context(), picker.field, &picker.query).len();
     picker.selected = picker.selected.min(count.saturating_sub(1));
     app.composer.picker = Some(picker);
 }
@@ -204,18 +268,29 @@ fn terminal_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
 }
 
 fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    if app.reply.is_some() {
+        return reply_key(app, key, effects);
+    }
+    if app.filtering {
+        return filter_key(app, key);
+    }
     if let Some(id) = app.confirm_archive.take() {
         if matches!(key.code, KeyCode::Enter | KeyCode::Char('y'))
             && let Some(thread) = app.thread(&id)
         {
-            let effect = Effect::Archive {
+            let failed_launch = thread.id.starts_with(super::LAUNCH_PREFIX);
+            let effect = (!thread.workspace_id.is_empty()).then(|| Effect::Archive {
                 machine: thread.machine_id.clone(),
                 thread: thread.id.clone(),
                 workspace_id: thread.workspace_id.clone(),
                 title: thread.title.clone(),
-            };
-            app.archiving.insert(id);
-            effects.push(effect);
+            });
+            app.archiving.insert(id.clone());
+            effects.extend(effect);
+            if failed_launch {
+                // Archiving a failed launch also forgets it.
+                app.dismiss(&id, effects);
+            }
         }
         return;
     }
@@ -229,9 +304,12 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         KeyCode::Char('G') | KeyCode::End => select(app, app.threads.len().saturating_sub(1)),
         KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('l') | KeyCode::Right => {
             if let Some(id) = app.cursor.clone() {
-                app.open_thread(&id, now, effects);
-                app.focus = Focus::Terminal;
+                focus_thread(app, &id, now, effects);
             }
+        }
+        KeyCode::Esc if !app.filter.is_empty() => {
+            app.filter.clear();
+            app.rebuild_now();
         }
         KeyCode::Tab | KeyCode::Esc if app.open.is_some() => {
             app.focus = Focus::Terminal;
@@ -240,10 +318,119 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
             app.confirm_archive = app.cursor.clone();
         }
         KeyCode::Char('n') => app.open_composer(now, effects),
+        KeyCode::Char('/') => {
+            app.filtering = true;
+        }
+        KeyCode::Char('r') => start_reply(app, now),
+        KeyCode::Char('e') => {
+            if let Some(id) = app.cursor.clone() {
+                app.resend(&id, now, effects);
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(id) = app.cursor.clone() {
+                app.dismiss(&id, effects);
+            }
+        }
         // With saved machines the list stays up without a local server; `s`
         // starts one.
         KeyCode::Char('s') if app.local().connection == Connection::NoServer => app.start_local_server(now, effects),
         _ => {}
+    }
+}
+
+/// Typing the list filter: every key edits it, Enter keeps it, Esc clears it.
+fn filter_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.filter.clear();
+            app.filtering = false;
+        }
+        KeyCode::Enter | KeyCode::Down | KeyCode::Up => app.filtering = false,
+        KeyCode::Backspace => {
+            if app.filter.pop().is_none() {
+                app.filtering = false;
+            }
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => app.filter.push(c),
+        _ => return,
+    }
+    app.rebuild_now();
+}
+
+/// `r`: write to the cursor's agent without opening its thread.
+fn start_reply(app: &mut App, now: SystemTime) {
+    let Some(thread) = app.cursor.as_deref().and_then(|id| app.thread(id)).cloned() else {
+        return;
+    };
+    if thread.pane_id.is_empty() || thread.id.starts_with(super::LAUNCH_PREFIX) {
+        app.notify("This launch never started an agent. Press e to send it again.", super::NoticeKind::Error, now);
+        return;
+    }
+    if thread.status == crate::herdr::types::AgentStatus::Blocked {
+        app.notify(
+            format!("“{}” is waiting for an answer. Open it to reply.", thread.title),
+            super::NoticeKind::Error,
+            now,
+        );
+        return;
+    }
+    app.reply = Some(super::Reply { thread: thread.id, editor: crate::editor::Editor::default() });
+}
+
+fn reply_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
+    let Some(reply) = app.reply.as_mut() else {
+        return;
+    };
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let newline = key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => app.reply = None,
+        KeyCode::Char('c') if ctrl => app.reply = None,
+        KeyCode::Enter if newline => reply.editor.insert("\n"),
+        KeyCode::Enter => {
+            if reply.editor.is_blank() {
+                return;
+            }
+            let text = reply.editor.text().trim().to_string();
+            let id = reply.thread.clone();
+            app.reply = None;
+            if let Some(thread) = app.thread(&id) {
+                effects.push(Effect::Prompt {
+                    machine: thread.machine_id.clone(),
+                    pane_id: thread.pane_id.clone(),
+                    title: thread.title.clone(),
+                    text,
+                });
+            }
+        }
+        KeyCode::Char('w') if ctrl => reply.editor.delete_word(),
+        KeyCode::Char('u') if ctrl => reply.editor.clear(),
+        KeyCode::Char(c) if !ctrl => {
+            let mut buffer = [0; 4];
+            reply.editor.insert(c.encode_utf8(&mut buffer));
+        }
+        KeyCode::Backspace => reply.editor.backspace(),
+        KeyCode::Delete => reply.editor.delete(),
+        KeyCode::Left => reply.editor.left(),
+        KeyCode::Right => reply.editor.right(),
+        KeyCode::Home => reply.editor.home(),
+        KeyCode::End => reply.editor.end(),
+        KeyCode::Up => {
+            reply.editor.up();
+        }
+        KeyCode::Down => {
+            reply.editor.down();
+        }
+        _ => {}
+    }
+}
+
+/// Opens a thread and gives it the keyboard, if it actually opened.
+fn focus_thread(app: &mut App, id: &str, now: SystemTime, effects: &mut Vec<Effect>) {
+    app.open_thread(id, now, effects);
+    if app.open.as_ref().is_some_and(|o| o.id == id) {
+        app.focus = Focus::Terminal;
     }
 }
 
@@ -265,6 +452,15 @@ fn select(app: &mut App, index: usize) {
 }
 
 pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
+    if let Some(reply) = app.reply.as_mut() {
+        reply.editor.insert(text);
+        return;
+    }
+    if app.filtering {
+        app.filter.push_str(text.lines().next().unwrap_or(""));
+        app.rebuild_now();
+        return;
+    }
     if app.focus == Focus::Composer {
         match &mut app.composer.picker {
             Some(picker) => picker.query.push_str(text.lines().next().unwrap_or("")),
@@ -302,8 +498,7 @@ pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: 
                 if let Some(index) = app.layout.thread_at(x, y) {
                     select(app, index);
                     if let Some(id) = app.cursor.clone() {
-                        app.open_thread(&id, now, effects);
-                        app.focus = Focus::Terminal;
+                        focus_thread(app, &id, now, effects);
                     }
                 }
             }

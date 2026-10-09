@@ -11,6 +11,7 @@ use crate::config::{Config, WorkspaceMode};
 use crate::discovery::{Catalog, Inventory, Project};
 use crate::editor::Editor;
 use crate::launch::{self, Request, WorkspaceChoice};
+use crate::presets::{self, Preset};
 use crate::state::Preferences;
 use crate::threads::harness_label_for;
 
@@ -24,6 +25,7 @@ pub enum Field {
     Task,
     Project,
     Machine,
+    Preset,
     Harness,
     Model,
     Thinking,
@@ -31,14 +33,23 @@ pub enum Field {
 }
 
 impl Field {
-    pub const ORDER: [Field; 7] =
-        [Field::Task, Field::Project, Field::Machine, Field::Harness, Field::Model, Field::Thinking, Field::Workspace];
+    pub const ORDER: [Field; 8] = [
+        Field::Task,
+        Field::Project,
+        Field::Machine,
+        Field::Preset,
+        Field::Harness,
+        Field::Model,
+        Field::Thinking,
+        Field::Workspace,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Field::Task => "Task",
             Field::Project => "Project",
             Field::Machine => "Machine",
+            Field::Preset => "Preset",
             Field::Harness => "Harness",
             Field::Model => "Model",
             Field::Thinking => "Thinking",
@@ -54,6 +65,7 @@ impl Field {
             Field::Harness => Some(3),
             Field::Model => Some(4),
             Field::Machine => Some(6),
+            Field::Preset => Some(7),
             Field::Thinking => Some(8),
             Field::Workspace => Some(9),
         }
@@ -82,6 +94,13 @@ pub enum Pick {
     Model(Option<String>),
     Thinking(Option<String>),
     Workspace(WorkspaceSel),
+    Preset(String),
+    /// Save the current harness, model and thinking under this name.
+    SavePreset(String),
+    RenamePreset {
+        from: String,
+        to: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +120,10 @@ pub struct Picker {
     /// Where focus goes back when the picker closes: the task, when it was
     /// opened with a function key while typing.
     pub return_to: Field,
+    /// In the preset picker: the preset being renamed.
+    pub renaming: Option<String>,
+    /// Opened to save a preset (Ctrl+D): saving comes first.
+    pub saving: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +139,10 @@ pub struct Composer {
     pub picker: Option<Picker>,
     /// Why the last send was refused.
     pub error: Option<String>,
+    /// Position in the task history while browsing it; `None` when editing.
+    pub history_index: Option<usize>,
+    /// The task being written before browsing the history.
+    pub history_draft: String,
 }
 
 impl Default for Composer {
@@ -131,6 +158,8 @@ impl Default for Composer {
             field: Field::Task,
             picker: None,
             error: None,
+            history_index: None,
+            history_draft: String::new(),
         }
     }
 }
@@ -141,6 +170,7 @@ pub struct Context<'a> {
     pub inventories: &'a HashMap<String, Inventory>,
     pub preferences: &'a Preferences,
     pub config: &'a Config,
+    pub presets: &'a [Preset],
 }
 
 impl Context<'_> {
@@ -203,7 +233,8 @@ impl Composer {
         }
         let return_to = self.field;
         self.field = field;
-        self.picker = Some(Picker { field, query: query.to_string(), selected: 0, return_to });
+        self.picker =
+            Some(Picker { field, query: query.to_string(), selected: 0, return_to, renaming: None, saving: false });
     }
 
     /// Closes the picker, focus back where it came from.
@@ -216,6 +247,10 @@ impl Composer {
     /// Fills empty or invalid choices from what the user did last time.
     pub fn settle(&mut self, ctx: &Context) {
         let names = ctx.project_names();
+        if names.is_empty() {
+            // Nothing discovered yet: keep what the user (or a re-send) chose.
+            return;
+        }
         if self.project.as_ref().is_none_or(|p| !names.contains(p)) {
             let remembered = ctx.preferences.last_project.clone().filter(|p| names.contains(p));
             self.project = remembered.or_else(|| names.first().cloned());
@@ -318,8 +353,64 @@ impl Composer {
             Pick::Model(model) => self.model = model,
             Pick::Thinking(level) => self.thinking = level,
             Pick::Workspace(workspace) => self.workspace = workspace,
+            Pick::Preset(name) => {
+                let Some(preset) = ctx.presets.iter().find(|p| p.name == name).cloned() else {
+                    return;
+                };
+                let installed = self.machine.as_deref().map(|m| ctx.installed(m)).unwrap_or_default();
+                if !installed.contains(&preset.harness) {
+                    self.error =
+                        Some(format!("{} is not installed on this machine.", harness_label_for(&preset.harness)));
+                    return;
+                }
+                self.harness = Some(preset.harness.clone());
+                self.model = Some(preset.model.clone());
+                self.thinking = Some(preset.thinking.clone()).filter(|t| !t.is_empty());
+                self.settle(ctx);
+            }
+            // Saving and renaming change the app's preset list; the app does it.
+            Pick::SavePreset(_) | Pick::RenamePreset { .. } => {}
         }
         self.error = None;
+    }
+
+    /// The preset matching the current harness, model and thinking.
+    pub fn matching_preset<'p>(&self, presets: &'p [Preset]) -> Option<&'p Preset> {
+        let harness = self.harness.as_deref()?;
+        presets.iter().find(|p| p.matches(harness, self.model.as_deref(), self.thinking.as_deref()))
+    }
+
+    /// The name offered when saving the current choices as a preset.
+    pub fn suggested_preset_name(&self, ctx: &Context) -> Option<String> {
+        self.model.as_ref()?;
+        Some(presets::suggested_name(
+            &self.value(ctx, Field::Harness),
+            &self.value(ctx, Field::Model),
+            self.thinking.as_deref(),
+        ))
+    }
+
+    /// Steps through past tasks: `older` toward the oldest. Leaving the
+    /// history restores the task being written.
+    pub fn browse_history(&mut self, history: &[String], older: bool) {
+        let next = match (self.history_index, older) {
+            (None, true) if !history.is_empty() => {
+                self.history_draft = self.task.text().to_string();
+                Some(0)
+            }
+            (None, _) => return,
+            (Some(index), true) => Some((index + 1).min(history.len().saturating_sub(1))),
+            (Some(0), false) => None,
+            (Some(index), false) => Some(index - 1),
+        };
+        self.history_index = next;
+        match next {
+            Some(index) => self.task.set(&history[index]),
+            None => {
+                let draft = std::mem::take(&mut self.history_draft);
+                self.task.set(&draft);
+            }
+        }
     }
 
     /// The branch a new worktree would get right now.
@@ -348,6 +439,7 @@ impl Composer {
         let choice = |label: String, detail: String, pick: Pick| Choice { label, detail, pick, enabled: true };
         match field {
             Field::Task => Vec::new(),
+            Field::Preset => self.preset_choices(ctx, query),
             Field::Project => ctx
                 .project_names()
                 .into_iter()
@@ -461,6 +553,65 @@ impl Composer {
         }
     }
 
+    fn preset_choices(&self, ctx: &Context, query: &str) -> Vec<Choice> {
+        let typed = query.trim();
+        if let Some(from) = self.picker.as_ref().and_then(|p| p.renaming.clone()) {
+            return vec![Choice {
+                label: format!("Rename to {typed}"),
+                detail: format!("was {from}"),
+                pick: Pick::RenamePreset { from, to: typed.to_string() },
+                enabled: !typed.is_empty(),
+            }];
+        }
+        let installed = self.machine.as_deref().map(|m| ctx.installed(m)).unwrap_or_default();
+        ctx.presets
+            .iter()
+            .map(|preset| {
+                let thinking =
+                    if preset.thinking.is_empty() { String::new() } else { format!(" · {}", preset.thinking) };
+                let available = installed.contains(&preset.harness);
+                Choice {
+                    label: preset.name.clone(),
+                    detail: if available {
+                        format!("{} · {}{thinking}", harness_label_for(&preset.harness), preset.model)
+                    } else {
+                        "not installed here".into()
+                    },
+                    pick: Pick::Preset(preset.name.clone()),
+                    enabled: available,
+                }
+            })
+            .collect()
+    }
+
+    /// Every choice for a field, best match first, with the action to save a
+    /// new preset on top when the query names one.
+    pub fn choices_with_actions(&self, ctx: &Context, field: Field, query: &str) -> Vec<Choice> {
+        let mut choices = self.choices(ctx, field, query);
+        let typed = query.trim();
+        let renaming = self.picker.as_ref().is_some_and(|p| p.renaming.is_some());
+        if field == Field::Preset && !renaming && !typed.is_empty() && !ctx.presets.iter().any(|p| p.name == typed) {
+            let ready = self.harness.is_some() && self.model.is_some();
+            let save = Choice {
+                label: format!("Save as {typed}"),
+                detail: if ready {
+                    "the current harness, model and thinking".into()
+                } else {
+                    "pick a model first".into()
+                },
+                pick: Pick::SavePreset(typed.to_string()),
+                enabled: ready,
+            };
+            // Typing finds presets; saving leads only when asked for with Ctrl+D.
+            if self.picker.as_ref().is_some_and(|p| p.saving) {
+                choices.insert(0, save);
+            } else {
+                choices.push(save);
+            }
+        }
+        choices
+    }
+
     /// A launch request, or why it cannot be sent yet.
     pub fn request(&self, ctx: &Context) -> Result<Request, String> {
         if self.task.is_blank() {
@@ -515,6 +666,11 @@ impl Composer {
                 (None, _) => "Default".into(),
             },
             Field::Thinking => self.thinking.clone().unwrap_or_else(|| "Default".into()),
+            Field::Preset => match self.matching_preset(ctx.presets) {
+                Some(preset) => preset.name.clone(),
+                None if ctx.presets.is_empty() => "None yet · Ctrl+D saves one".into(),
+                None => "None".into(),
+            },
             Field::Workspace => match &self.workspace {
                 WorkspaceSel::New => "New worktree".into(),
                 WorkspaceSel::Named(name) => format!("New worktree · {name}"),

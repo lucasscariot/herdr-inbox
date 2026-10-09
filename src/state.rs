@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+/// How many past tasks the composer recalls.
+pub const HISTORY_LIMIT: usize = 50;
+
+/// Files carried over from the legacy plugin's state, once.
+const MIGRATED: [&str; 4] = ["preferences.json", "presets.json", "history.json", "credentials.json"];
+const MIGRATION_MARKER: &str = ".migrated-from-plugin";
+
 #[derive(Debug, Clone)]
 pub struct State {
     dir: PathBuf,
@@ -144,6 +151,61 @@ impl State {
         self.read("preferences.json")
     }
 
+    /// Past tasks, newest first.
+    pub fn history(&self) -> Vec<String> {
+        self.read("history.json")
+    }
+
+    /// Adds a task to the top of the history, without duplicates.
+    pub fn push_history(&self, task: &str) -> std::io::Result<Vec<String>> {
+        let history = with_task(self.history(), task);
+        self.write("history.json", &history)?;
+        Ok(history)
+    }
+
+    pub fn presets(&self) -> Vec<crate::presets::Preset> {
+        crate::presets::clean(self.read("presets.json"))
+    }
+
+    pub fn save_presets(&self, presets: &[crate::presets::Preset]) -> std::io::Result<()> {
+        self.write("presets.json", &presets)
+    }
+
+    /// The legacy plugin's state directory: `HERDR_PLUGIN_STATE_DIR`, else
+    /// `~/.local/state/herdr/plugins/lucasscariot.herdr-inbox`.
+    pub fn legacy_dir() -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os("HERDR_PLUGIN_STATE_DIR").filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(dir));
+        }
+        let home = std::env::var_os("HOME").filter(|v| !v.is_empty())?;
+        Some(PathBuf::from(home).join(".local/state/herdr/plugins/lucasscariot.herdr-inbox"))
+    }
+
+    /// Copies the plugin's preferences, presets, history and credentials the
+    /// first time the inbox runs, without overwriting anything. Returns the
+    /// files copied.
+    pub fn migrate_from(&self, legacy: &Path) -> Vec<&'static str> {
+        if self.dir.join(MIGRATION_MARKER).exists() || !legacy.is_dir() {
+            return Vec::new();
+        }
+        let mut copied = Vec::new();
+        for name in MIGRATED {
+            let source = legacy.join(name);
+            if self.dir.join(name).exists() || !source.is_file() {
+                continue;
+            }
+            let value: Option<serde_json::Value> =
+                std::fs::read(&source).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            if let Some(value) = value
+                && self.write(name, &value).is_ok()
+            {
+                copied.push(name);
+            }
+        }
+        let _ = self.write(MIGRATION_MARKER, &copied);
+        copied
+    }
+
     /// Re-reads before writing, so two inbox windows merge their choices
     /// instead of overwriting each other's projects.
     pub fn remember(&self, launch: &Remembered) -> std::io::Result<()> {
@@ -151,6 +213,18 @@ impl State {
         preferences.remember(launch);
         self.write("preferences.json", &preferences)
     }
+}
+
+/// The history with `task` on top, deduplicated and bounded.
+pub fn with_task(mut history: Vec<String>, task: &str) -> Vec<String> {
+    let task = task.trim();
+    if task.is_empty() {
+        return history;
+    }
+    history.retain(|t| t != task);
+    history.insert(0, task.to_string());
+    history.truncate(HISTORY_LIMIT);
+    history
 }
 
 #[cfg(test)]
@@ -254,6 +328,66 @@ mod tests {
         assert_eq!(cockpit.thinking["local"]["claude"], "high");
         let round_trip: Preferences = serde_json::from_str(&serde_json::to_string(&preferences).unwrap()).unwrap();
         assert_eq!(round_trip, preferences);
+    }
+
+    #[test]
+    fn history_keeps_the_newest_fifty_without_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = State::new(dir.path());
+        state.push_history("first").unwrap();
+        state.push_history("second").unwrap();
+        state.push_history("  first ").unwrap();
+        state.push_history("   ").unwrap();
+        assert_eq!(state.history(), ["first", "second"]);
+        let long: Vec<String> = (0..60).map(|i| i.to_string()).collect();
+        let mut history = Vec::new();
+        for task in &long {
+            history = with_task(history, task);
+        }
+        assert_eq!(history.len(), HISTORY_LIMIT);
+        assert_eq!(history[0], "59");
+    }
+
+    #[test]
+    fn presets_round_trip_and_bad_ones_are_dropped_on_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = State::new(dir.path());
+        assert!(state.presets().is_empty());
+        let good = crate::presets::Preset {
+            name: "a".into(),
+            harness: "claude".into(),
+            model: "opus".into(),
+            thinking: String::new(),
+        };
+        state.save_presets(std::slice::from_ref(&good)).unwrap();
+        assert_eq!(state.presets(), vec![good]);
+        std::fs::write(dir.path().join("presets.json"), r#"[{"name": "x"}]"#).unwrap();
+        assert!(state.presets().is_empty());
+    }
+
+    #[test]
+    fn the_plugin_state_is_migrated_once_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("history.json"), r#"["old task"]"#).unwrap();
+        std::fs::write(legacy.join("presets.json"), r#"[{"name": "p", "harness": "claude", "model": "opus"}]"#)
+            .unwrap();
+        std::fs::write(legacy.join("credentials.json"), r#"{"backend": "", "keys": {"groq": "gsk"}}"#).unwrap();
+        std::fs::write(legacy.join("preferences.json"), "not json").unwrap();
+        let state = State::new(dir.path().join("new"));
+        state.write("history.json", &vec!["new task"]).unwrap();
+        let copied = state.migrate_from(&legacy);
+        assert_eq!(copied, ["presets.json", "credentials.json"], "existing and unreadable files are skipped");
+        assert_eq!(state.history(), ["new task"]);
+        assert_eq!(state.presets().len(), 1);
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.path().join("new/credentials.json")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "keys stay private");
+        std::fs::remove_file(dir.path().join("new/presets.json")).unwrap();
+        assert!(state.migrate_from(&legacy).is_empty(), "only once");
+        assert!(state.presets().is_empty());
+        assert!(State::new(dir.path().join("other")).migrate_from(&dir.path().join("missing")).is_empty());
     }
 
     #[test]

@@ -65,7 +65,14 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
     let (lines, (cursor_row, cursor_col)) = composer.task.layout(inner_width);
     let rows = (lines.len() as u16).clamp(TASK_MIN_ROWS, TASK_MAX_ROWS);
     let focused = composer.field == Field::Task && composer.picker.is_none();
-    let border = if focused { palette.accent } else { palette.surface1 };
+    let dictating = app.dictation.as_ref().is_some_and(|d| d.target == crate::app::Target::Composer);
+    let border = if dictating {
+        palette.red
+    } else if focused {
+        palette.accent
+    } else {
+        palette.surface1
+    };
     let task_box = Rect::new(x, y, width, rows + 2);
     Block::new()
         .borders(Borders::ALL)
@@ -86,7 +93,8 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
             dim,
         );
     }
-    let mut cursor = focused.then_some((x + 2 + cursor_col.min(inner_width), y + 1 + cursor_row - scroll));
+    let mut cursor =
+        (focused && !dictating).then_some((x + 2 + cursor_col.min(inner_width), y + 1 + cursor_row - scroll));
     y += rows + 2;
     if let Some(error) = &composer.error {
         split_line(buf, x, y, width, &[(error.clone(), Style::new().fg(palette.red))], &[]);
@@ -124,7 +132,14 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
     y += 1;
     if y < area.bottom() {
         let key = Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD);
-        let hints = [("↵", "send"), ("⌃S", "send & keep"), ("⇧↵", "newline"), ("⇥", "fields"), ("F5", "rescan")];
+        let hints = [
+            ("↵", "send"),
+            ("⌃S", "send & keep"),
+            ("⌃T", "dictate"),
+            ("⇥", "fields"),
+            ("F7", "presets"),
+            ("F10", "voice"),
+        ];
         let mut parts = Vec::new();
         for (index, (k, label)) in hints.iter().enumerate() {
             if index > 0 {
@@ -175,7 +190,7 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Drawn
     // The picker floats over the fields, under its own row.
     if let Some(picker) = &composer.picker {
         let anchor = field_rows.iter().find(|(f, _)| *f == picker.field).map(|(_, y)| *y + 1).unwrap_or(area.y + 2);
-        let choices = composer.choices(&ctx, picker.field, &picker.query);
+        let choices = composer.choices_with_actions(&ctx, picker.field, &picker.query);
         let visible = choices.len().clamp(1, 10) as u16;
         let height = (visible + 3).min(area.bottom().saturating_sub(area.y + 1));
         let top = anchor.min(area.bottom().saturating_sub(height));

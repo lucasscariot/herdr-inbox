@@ -509,6 +509,7 @@ dependencies = [
  "anyhow",
  "base64",
  "insta",
+ "libc",
  "portable-pty",
  "ratatui",
  "serde",

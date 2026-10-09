@@ -43,6 +43,17 @@ impl Group {
     }
 }
 
+/// What the inbox knows about a thread's launch, shown on its row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchNote {
+    /// The launch stopped; the first line of why.
+    Failed(String),
+    /// Waiting at a startup dialog; the task follows.
+    Waiting,
+    /// Sent, but Herdr saw no reaction in time.
+    Unverified,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thread {
     pub id: ThreadId,
@@ -56,6 +67,10 @@ pub struct Thread {
     pub project: String,
     pub branch: Option<String>,
     pub harness: String,
+    /// Herdr's agent kind (`claude`, `codex`), when known.
+    pub kind: Option<String>,
+    /// Set from the inbox's own launch journal.
+    pub note: Option<LaunchNote>,
     /// When the status last changed, if this client saw it change.
     pub changed_at: Option<SystemTime>,
     /// Herdr's change counter, used to order threads whose change time is
@@ -226,6 +241,8 @@ fn thread(
         branch: found.and_then(|c| c.branch.clone()),
         machine_id: source.machine_id.to_string(),
         machine_label: source.machine_label.map(str::to_string),
+        kind: agent.agent.clone().filter(|k| !k.trim().is_empty()),
+        note: None,
         pane_id: agent.pane_id.clone(),
         workspace_id: agent.workspace_id.clone(),
         change_seq: agent.state_change_seq,
@@ -602,6 +619,8 @@ mod tests {
             project: "p".into(),
             branch: None,
             harness: "Claude".into(),
+            kind: Some("claude".into()),
+            note: None,
             changed_at: changed.map(at),
             change_seq: seq,
         }

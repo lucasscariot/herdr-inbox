@@ -203,6 +203,8 @@ mod tests {
             project: "p".into(),
             branch: None,
             harness: "Claude".into(),
+            kind: None,
+            note: None,
             changed_at: None,
             change_seq: 0,
         }
