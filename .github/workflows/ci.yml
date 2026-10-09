@@ -27,7 +27,11 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 4
+  CARGO_BUILD_JOBS: 2
+  # Keep test linking within the existing two-CPU, 4 GiB Linux VM.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  RUST_TEST_THREADS: 4
   HERDR_VERSION: v0.9.3
 
 jobs:
@@ -113,3 +117,34 @@ jobs:
           fi
       - name: ShellCheck
         run: shellcheck install.sh scripts/package-release.sh
+
+  report:
+    name: Report CI at the tested commit
+    needs: [title, rust, installer]
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    permissions:
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TESTED_SHA: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+      RUST_RESULT: ${{ needs.rust.result }}
+      INSTALLER_RESULT: ${{ needs.installer.result }}
+      TITLE_RESULT: ${{ needs.title.result }}
+    steps:
+      # pull_request_target check runs belong to the base SHA. Report the
+      # result at the exact tested head so the PR and branch protection see it.
+      - name: Report the actual test result
+        run: |
+          state=failure
+          if [[ "$RUST_RESULT" == success && "$INSTALLER_RESULT" == success &&
+                ("$TITLE_RESULT" == success || "$TITLE_RESULT" == skipped) ]]; then
+            state=success
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            -f context='Self-hosted CI' -f "state=$state" \
+            -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description='Formatting, Clippy, tests, real Herdr and ShellCheck' > /dev/null
+          [[ "$state" == success ]]

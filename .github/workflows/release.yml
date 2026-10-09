@@ -30,7 +30,7 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 4
+  CARGO_BUILD_JOBS: 2
 
 jobs:
   release-please:
@@ -71,23 +71,29 @@ jobs:
     needs: release-please
     if: >-
       always() && !cancelled() &&
-      github.event_name != 'pull_request_target' &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
       (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      statuses: write
     with:
-      ref: ${{ needs.release-please.outputs.sha || github.sha }}
+      ref: ${{ needs.release-please.outputs.sha || github.event.pull_request.head.sha || github.sha }}
 
   build:
     name: Build · ${{ matrix.asset }}
-    needs: release-please
+    needs: [release-please, checks]
     if: >-
       always() && !cancelled() &&
+      needs.checks.result == 'success' &&
       (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
       (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      # The shared Linux VM has 4 GiB. Do not overlap LLVM release linking.
+      max-parallel: 1
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
@@ -152,6 +158,34 @@ jobs:
             herdr-inbox-${{ matrix.asset }}.tar.gz
             herdr-inbox-${{ matrix.asset }}.tar.gz.sha256
           if-no-files-found: error
+
+  report:
+    name: Report release builds at the tested commit
+    needs: [release-please, checks, build]
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    permissions:
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TESTED_SHA: ${{ needs.release-please.outputs.sha || github.event.pull_request.head.sha || github.sha }}
+      CHECKS_RESULT: ${{ needs.checks.result }}
+      BUILD_RESULT: ${{ needs.build.result }}
+    steps:
+      - name: Report the actual build result
+        run: |
+          state=failure
+          if [[ "$CHECKS_RESULT" == success && "$BUILD_RESULT" == success ]]; then
+            state=success
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            -f context='Self-hosted release builds' -f "state=$state" \
+            -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description='Four checked binaries and their SHA-256 archives' > /dev/null
+          [[ "$state" == success ]]
 
   publish:
     name: Publish the complete release

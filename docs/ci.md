@@ -19,7 +19,10 @@ Linux release builds use BuildKit and the official Rust Alpine image. The
 source travels through the build context, not a bind mount into the daemon,
 since the Actions runner itself is a Docker container. The x86_64 build uses
 the existing VM's emulation; ARM64 builds natively. Both binaries use musl and
-run their version check inside the build container.
+run their version check inside the build container. The shared VM has two CPUs
+and 4 GiB RAM, so CI disables test debug info and uses two compiler workers.
+Release builds wait for checks and run one at a time to avoid overlapping LLVM
+linking. The VM's settings and other projects are unchanged.
 
 The native macOS runner lives at
 `~/goinfre/actions-runners/herdr-inbox-macos`. Its background LaunchAgent is
@@ -50,8 +53,10 @@ credentials and personal tokens out of repository files and workflow artifacts.
 ## Fork safety
 
 Repository Actions settings require approval for all external contributors.
-The default workflow token is read-only; only Release Please and publication
-get write permissions. Workflow-created PRs are enabled for Release Please.
+The default workflow token is read-only. Only Release Please and publication
+can write contents; result-reporting jobs can write commit statuses without
+checking out or executing source. Workflow-created PRs are enabled for Release
+Please.
 
 Both PR workflows use `pull_request_target`, so GitHub reads their definitions
 from the trusted base branch. Every job that can run PR code checks that the
@@ -62,7 +67,10 @@ approves their workflow run. Never replace this with an unguarded
 
 To test an external contribution, review its code and workflow changes first,
 then copy the reviewed commit to a branch in this repository and open a PR.
-A title check keeps squash commits in Conventional Commit format.
+A title check keeps squash commits in Conventional Commit format. Since
+`pull_request_target` check runs attach to the base commit, the workflows also
+report their actual results as commit statuses on the exact tested head SHA.
+The same reporting makes build-only dispatches visible in the PR's checks.
 
 ## Release Please
 
@@ -90,7 +98,9 @@ tag or bump versions alongside Release Please.
 
 CI runs formatting, Clippy, unit and integration tests, ShellCheck, and the real
 Herdr end-to-end tests on Linux and macOS. Each test starts isolated Herdr state;
-no job connects to personal sessions. Herdr is pinned in `ci.yml`.
+no job connects to personal sessions. Herdr is pinned in `ci.yml`. Subprocess
+fixtures wait for readiness before release or SIGINT rather than assuming a
+short startup time on a busy self-hosted Mac.
 
 The release workflow builds these unchanged installer asset names:
 

@@ -417,9 +417,10 @@ mod tests {
         let out = dir.join("out.jsonl");
         std::fs::write(&out, stdout).unwrap();
         let body = format!(
-            "#!/bin/sh\necho \"$@\" > '{args}'\ncat '{out}'\nprintf '%s' '{stderr}' >&2\ncat > '{stdin}'\nexit {exit}\n",
+            "#!/bin/sh\necho \"$@\" > '{args}'\ncat '{out}'\nprintf '%s' '{stderr}' >&2\nprintf ready > '{ready}'\ncat > '{stdin}'\nexit {exit}\n",
             args = dir.join("args").display(),
             out = out.display(),
+            ready = dir.join("ready").display(),
             stdin = dir.join("stdin").display(),
         );
         crate::testing::write_executable(&script, &body);
@@ -432,7 +433,10 @@ mod tests {
         (cols, rows): (u16, u16),
         on_message: impl Fn(Message) + Send + 'static,
     ) -> Session {
-        Session::spawn(&Runner::Local(herdr.clone()), target, cols, rows, on_message).expect("spawn the fake herdr")
+        let session = Session::spawn(&Runner::Local(herdr.clone()), target, cols, rows, on_message)
+            .expect("spawn the fake herdr");
+        crate::testing::wait_until(|| herdr.program.with_file_name("ready").exists());
+        session
     }
 
     fn collect(rx: &mpsc::Receiver<Message>) -> Vec<Message> {
@@ -516,6 +520,7 @@ mod tests {
             let _ = tx.send(m);
         })
         .unwrap();
+        crate::testing::wait_until(|| herdr.program.with_file_name("ready").exists());
         session.release();
         let messages = collect(&rx);
         assert_eq!(messages.len(), 2, "{messages:?}");

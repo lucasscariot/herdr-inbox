@@ -66,6 +66,8 @@ never changes it.
 
 ### Changed
 
+- Subprocess tests wait for their fixtures to become ready before release or
+  SIGINT, avoiding startup races on busy self-hosted macOS runners.
 - Ordinary spaces type immediately by default; Ctrl+T remains the dictation
   shortcut. Hold-to-dictate now needs an explicit `space_hold = true`.
 - Forwarded agent keys no longer redraw the unchanged screen before their
