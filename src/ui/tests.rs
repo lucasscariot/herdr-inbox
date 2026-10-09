@@ -840,15 +840,26 @@ mod orbit_view {
     }
 
     #[test]
-    fn the_composer_draws_the_orbit_in_the_room_under_it_in_theme_colours() {
+    fn the_composer_draws_the_orbit_above_the_task_in_theme_colours() {
         let mut app = loaded(110, 50);
         key(&mut app, KeyCode::Char('n'));
         let terminal = render(&app, at(1));
         let cells = braille(&terminal);
         assert!(!cells.is_empty(), "{}", text(&terminal));
         let palette = Palette::default();
-        let hints = text(&terminal).lines().position(|l| l.contains("⌃T dictate")).expect("hints");
-        assert!(cells.iter().all(|&(x, y, _)| y as usize > hints && x > app.layout.terminal.x), "below the composer");
+        let screen = text(&terminal);
+        let title = screen.lines().position(|l| l.contains("New thread  ")).expect("title");
+        let prompt = screen.lines().position(|l| l.contains("What should we build?")).expect("prompt");
+        let rows: Vec<usize> = cells.iter().map(|c| c.1 as usize).collect();
+        assert!(
+            rows.iter().all(|&y| y > title + 1 && y < prompt - 1),
+            "between the title and the task, with a gap:\n{screen}"
+        );
+        assert!(cells.iter().all(|&(x, _, _)| x > app.layout.terminal.x));
+        assert!(prompt - title - 2 <= 14 + 1, "the orbit stays small enough to keep the task high:\n{screen}");
+        for line in ["Workspace", "⌃T dictate"] {
+            assert!(screen.contains(line), "everything under the task still shows: {line}");
+        }
         let colours: Vec<Color> = cells.iter().map(|c| c.2).collect();
         assert!(colours.contains(&palette.accent), "the core");
         assert!(colours.contains(&palette.surface1) && colours.contains(&palette.overlay0), "a ring's back and front");
@@ -865,6 +876,35 @@ mod orbit_view {
         let mut app = loaded(100, 44);
         key(&mut app, KeyCode::Char('n'));
         insta::assert_snapshot!(text(&render(&app, at(7))));
+    }
+
+    #[test]
+    fn the_task_box_moves_down_under_the_orbit_and_the_cursor_follows() {
+        let mut app = loaded(100, 44);
+        key(&mut app, KeyCode::Char('n'));
+        key(&mut app, KeyCode::Char('h'));
+        let mut terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        let task = screen.lines().position(|l| l.contains("│ h")).expect("task line");
+        let cursor = terminal.get_cursor_position().unwrap();
+        assert_eq!(cursor.y as usize, task, "{screen}");
+        assert_eq!(cursor.x, app.layout.terminal.x + 5);
+        // Without room the task sits right under the title, as before.
+        let mut app = loaded(100, 24);
+        key(&mut app, KeyCode::Char('n'));
+        let screen = text(&render(&app, at(1)));
+        assert_eq!(screen.lines().position(|l| l.contains("What should we build?")), Some(3), "{screen}");
+    }
+
+    #[test]
+    fn a_picker_opens_under_its_field_below_the_orbit() {
+        let mut app = loaded(100, 44);
+        key(&mut app, KeyCode::Char('n'));
+        key(&mut app, KeyCode::F(3));
+        let screen = text(&render(&app, at(1)));
+        let field = screen.lines().position(|l| l.contains("Harness ")).expect("field");
+        let popup = screen.lines().position(|l| l.contains("╭ Harness ")).expect("popup");
+        assert_eq!(popup, field + 1, "{screen}");
     }
 
     #[test]
