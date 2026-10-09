@@ -122,6 +122,17 @@ fn the_first_snapshot_opens_the_most_urgent_thread_without_stealing_focus() {
 }
 
 #[test]
+fn automatically_showing_a_finished_thread_keeps_it_ready_until_focused() {
+    let mut app = app();
+    app.update(snapshot(vec![agent("w1:p1", AgentStatus::Done, "Review")]), at(0));
+    assert_eq!(app.focus, Focus::List);
+    assert_eq!(app.thread(&l("w1:p1")).unwrap().status, AgentStatus::Done);
+    assert!(app.open.is_some());
+    assert!(app.update(press(KeyCode::Tab), at(1)).is_empty());
+    assert_eq!(app.thread(&l("w1:p1")).unwrap().status, AgentStatus::Idle);
+}
+
+#[test]
 fn an_empty_first_snapshot_attaches_nothing() {
     let mut app = app();
     assert!(app.update(snapshot(vec![]), at(0)).is_empty());
@@ -186,11 +197,11 @@ fn the_open_thread_ending_detaches_and_says_so() {
 #[test]
 fn list_navigation_stays_in_bounds() {
     let (mut app, _) = loaded();
-    app.update(press(KeyCode::Char('k')), at(1));
+    assert!(app.update(press(KeyCode::Char('k')), at(1)).is_empty());
     assert_eq!(app.cursor.as_deref(), Some(l("w1:p1").as_str()));
     app.update(press(KeyCode::Char('G')), at(1));
     assert_eq!(app.cursor.as_deref(), Some(l("w3:p1").as_str()));
-    app.update(press(KeyCode::Down), at(1));
+    assert!(app.update(press(KeyCode::Down), at(1)).is_empty(), "no reattachment at the last row");
     assert_eq!(app.cursor.as_deref(), Some(l("w3:p1").as_str()));
     app.update(press(KeyCode::Char('g')), at(1));
     assert_eq!(app.cursor.as_deref(), Some(l("w1:p1").as_str()));
@@ -203,15 +214,52 @@ fn list_navigation_stays_in_bounds() {
 fn navigating_never_sends_keys_to_an_agent() {
     let (mut app, _) = loaded();
     for code in [KeyCode::Char('j'), KeyCode::Char('k'), KeyCode::Char('a'), KeyCode::Char('z'), KeyCode::F(3)] {
-        assert!(app.update(press(code), at(1)).is_empty(), "{code:?}");
+        let effects = app.update(press(code), at(1));
+        assert!(effects.iter().all(|effect| !matches!(effect, Effect::Send { .. })), "{code:?}");
+        assert_eq!(app.focus, Focus::List);
     }
 }
 
 #[test]
-fn enter_switches_threads_with_a_new_generation() {
+fn navigating_shows_each_discussion_without_enter_and_keeps_focus_in_the_list() {
     let (mut app, _) = loaded();
-    app.update(press(KeyCode::Char('j')), at(1));
-    let effects = app.update(press(KeyCode::Enter), at(1));
+    for (index, (code, pane)) in [
+        (KeyCode::Char('j'), "w2:p1"),
+        (KeyCode::Char('k'), "w1:p1"),
+        (KeyCode::Down, "w2:p1"),
+        (KeyCode::Up, "w1:p1"),
+        (KeyCode::Char('G'), "w3:p1"),
+        (KeyCode::Char('g'), "w1:p1"),
+        (KeyCode::End, "w3:p1"),
+        (KeyCode::Home, "w1:p1"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let effects = app.update(press(code), at(1));
+        let generation = index as u64 + 2;
+        assert_eq!(
+            effects,
+            vec![
+                Effect::Detach,
+                Effect::Attach { generation, machine: LOCAL.into(), pane_id: pane.into(), cols: 79, rows: 39 }
+            ],
+            "{code:?} must show the selected discussion without Enter"
+        );
+        assert_eq!(app.focus, Focus::List);
+        assert_eq!(app.cursor.as_deref(), Some(l(pane).as_str()));
+        assert_eq!(app.open.as_ref().map(|o| o.id.as_str()), app.cursor.as_deref());
+        app.update(frame(generation - 1, b"stale discussion"), at(1));
+        assert!(!app.open.as_ref().unwrap().screen.has_content());
+        app.update(frame(generation, b"selected discussion"), at(1));
+        assert!(app.open.as_ref().unwrap().screen.text().starts_with("selected discussion"));
+    }
+}
+
+#[test]
+fn navigation_attaches_once_and_enter_only_moves_focus() {
+    let (mut app, _) = loaded();
+    let effects = app.update(press(KeyCode::Char('j')), at(1));
     assert_eq!(
         effects,
         vec![
@@ -219,8 +267,73 @@ fn enter_switches_threads_with_a_new_generation() {
             Effect::Attach { generation: 2, machine: LOCAL.into(), pane_id: "w2:p1".into(), cols: 79, rows: 39 }
         ]
     );
+    assert_eq!(app.focus, Focus::List);
+    assert!(app.update(press(KeyCode::Enter), at(1)).is_empty(), "Enter must not reattach or reach the agent");
     assert_eq!(app.focus, Focus::Terminal);
     assert_eq!(app.open.as_ref().map(|o| o.id.as_str()), Some(l("w2:p1").as_str()));
+}
+
+#[test]
+fn previewing_finished_threads_does_not_reorder_the_list_or_mark_them_seen() {
+    let (mut app, _) = loaded();
+    finish(&mut app, "w2:p1", 1);
+    finish(&mut app, "w3:p1", 2);
+    assert_eq!(ids(&app), ["w1:p1", "w3:p1", "w2:p1"]);
+    for pane in ["w3:p1", "w2:p1"] {
+        app.update(press(KeyCode::Down), at(3));
+        assert_eq!(app.open.as_ref().map(|o| o.id.as_str()), Some(l(pane).as_str()));
+        assert_eq!(app.thread(&l(pane)).unwrap().status, AgentStatus::Done);
+        assert_eq!(ids(&app), ["w1:p1", "w3:p1", "w2:p1"], "ready threads stay in place while browsing");
+        assert_eq!(app.focus, Focus::List);
+    }
+}
+
+#[test]
+fn focusing_a_preview_marks_it_seen_and_subsequent_keys_reach_that_agent() {
+    for input in [
+        press(KeyCode::Enter),
+        press(KeyCode::Char('o')),
+        press(KeyCode::Tab),
+        press(KeyCode::Esc),
+        mouse(MouseEventKind::Down(MouseButton::Left), 50, 2),
+    ] {
+        let (mut app, _) = loaded();
+        finish(&mut app, "w2:p1", 1);
+        app.update(press(KeyCode::Down), at(2));
+        assert_eq!(app.thread(&l("w2:p1")).unwrap().status, AgentStatus::Done);
+        assert!(app.update(press(KeyCode::Char('a')), at(2)).is_empty(), "typing in the list stays out of the agent");
+        assert!(app.update(input, at(3)).is_empty(), "focusing never reattaches or sends the focus key");
+        assert_eq!(app.focus, Focus::Terminal);
+        assert_eq!(app.thread(&l("w2:p1")).unwrap().status, AgentStatus::Idle);
+        assert_eq!(
+            app.update(press(KeyCode::Char('a')), at(3)),
+            vec![Effect::Send { generation: 2, control: Control::Input(b"a".to_vec()) }]
+        );
+    }
+}
+
+#[test]
+fn navigation_at_the_last_row_does_not_take_back_a_stream_from_another_window() {
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::End), at(1));
+    app.update(Input::Terminal { generation: 2, message: Message::Closed { reason: Some(TAKEN_OVER.into()) } }, at(2));
+    assert!(app.update(press(KeyCode::Down), at(3)).is_empty());
+    assert_eq!(app.open.as_ref().unwrap().generation, 2);
+    assert_eq!(app.focus, Focus::List);
+    assert!(matches!(app.open.as_ref().unwrap().stream, StreamState::Closed { .. }));
+    let effects = app.update(press(KeyCode::Enter), at(3));
+    assert!(matches!(effects.last(), Some(Effect::Attach { generation: 3, .. })), "Enter explicitly takes it back");
+}
+
+#[test]
+fn navigating_an_empty_list_attaches_nothing() {
+    let mut app = app();
+    app.update(snapshot(vec![]), at(0));
+    for code in [KeyCode::Char('j'), KeyCode::Char('k'), KeyCode::Home, KeyCode::End] {
+        assert!(app.update(press(code), at(1)).is_empty());
+        assert!(app.open.is_none());
+        assert!(app.cursor.is_none());
+    }
 }
 
 #[test]
@@ -727,11 +840,12 @@ fn a_status_change_applies_to_its_own_machine_only() {
 }
 
 #[test]
-fn opening_and_archiving_a_remote_thread_name_its_machine() {
+fn previewing_and_archiving_a_remote_thread_name_its_machine() {
     let mut app = fleet();
-    app.update(press(KeyCode::Char('j')), at(1));
+    let effects = app.update(press(KeyCode::Char('j')), at(1));
     assert_eq!(app.cursor.as_deref(), Some("studio/w1:p1"));
-    let effects = app.update(press(KeyCode::Enter), at(1));
+    assert_eq!(app.open.as_ref().map(|open| open.id.as_str()), Some("studio/w1:p1"));
+    assert_eq!(app.focus, Focus::List);
     assert_eq!(
         effects,
         vec![
@@ -739,6 +853,7 @@ fn opening_and_archiving_a_remote_thread_name_its_machine() {
             Effect::Attach { generation: 2, machine: "studio".into(), pane_id: "w1:p1".into(), cols: 79, rows: 39 }
         ]
     );
+    assert!(app.update(press(KeyCode::Enter), at(1)).is_empty());
     app.update(press(KeyCode::Tab), at(1));
     app.update(press(KeyCode::Char('x')), at(1));
     assert_eq!(
@@ -781,6 +896,19 @@ fn a_remote_thread_that_was_open_comes_back_with_its_machine() {
         effects,
         vec![Effect::Attach { generation: 3, machine: "studio".into(), pane_id: "w1:p1".into(), cols: 79, rows: 39 }]
     );
+}
+
+#[test]
+fn a_previewed_ready_thread_stays_unseen_when_its_machine_reconnects() {
+    let mut app = fleet();
+    app.update(status_on("studio", "w1:p1", AgentStatus::Done), at(1));
+    app.update(press(KeyCode::Down), at(2));
+    assert_eq!(app.thread("studio/w1:p1").unwrap().status, AgentStatus::Done);
+    app.update(connection("studio", Connection::Lost("timed out".into())), at(3));
+    app.update(snapshot_on("studio", vec![agent("w1:p1", AgentStatus::Done, "Studio build")]), at(4));
+    assert_eq!(app.open.as_ref().map(|open| open.id.as_str()), Some("studio/w1:p1"));
+    assert_eq!(app.focus, Focus::List);
+    assert_eq!(app.thread("studio/w1:p1").unwrap().status, AgentStatus::Done);
 }
 
 #[test]
@@ -1362,7 +1490,9 @@ mod conveniences {
         app.update(press(KeyCode::Enter), at(1));
         assert!(!app.filtering);
         assert_eq!(ids(&app), ["w2:p1"], "Enter keeps the filter");
-        assert!(app.update(press(KeyCode::Char('j')), at(1)).is_empty(), "j moves again");
+        let effects = app.update(press(KeyCode::Char('j')), at(1));
+        assert!(matches!(effects.last(), Some(Effect::Attach { pane_id, .. }) if pane_id == "w2:p1"));
+        assert_eq!(app.focus, Focus::List, "j previews the filtered thread");
         app.update(press(KeyCode::Esc), at(1));
         assert_eq!(ids(&app).len(), 3, "Esc clears it");
     }

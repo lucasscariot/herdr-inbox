@@ -986,12 +986,12 @@ impl App {
         let resume = self.resume.take_if(|r| r.starts_with(&format!("{id}/")));
         if let Some(resume) = resume.filter(|r| live.contains(r)) {
             self.cursor = Some(resume.clone());
-            self.open_thread(&resume, now, effects);
+            self.show_thread(&resume, now, effects);
         } else if !self.auto_opened
             && let Some(cursor) = self.cursor.clone()
         {
             self.auto_opened = true;
-            self.open_thread(&cursor, now, effects);
+            self.show_thread(&cursor, now, effects);
         }
     }
 
@@ -1146,8 +1146,16 @@ impl App {
         }
     }
 
-    /// Shows a thread in the terminal area, attaching a fresh session.
+    /// Opens a thread for interaction and marks it seen.
     pub(crate) fn open_thread(&mut self, id: &str, now: SystemTime, effects: &mut Vec<Effect>) {
+        self.show_thread(id, now, effects);
+        if self.open.as_ref().is_some_and(|open| open.id == id) {
+            self.mark_seen(id, now);
+        }
+    }
+
+    /// Shows a discussion without marking it seen or moving keyboard focus.
+    pub(crate) fn show_thread(&mut self, id: &str, now: SystemTime, effects: &mut Vec<Effect>) {
         let Some(thread) = self.thread(id) else {
             return;
         };
@@ -1161,7 +1169,6 @@ impl App {
         let already_streaming =
             self.open.as_ref().is_some_and(|o| o.id == id && !matches!(o.stream, StreamState::Closed { .. }));
         if already_streaming {
-            self.mark_seen(id, now);
             return;
         }
         if self.open.is_some() {
@@ -1179,7 +1186,6 @@ impl App {
             stream: StreamState::Attaching,
         });
         effects.push(Effect::Attach { generation, machine, pane_id, cols, rows });
-        self.mark_seen(id, now);
     }
 
     fn mark_seen(&mut self, id: &str, _now: SystemTime) {

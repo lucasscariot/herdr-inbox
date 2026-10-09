@@ -50,6 +50,13 @@ never changes it.
 - Prebuilt binaries for Linux and macOS on every release, and a one-line
   installer that checks their SHA-256.
 
+### Changed
+
+- Moving through tasks with j/k, arrow keys, g/G or Home/End shows each
+  discussion immediately, without Enter. Keyboard focus stays in the list;
+  Enter or Tab moves it to the agent. Finished tasks stay ready while browsing
+  so their rows do not move until the agent gets keyboard focus.
+
 ### Removed
 
 - The Herdr plugin (composer and inbox panes) and the patched thread-only

@@ -70,8 +70,11 @@ public interfaces.
   list reorders, and lands on a neighbour when the thread disappears.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
-  own record: opening a finished thread, or watching it finish, shows it as
-  idle until its status changes again.
+  own record: focusing a finished thread, or watching it finish, shows it as
+  idle until its status changes again. Moving the list cursor shows the
+  selected discussion without moving keyboard focus or marking it seen, so
+  ready threads stay in place while browsing. Focusing the terminal marks the
+  thread seen.
 - **Launches are never replayed blindly.** The journal records each stage. A
   prompt Herdr accepted without seeing a reaction is marked *unverified*,
   never sent twice. An agent stopped at a startup dialog keeps its task; once

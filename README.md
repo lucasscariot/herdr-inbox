@@ -75,9 +75,9 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 
 | Where | Key | Action |
 | --- | --- | --- |
-| Threads | `j` `k` / `↓` `↑` | Move |
-| | `g` `G` / `Home` `End` | First / last |
-| | `Enter`, `o`, click | Open the thread and focus its agent |
+| Threads | `j` `k` / `↓` `↑` | Move and show the selected discussion |
+| | `g` `G` / `Home` `End` | Show the first / last discussion |
+| | `Enter`, `o`, click | Focus the selected agent |
 | | `n`, click **+ New thread** | Open the composer |
 | | `r` | Reply to the agent without opening it |
 | | `e` | Send the thread's task again, from the composer |
@@ -92,8 +92,13 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | | Hold `Space`, `Ctrl+T` | Dictate to the agent |
 | | `Tab` | Back to the threads |
 
-Threads are grouped as **needs input**, **ready** (finished, not yet looked
-at), **working** and **idle**. The most recent change in each group comes first.
+Threads are grouped as **needs input**, **ready** (finished, not yet focused),
+**working** and **idle**. The most recent change in each group comes first.
+
+Moving through tasks shows each discussion immediately, without Enter.
+Keyboard focus stays in the list until you press Enter or Tab, or click the
+agent. Previewing a finished task does not mark it seen or move its row;
+focusing the agent does.
 
 Above the composer's task when there is room, and when no thread is open,
 the orbit turns: the core is the inbox, each ring a machine, each bead a
