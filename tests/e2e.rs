@@ -22,6 +22,28 @@ fn herdr_bin() -> String {
     std::env::var("HERDR_BIN").unwrap_or_else(|_| "herdr".into())
 }
 
+/// The directory holding the herdr binary, resolved once from the caller's PATH.
+fn herdr_dir() -> String {
+    static DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let bin = herdr_bin();
+        let resolved = if bin.contains('/') {
+            PathBuf::from(&bin)
+        } else {
+            std::env::var("PATH")
+                .unwrap_or_default()
+                .split(':')
+                .map(|dir| Path::new(dir).join(&bin))
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| PathBuf::from(&bin))
+        };
+        // Follow a mise or Homebrew shim to the real binary's directory.
+        let real = std::fs::canonicalize(&resolved).unwrap_or(resolved);
+        real.parent().map(|p| p.display().to_string()).unwrap_or_default()
+    })
+    .clone()
+}
+
 /// A Herdr server whose every directory lives in a temp dir.
 struct Sandbox {
     root: tempfile::TempDir,
@@ -32,7 +54,7 @@ impl Sandbox {
     fn start() -> Self {
         // Unix socket paths are limited to ~100 bytes: keep the root short.
         let root = tempfile::Builder::new().prefix("hi-e2e").tempdir_in("/tmp").expect("tempdir");
-        for dir in ["config", "state", "data", "cache"] {
+        for dir in ["config", "state", "data", "cache", "home", "bin"] {
             std::fs::create_dir_all(root.path().join(dir)).expect("mkdir");
         }
         let mut command = Command::new(herdr_bin());
@@ -64,6 +86,11 @@ impl Sandbox {
             ("XDG_STATE_HOME".into(), root.join("state").display().to_string()),
             ("XDG_DATA_HOME".into(), root.join("data").display().to_string()),
             ("XDG_CACHE_HOME".into(), root.join("cache").display().to_string()),
+            // Herdr puts worktrees under $HOME/.herdr: keep them in the sandbox.
+            ("HOME".into(), root.join("home").display().to_string()),
+            // Only the sandbox's fake agent CLIs, herdr, and the system tools
+            // (sh, git, python3): the user's real agents must not be probed.
+            ("PATH".into(), format!("{}:{}:/usr/local/bin:/usr/bin:/bin", root.join("bin").display(), herdr_dir())),
             ("SHELL".into(), "/bin/sh".into()),
             ("PS1".into(), "$ ".into()),
             ("TERM".into(), "xterm-256color".into()),
@@ -225,6 +252,38 @@ impl Drop for Inbox {
     }
 }
 
+/// Writes an executable without this process holding it open for writing,
+/// so a parallel test's fork cannot make it "text file busy".
+fn write_executable(path: &Path, body: &str) {
+    let mut writer = Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("spawn sh");
+    writer.stdin.take().expect("stdin").write_all(body.as_bytes()).expect("write script");
+    assert!(writer.wait().expect("wait").success());
+}
+
+/// A real git repository with one commit, which `git worktree add` needs.
+fn real_repo(root: &Path, name: &str) -> PathBuf {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).expect("mkdir repo");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git");
+        assert!(status.success());
+    }
+    repo
+}
+
 fn git_repo(root: &Path, name: &str, branch: &str) -> PathBuf {
     let repo = root.join(name);
     std::fs::create_dir_all(repo.join(".git")).expect("mkdir repo");
@@ -346,12 +405,57 @@ fn threads_on_a_saved_machine_open_live_over_ssh() {
 }
 
 #[test]
+fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    let repo = real_repo(&root.join("work"), "cockpit");
+    // An agent CLI that never becomes ready: the launch must fail cleanly,
+    // after creating its worktree, and say why.
+    write_executable(&root.join("bin/claude"), "#!/bin/sh\necho 'not really claude'\nexit 3\n");
+    let config = format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display());
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
+    std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("What should we build?");
+    inbox.wait_for_text("Project    cockpit");
+    inbox.wait_for_text("Harness    Claude");
+    inbox.keys("Fix the login loop");
+    inbox.wait_for_text("⎇ fix-login-loop");
+    inbox.keys("\r");
+    inbox.wait_for_text("LAUNCHES");
+    inbox.wait_for_text("✗ cockpit · Claude");
+    inbox.wait_for_text("timed out waiting for agent startup");
+
+    // The worktree was created by Herdr, in the sandbox's home.
+    let worktree = root.join("home/.herdr/worktrees/cockpit/fix-login-loop");
+    assert!(worktree.is_dir(), "{} is missing", worktree.display());
+    let branches =
+        Command::new("git").args(["branch", "--list", "fix-login-loop"]).current_dir(&repo).output().expect("git");
+    assert!(String::from_utf8_lossy(&branches.stdout).contains("fix-login-loop"));
+    // The failed launch keeps its journal, with where it stopped.
+    let journals: Vec<_> = std::fs::read_dir(root.join("state/herdr-inbox/launches")).expect("journals").collect();
+    assert_eq!(journals.len(), 1);
+    let journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(journals[0].as_ref().expect("entry").path()).expect("read"))
+            .expect("json");
+    assert_eq!(journal["stage"], "needs_attention");
+    assert_eq!(journal["failed_stage"], "starting");
+    assert_eq!(journal["branch"], "fix-login-loop");
+}
+
+#[test]
 fn without_a_server_the_inbox_offers_to_start_one() {
     if !enabled() {
         return;
     }
     let root = tempfile::Builder::new().prefix("hi-e2e").tempdir_in("/tmp").expect("tempdir");
-    for dir in ["config", "state", "data", "cache"] {
+    for dir in ["config", "state", "data", "cache", "home", "bin"] {
         std::fs::create_dir_all(root.path().join(dir)).expect("mkdir");
     }
     // No server yet; the Drop of this sandbox stops the one the inbox starts.

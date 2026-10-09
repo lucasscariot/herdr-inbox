@@ -3,13 +3,19 @@
 
 pub mod app;
 pub mod cli;
+pub mod config;
+pub mod discovery;
+pub mod editor;
+pub mod fuzzy;
 pub mod git;
 pub mod herdr;
 pub mod keys;
+pub mod launch;
 pub mod link;
 pub mod machines;
 pub mod runtime;
 pub mod screen;
+pub mod state;
 pub mod theme;
 pub mod threads;
 pub mod ui;

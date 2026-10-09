@@ -89,6 +89,31 @@ impl Transport {
         }
     }
 
+    /// Runs the discovery probe with `python3` and returns what it printed.
+    pub fn probe(&self, script: &str, argument: &str, timeout: Duration) -> Result<String, ApiError> {
+        let mut command = match self {
+            Transport::Local { .. } => {
+                let mut command = Command::new("python3");
+                command.arg("-c").arg(script).arg(argument);
+                command
+            }
+            Transport::Ssh(ssh) => ssh.login_exec(&["python3", "-c", script, argument]),
+        };
+        // Agent CLIs must not think they run inside a Herdr pane.
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("HERDR_") {
+                command.env_remove(key);
+            }
+        }
+        let output = run_with_timeout(command, timeout)?;
+        match self {
+            Transport::Local { .. } => Ok(output),
+            Transport::Ssh(_) => super::ssh::after_marker(&output)
+                .map(str::to_string)
+                .ok_or_else(|| ApiError::Unreachable("the remote shell did not start python3".into())),
+        }
+    }
+
     /// Repository and branch for each path that is inside a git checkout.
     pub fn checkouts(&self, paths: &[String]) -> HashMap<String, Checkout> {
         match self {
@@ -284,6 +309,35 @@ fn ssh_checkouts(ssh: &SshHerdr, paths: &[String]) -> Result<HashMap<String, Che
     let _ = child.kill();
     let _ = child.wait();
     Ok(parse_probe(&output.map_err(|_| ApiError::Unreachable("git probe timed out".into()))?))
+}
+
+/// Runs a command to completion and returns its stdout, killing it after
+/// `timeout`. A failure carries the last stderr line.
+fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, ApiError> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| ApiError::Unreachable(format!("cannot run {:?}: {err}", command.get_program())))?;
+    let mut stdout = child.stdout.take().ok_or_else(|| ApiError::Protocol("no stdout".into()))?;
+    let stderr = last_line(child.stderr.take());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = String::new();
+        let _ = stdout.read_to_string(&mut output);
+        let _ = tx.send(output);
+    });
+    let output = rx.recv_timeout(timeout);
+    let _ = child.kill();
+    let status = child.wait()?;
+    let output = output.map_err(|_| ApiError::Unreachable("timed out".into()))?;
+    if !status.success() && output.trim().is_empty() {
+        thread::sleep(Duration::from_millis(20));
+        let reason = stderr.lock().unwrap_or_else(|e| e.into_inner()).take();
+        return Err(ApiError::Unreachable(reason.unwrap_or_else(|| format!("exited with {status}"))));
+    }
+    Ok(output)
 }
 
 /// Parses `path<TAB>root<TAB>common-dir<TAB>branch` lines.

@@ -97,6 +97,35 @@ impl SshHerdr {
         }
         remote
     }
+
+    /// `ssh … <target>` running any program through the same login shell,
+    /// with the ready marker before it. The probe uses it to find `python3`
+    /// and the agent CLIs where the user's shell would.
+    pub fn login_exec(&self, argv: &[&str]) -> Command {
+        let script = format!("PATH=\"{REMOTE_PATH}:$PATH\"; printf '%s\\n' {READY_MARKER}; exec \"$@\"");
+        let mut remote = format!("sh -lc {} sh", quote(&script));
+        for arg in argv {
+            remote.push(' ');
+            remote.push_str(&quote(arg));
+        }
+        let mut command = Command::new(&self.ssh);
+        command.args(self.ssh_options());
+        command.arg(&self.target);
+        command.arg(remote);
+        command
+    }
+}
+
+/// Everything after the ready marker, or `None` when the marker never came.
+pub fn after_marker(output: &str) -> Option<&str> {
+    let mut rest = output;
+    loop {
+        let (line, tail) = rest.split_once('\n')?;
+        if is_marker(line) {
+            return Some(tail);
+        }
+        rest = tail;
+    }
 }
 
 /// Single-quotes `value` for a POSIX shell, closing and escaping any quote.
@@ -222,6 +251,23 @@ mod tests {
         std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o755)).unwrap();
         prepare_control_dir(&control).unwrap();
         assert_eq!(std::fs::metadata(&control).unwrap().permissions().mode() & 0o777, 0o700, "tightened again");
+    }
+
+    #[test]
+    fn login_exec_runs_any_program_with_its_arguments_intact() {
+        let ssh = SshHerdr::new("host", None);
+        let command = ssh.login_exec(&["printf", "<%s>", "a b", "it's"]);
+        let remote = args(&command).last().unwrap().clone();
+        let output = Command::new("sh").arg("-c").arg(&remote).output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(after_marker(&stdout), Some("<a b><it's>"), "{stdout}");
+    }
+
+    #[test]
+    fn after_marker_skips_login_noise() {
+        assert_eq!(after_marker("motd\nherdr-inbox-ready\n{\"a\":1}\n"), Some("{\"a\":1}\n"));
+        assert_eq!(after_marker("herdr-inbox-ready\n"), Some(""));
+        assert_eq!(after_marker("no marker here\n"), None);
     }
 
     #[test]

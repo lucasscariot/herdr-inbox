@@ -18,11 +18,15 @@ use ratatui::crossterm::{execute, terminal};
 
 use crate::app::{App, Effect, Input};
 use crate::cli::Options;
+use crate::config::Config;
+use crate::discovery::{self, Inventory};
 use crate::herdr::socket::{self, Endpoint, SocketEnv};
 use crate::herdr::terminal::{HerdrCommand, Session};
-use crate::herdr::transport::Transport;
+use crate::herdr::transport::{Runner, Transport};
+use crate::launch::{self, Plan, Record, Stage};
 use crate::link::{Link, Request};
 use crate::machines::{self, Remote};
+use crate::state::State;
 use crate::theme;
 use crate::threads;
 
@@ -36,9 +40,21 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     let endpoint = socket::resolve(options.session.as_deref(), &env)?;
     let palette = theme::load(&socket::config_dir(&env)?.join("config.toml"));
     let herdr = herdr_command(&options, &endpoint);
+    let paths = match &options.config {
+        // An explicit file is the only one read; no legacy fallback.
+        Some(path) => Some(crate::config::Paths { config: path.clone(), legacy: path.with_extension("none") }),
+        None => crate::config::Paths::from_env(&env),
+    };
+    let (config, config_error) = match paths.map(|paths| crate::config::load(&paths)) {
+        Some(Ok(config)) => (config, None),
+        Some(Err(err)) => (Config::default(), Some(err.to_string())),
+        None => (Config::default(), None),
+    };
+    let state = State::new(State::default_dir().unwrap_or_else(|| std::env::temp_dir().join("herdr-inbox")));
 
     let mut terminal = setup_terminal()?;
-    let result = event_loop(&mut terminal, &endpoint, &herdr, &palette);
+    let setup = Setup { endpoint: &endpoint, herdr: &herdr, palette: &palette, config, config_error, state };
+    let result = event_loop(&mut terminal, setup);
     restore_terminal();
     result
 }
@@ -113,12 +129,18 @@ impl Fleet {
     }
 }
 
-fn event_loop(
-    terminal: &mut DefaultTerminal,
-    endpoint: &Endpoint,
-    herdr: &HerdrCommand,
-    palette: &theme::Palette,
-) -> anyhow::Result<()> {
+/// Everything the event loop starts from.
+struct Setup<'a> {
+    endpoint: &'a Endpoint,
+    herdr: &'a HerdrCommand,
+    palette: &'a theme::Palette,
+    config: Config,
+    config_error: Option<String>,
+    state: State,
+}
+
+fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()> {
+    let Setup { endpoint, herdr, palette, config, config_error, state } = setup;
     let size = terminal.size()?;
     let local = Transport::Local { socket: endpoint.api_socket.clone(), herdr: herdr.clone() };
     let mut remotes = machines::load(&local.runner());
@@ -133,10 +155,18 @@ fn event_loop(
         // Without a private control directory SSH still works, just slower.
         let _ = crate::herdr::ssh::prepare_control_dir(&dir);
     }
-    let mut app = App::new(size.width, size.height, remotes.iter().map(|r| r.info.clone()).collect());
+    let mut app = App::new(size.width, size.height, remotes.iter().map(|r| r.info.clone()).collect())
+        .with_setup(config.clone(), state.preferences());
+    if let Some(error) = config_error {
+        app.notify(format!("Config ignored: {error}"), crate::app::NoticeKind::Error, SystemTime::now());
+    }
     let (tx, rx) = mpsc::channel::<Input>();
     spawn_input_reader(tx.clone());
+    let labels: HashMap<String, (String, bool)> =
+        app.machines.iter().map(|m| (m.id.clone(), (m.label.clone(), m.is_local()))).collect();
     let fleet = Fleet::start(local, remotes, &tx);
+    let work = Work { state, config, labels, tx: tx.clone() };
+    work.restore(&mut app);
     let mut session: Option<(u64, Session)> = None;
     let mut last_draw = Instant::now() - FRAME;
     let mut dirty = true;
@@ -163,7 +193,7 @@ fn event_loop(
         for input in std::iter::once(input).chain(drain(&rx)) {
             let effects = app.update(input, SystemTime::now());
             for effect in effects {
-                if !perform(effect, &mut session, herdr, &fleet, &tx) {
+                if !perform(effect, &mut session, herdr, &fleet, &work) {
                     if let Some((_, mut session)) = session.take() {
                         session.release();
                     }
@@ -185,8 +215,9 @@ fn perform(
     session: &mut Option<(u64, Session)>,
     herdr: &HerdrCommand,
     fleet: &Fleet,
-    tx: &Sender<Input>,
+    work: &Work,
 ) -> bool {
+    let tx = &work.tx;
     match effect {
         Effect::Quit => return false,
         Effect::Detach => {
@@ -248,8 +279,126 @@ fn perform(
                 link.request(Request::Refresh);
             }
         }
+        Effect::Discover { machine, include_models } => {
+            if let Some((transport, _)) = fleet.get(&machine) {
+                work.discover(machine, transport.clone(), include_models);
+            }
+        }
+        Effect::Launch { machine, plan } => {
+            if let Some((transport, link)) = fleet.get(&machine) {
+                work.launch(transport.runner(), *plan, link.refresher());
+            }
+        }
+        Effect::Resume { machine, record } => {
+            if let Some((transport, _)) = fleet.get(&machine) {
+                work.resume(transport.runner(), *record);
+            }
+        }
+        Effect::Remember(remembered) => {
+            // Losing a remembered choice only costs a default next time.
+            let _ = work.state.remember(&remembered);
+        }
     }
     true
+}
+
+/// Background work: discovery, launches, and the state they write.
+struct Work {
+    state: State,
+    config: Config,
+    /// Machine id → (label, is local), for per-machine settings.
+    labels: HashMap<String, (String, bool)>,
+    tx: Sender<Input>,
+}
+
+impl Work {
+    /// Delivers what an earlier run left: cached inventories, and launches
+    /// still waiting at a startup dialog.
+    fn restore(&self, app: &mut App) {
+        let now = SystemTime::now();
+        for machine in self.labels.keys() {
+            let cached: Inventory = self.state.read(&inventory_file(machine));
+            if !cached.projects.is_empty() || !cached.harnesses.is_empty() {
+                app.update(Input::Inventory { machine: machine.clone(), result: Ok(cached) }, now);
+            }
+        }
+        let waiting: Vec<Record> = self
+            .state
+            .list("launches")
+            .into_iter()
+            .filter_map(|id| serde_json::from_value::<Record>(self.state.read(&format!("launches/{id}.json"))).ok())
+            .filter(|record| record.stage == Stage::StartupBlocked)
+            .collect();
+        if !waiting.is_empty() {
+            let _ = self.tx.send(Input::Journals(waiting));
+        }
+    }
+
+    fn discover(&self, machine: String, transport: Transport, include_models: bool) {
+        let (label, local) = self.labels.get(&machine).cloned().unwrap_or_default();
+        let effective = self.config.for_machine(&machine, &label, local);
+        let state = self.state.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let file = inventory_file(&machine);
+            let cached: Inventory = state.read(&file);
+            let settings = discovery::settings(&effective, include_models);
+            let result = transport
+                .probe(discovery::PROBE, &settings, DISCOVERY_TIMEOUT)
+                .map_err(|err| err.to_string())
+                .and_then(|output| {
+                    discovery::finish(&output, Some(&cached), include_models, &effective.models, SystemTime::now())
+                });
+            if let Ok(inventory) = &result {
+                let _ = state.write(&file, inventory);
+            }
+            let _ = tx.send(Input::Inventory { machine, result });
+        });
+    }
+
+    fn launch(&self, runner: Runner, plan: Plan, refresh: impl Fn() + Send + 'static) {
+        let state = self.state.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let id = plan.record.id.clone();
+            let journal = |record: &Record| {
+                let _ = state.write(&format!("launches/{}.json", record.id), record);
+            };
+            let progress = |text: &str| {
+                let _ = tx.send(Input::LaunchProgress { id: id.clone(), text: text.to_string() });
+            };
+            let result = launch::execute(&runner, plan, &journal, &progress);
+            if let Ok(launch::Outcome::Sent(record)) = &result {
+                // A delivered launch needs no journal; failures and waiting
+                // ones keep theirs.
+                let _ = state.remove(&format!("launches/{}.json", record.id));
+            }
+            refresh();
+            let _ = tx.send(Input::LaunchFinished { id, result });
+        });
+    }
+
+    fn resume(&self, runner: Runner, record: Record) {
+        let state = self.state.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let journal = |record: &Record| {
+                let _ = state.write(&format!("launches/{}.json", record.id), record);
+            };
+            let result = launch::resume(&runner, record, &journal);
+            if let Ok(launch::Outcome::Sent(record)) = &result {
+                let _ = state.remove(&format!("launches/{}.json", record.id));
+            }
+            let _ = tx.send(Input::Resumed { result });
+        });
+    }
+}
+
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn inventory_file(machine: &str) -> String {
+    let safe: String = machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    format!("inventory/{safe}.json")
 }
 
 /// Starts `herdr server` detached, exactly as `herdr` itself would.
@@ -290,7 +439,7 @@ mod tests {
 
     #[test]
     fn subprocesses_are_pinned_to_the_shown_server() {
-        let options = Options { session: None, herdr: "/bin/herdr".into() };
+        let options = Options { session: None, herdr: "/bin/herdr".into(), config: None };
         let endpoint = Endpoint { api_socket: PathBuf::from("/h/.config/herdr/herdr.sock"), session: None };
         let command = herdr_command(&options, &endpoint);
         assert_eq!(command.program, PathBuf::from("/bin/herdr"));
@@ -300,7 +449,7 @@ mod tests {
 
     #[test]
     fn a_named_session_is_passed_explicitly() {
-        let options = Options { session: Some("night".into()), herdr: "herdr".into() };
+        let options = Options { session: Some("night".into()), herdr: "herdr".into(), config: None };
         let endpoint = Endpoint {
             api_socket: PathBuf::from("/h/.config/herdr/sessions/night/herdr.sock"),
             session: Some("night".into()),

@@ -26,8 +26,13 @@ pub fn draw(frame: &mut Frame, app: &App, palette: &Palette, now: SystemTime) {
         false => {
             sidebar(buf, app, palette, now);
             separator(buf, app, palette);
-            terminal(buf, app, palette);
-            if let Some((x, y)) = cursor(app) {
+            let cursor = if app.focus == Focus::Composer {
+                composer::draw(buf, app, app.layout.terminal, palette).cursor
+            } else {
+                terminal(buf, app, palette);
+                cursor(app)
+            };
+            if let Some((x, y)) = cursor {
                 frame.set_cursor_position((x, y));
             }
         }
@@ -159,6 +164,23 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     if area.height > 1 {
         split_line(buf, inner_x, area.y + 1, inner_w, &summary(app, palette), &[]);
     }
+    let button = app.layout.new_button;
+    if button.width > 0 {
+        let style = if app.focus == Focus::Composer {
+            Style::new().fg(palette.accent).bg(palette.selection_bg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(palette.accent).bg(palette.surface0).add_modifier(Modifier::BOLD)
+        };
+        fill(buf, Rect::new(button.x + 1, button.y, button.width.saturating_sub(2), 1), style);
+        split_line(
+            buf,
+            inner_x + 1,
+            button.y,
+            inner_w.saturating_sub(2),
+            &[("+  New thread".into(), style)],
+            &[("n".into(), Style::new().fg(palette.overlay0).bg(style.bg.unwrap_or_default()))],
+        );
+    }
 
     let list = app.layout.list;
     let highlighted = highlighted(app);
@@ -240,7 +262,7 @@ fn heading(buf: &mut Buffer, x: u16, y: u16, width: u16, group: Group, count: us
 fn highlighted(app: &App) -> Option<&str> {
     match app.focus {
         Focus::List => app.cursor.as_deref(),
-        Focus::Terminal => app.open.as_ref().map(|o| o.id.as_str()),
+        Focus::Terminal | Focus::Composer => app.open.as_ref().map(|o| o.id.as_str()),
     }
 }
 
@@ -401,6 +423,10 @@ fn no_server(buf: &mut Buffer, area: Rect, app: &App, palette: &Palette) {
     centered(buf, body, &lines);
 }
 
+fn running_launches(app: &App) -> usize {
+    app.launches.iter().filter(|l| matches!(l.state, crate::app::LaunchState::Running(_))).count()
+}
+
 /// One mark per machine: live, connecting, no server, unreachable.
 fn machine_strip(app: &App, palette: &Palette) -> Vec<(String, Style)> {
     let mut parts = Vec::new();
@@ -436,10 +462,12 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     let (badge, hints): (&str, Vec<(&str, &str)>) = match (app.needs_server_screen(), app.focus) {
         (true, _) => ("", vec![]),
         (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("y", "archive"), ("n", "keep")]),
-        (_, Focus::List) => {
-            ("THREADS", vec![("↵", "open"), ("j/k", "move"), ("x", "archive"), ("tab", "agent"), ("q", "quit")])
-        }
+        (_, Focus::List) => (
+            "THREADS",
+            vec![("↵", "open"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],
+        ),
         (_, Focus::Terminal) => ("AGENT", vec![("tab", "threads")]),
+        (_, Focus::Composer) => ("NEW THREAD", vec![("esc", "back")]),
     };
     let mut left: Vec<(String, Style)> = Vec::new();
     if !badge.is_empty() {
@@ -461,6 +489,10 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
             };
             vec![(notice.text.clone(), Style::new().fg(color))]
         }
+        None if running_launches(app) > 0 && app.focus != Focus::Composer => {
+            let count = running_launches(app);
+            vec![(format!("⟳ {count} launch{}", if count == 1 { "" } else { "es" }), Style::new().fg(palette.yellow))]
+        }
         None if !app.local_only() => machine_strip(app, palette),
         None => match &app.local().connection {
             Connection::Lost(reason) => vec![(format!("✗ {reason}"), Style::new().fg(palette.red))],
@@ -478,6 +510,8 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     };
     split_line(buf, area.x + 1, area.y, area.width.saturating_sub(2), &left, &right);
 }
+
+mod composer;
 
 #[cfg(test)]
 mod tests;

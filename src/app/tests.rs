@@ -807,3 +807,356 @@ fn the_overall_connection_summarises_every_machine() {
     app.update(snapshot_on("studio", vec![]), at(1));
     assert_eq!(app.overall_connection(), Connection::Live);
 }
+
+mod composer_flow {
+    use super::*;
+    use crate::discovery::{CheckoutEntry, Inventory, Project};
+    use crate::launch::{self, Outcome, Record, Stage};
+    use std::collections::BTreeMap;
+
+    fn inventory() -> Inventory {
+        Inventory {
+            projects: vec![Project {
+                name: "cockpit".into(),
+                path: "/w/cockpit".into(),
+                branch: "main".into(),
+                checkouts: vec![CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false }],
+            }],
+            harnesses: vec!["claude".into(), "codex".into()],
+            models: BTreeMap::new(),
+            models_at: 0,
+        }
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.update(press(KeyCode::Char(c)), at(1));
+        }
+    }
+
+    /// The loaded app with the composer open and the local inventory in.
+    fn composing() -> App {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('n')), at(1));
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(1));
+        app
+    }
+
+    fn launch_of(effects: &[Effect]) -> Option<&Record> {
+        effects.iter().find_map(|e| match e {
+            Effect::Launch { plan, .. } => Some(&plan.record),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn n_opens_the_composer_and_discovers_every_live_machine() {
+        let (mut app, _) = loaded();
+        let effects = app.update(press(KeyCode::Char('n')), at(1));
+        assert_eq!(app.focus, Focus::Composer);
+        assert_eq!(effects, vec![Effect::Discover { machine: LOCAL.into(), include_models: true }]);
+        assert!(app.update(press(KeyCode::Esc), at(1)).is_empty());
+        app.update(press(KeyCode::Tab), at(1));
+        let effects = app.update(press(KeyCode::Char('n')), at(1));
+        assert!(effects.is_empty(), "no second discovery while one runs");
+    }
+
+    #[test]
+    fn fresh_models_are_not_read_again_unless_asked() {
+        let mut app = composing();
+        let mut fresh = inventory();
+        fresh.models.insert("claude".into(), Default::default());
+        fresh.models_at = crate::discovery::seconds(at(1));
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(fresh) }, at(1));
+        app.update(press(KeyCode::Esc), at(2));
+        app.update(press(KeyCode::Tab), at(2));
+        let effects = app.update(press(KeyCode::Char('n')), at(2));
+        assert_eq!(effects, vec![Effect::Discover { machine: LOCAL.into(), include_models: false }]);
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Err("x".into()) }, at(2));
+        let effects = app.update(press(KeyCode::F(5)), at(2));
+        assert_eq!(effects, vec![Effect::Discover { machine: LOCAL.into(), include_models: true }], "F5 rescans fully");
+    }
+
+    #[test]
+    fn a_failed_discovery_keeps_the_last_inventory_and_says_why() {
+        let mut app = composing();
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Err("python3: not found".into()) }, at(2));
+        assert_eq!(app.discovery_errors[LOCAL], "python3: not found");
+        assert_eq!(app.composer.project.as_deref(), Some("cockpit"), "the previous inventory still works");
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(3));
+        assert!(app.discovery_errors.is_empty());
+    }
+
+    #[test]
+    fn the_inventory_settles_the_composers_choices() {
+        let app = composing();
+        assert_eq!(app.composer.project.as_deref(), Some("cockpit"));
+        assert_eq!(app.composer.machine.as_deref(), Some(LOCAL));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn enter_sends_clears_the_task_and_tracks_the_launch() {
+        let mut app = composing();
+        type_text(&mut app, "Fix login");
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        let record = launch_of(&effects).expect("a launch");
+        assert_eq!(record.title, "Fix login");
+        assert_eq!(record.branch, "fix-login");
+        assert_eq!(record.harness, "claude");
+        assert!(matches!(effects[0], Effect::Launch { ref machine, .. } if machine == LOCAL));
+        assert_eq!(app.composer.task.text(), "");
+        assert_eq!(app.launches.len(), 1);
+        assert_eq!(app.launches[0].state, LaunchState::Running("starting".into()));
+        assert_eq!(app.focus, Focus::Composer, "the composer stays open for the next task");
+    }
+
+    #[test]
+    fn ctrl_s_sends_and_keeps_the_task_for_another_launch() {
+        let mut app = composing();
+        type_text(&mut app, "Same task twice");
+        let first = app.update(press_with(KeyCode::Char('s'), KeyModifiers::CONTROL), at(5));
+        let second = app.update(press_with(KeyCode::Enter, KeyModifiers::CONTROL), at(5));
+        let (a, b) = (launch_of(&first).unwrap(), launch_of(&second).unwrap());
+        assert_ne!(a.id, b.id, "every launch has its own id");
+        assert_eq!(app.composer.task.text(), "Same task twice");
+    }
+
+    #[test]
+    fn shift_enter_adds_a_line_instead_of_sending() {
+        let mut app = composing();
+        type_text(&mut app, "one");
+        assert!(app.update(press_with(KeyCode::Enter, KeyModifiers::SHIFT), at(1)).is_empty());
+        type_text(&mut app, "two");
+        assert_eq!(app.composer.task.text(), "one\ntwo");
+    }
+
+    #[test]
+    fn a_blank_task_is_refused_with_a_reason() {
+        let mut app = composing();
+        assert!(app.update(press(KeyCode::Enter), at(1)).is_empty());
+        assert_eq!(app.composer.error.as_deref(), Some("Write a task first."));
+        type_text(&mut app, "x");
+        app.update(press(KeyCode::F(3)), at(1));
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.error, None, "a new choice clears the error");
+    }
+
+    #[test]
+    fn esc_returns_to_the_agent_or_the_list_and_keeps_the_draft() {
+        let mut app = composing();
+        type_text(&mut app, "draft");
+        app.update(press(KeyCode::Esc), at(1));
+        assert_eq!(app.focus, Focus::Terminal, "a thread is open, so back to it");
+        app.update(press(KeyCode::Tab), at(1));
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert_eq!(app.composer.task.text(), "draft");
+    }
+
+    #[test]
+    fn ctrl_c_clears_the_task_then_closes() {
+        let mut app = composing();
+        type_text(&mut app, "draft");
+        app.update(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), at(1));
+        assert_eq!(app.composer.task.text(), "");
+        assert_eq!(app.focus, Focus::Composer);
+        app.update(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), at(1));
+        assert_ne!(app.focus, Focus::Composer);
+    }
+
+    #[test]
+    fn pickers_filter_as_you_type_and_apply_on_enter() {
+        let mut app = composing();
+        app.update(press(KeyCode::F(3)), at(1));
+        assert_eq!(app.composer.picker.as_ref().map(|p| p.field), Some(Field::Harness));
+        type_text(&mut app, "cdx");
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert!(app.composer.picker.is_none());
+        app.update(press(KeyCode::F(3)), at(1));
+        app.update(press(KeyCode::Down), at(1));
+        app.update(press(KeyCode::Down), at(1));
+        app.update(press(KeyCode::Down), at(1));
+        assert_eq!(app.composer.picker.as_ref().unwrap().selected, 1, "the selection stays on the list");
+        app.update(press(KeyCode::Esc), at(1));
+        assert!(app.composer.picker.is_none());
+        assert_eq!(app.focus, Focus::Composer, "Esc closes the picker first");
+    }
+
+    #[test]
+    fn a_picker_opened_while_typing_returns_to_the_task() {
+        let mut app = composing();
+        type_text(&mut app, "Fix ");
+        app.update(press(KeyCode::F(3)), at(1));
+        type_text(&mut app, "codex");
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.field, Field::Task);
+        type_text(&mut app, "login");
+        assert_eq!(app.composer.task.text(), "Fix login", "typing goes on in the task");
+        app.update(press(KeyCode::F(2)), at(1));
+        app.update(press(KeyCode::Esc), at(1));
+        assert_eq!(app.composer.field, Field::Task, "Esc returns too");
+    }
+
+    #[test]
+    fn a_picker_opened_from_its_row_stays_on_the_row() {
+        let mut app = composing();
+        app.update(press(KeyCode::Tab), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.field, Field::Harness);
+        app.update(press(KeyCode::Enter), at(1));
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.field, Field::Harness);
+    }
+
+    #[test]
+    fn typing_on_a_field_row_opens_its_picker_with_that_letter() {
+        let mut app = composing();
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.field, Field::Project);
+        app.update(press(KeyCode::Char('c')), at(1));
+        let picker = app.composer.picker.as_ref().unwrap();
+        assert_eq!((picker.field, picker.query.as_str()), (Field::Project, "c"));
+    }
+
+    #[test]
+    fn down_from_the_last_task_line_moves_to_the_fields() {
+        let mut app = composing();
+        type_text(&mut app, "x");
+        app.update(press(KeyCode::Down), at(1));
+        assert_eq!(app.composer.field, Field::Project);
+        app.update(press(KeyCode::Up), at(1));
+        assert_eq!(app.composer.field, Field::Task);
+    }
+
+    #[test]
+    fn paste_goes_into_the_task_or_the_pickers_query() {
+        let mut app = composing();
+        app.update(Input::Paste("line one\nline two".into()), at(1));
+        assert_eq!(app.composer.task.text(), "line one\nline two");
+        app.update(press(KeyCode::F(2)), at(1));
+        app.update(Input::Paste("cock\npit".into()), at(1));
+        assert_eq!(app.composer.picker.as_ref().unwrap().query, "cock");
+    }
+
+    fn sent(app: &mut App) -> Record {
+        type_text(app, "Fix login");
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        launch_of(&effects).unwrap().clone()
+    }
+
+    #[test]
+    fn progress_and_success_update_the_launch_and_remember_the_choices() {
+        let mut app = composing();
+        let mut record = sent(&mut app);
+        app.update(Input::LaunchProgress { id: record.id.clone(), text: "starting claude".into() }, at(6));
+        assert_eq!(app.launches[0].state, LaunchState::Running("starting claude".into()));
+        record.stage = Stage::Submitted;
+        record.pane_id = Some("w9:p1".into());
+        let effects =
+            app.update(Input::LaunchFinished { id: record.id.clone(), result: Ok(Outcome::Sent(record)) }, at(7));
+        assert_eq!(app.launches[0].state, LaunchState::Sent { unverified: false });
+        assert!(
+            matches!(&effects[..], [Effect::Remember(r)] if r.project == "cockpit" && r.harness == "claude" && r.workspace == "worktree")
+        );
+        assert_eq!(app.preferences.last_project.as_deref(), Some("cockpit"));
+    }
+
+    #[test]
+    fn a_failed_launch_shows_its_first_error_line() {
+        let mut app = composing();
+        let record = sent(&mut app);
+        let result = Err(launch::Failure {
+            record: Box::new(record.clone()),
+            error: "expected claude, detected bash\nmore detail".into(),
+        });
+        let effects = app.update(Input::LaunchFinished { id: record.id.clone(), result }, at(7));
+        assert!(effects.is_empty(), "a failure is not remembered");
+        assert_eq!(app.launches[0].state, LaunchState::Failed("expected claude, detected bash".into()));
+        assert!(app.notice.as_ref().unwrap().text.contains("expected claude, detected bash"));
+    }
+
+    #[test]
+    fn a_launch_waiting_at_a_startup_dialog_sends_its_task_once_the_agent_is_idle() {
+        let mut app = composing();
+        let mut record = sent(&mut app);
+        record.stage = Stage::StartupBlocked;
+        record.pane_id = Some("w2:p1".into());
+        app.update(
+            Input::LaunchFinished { id: record.id.clone(), result: Ok(Outcome::WaitingForStartup(record.clone())) },
+            at(7),
+        );
+        assert_eq!(app.launches[0].state, LaunchState::Waiting, "w2:p1 is still working");
+        assert!(app.waiting.contains_key(&l("w2:p1")));
+        let effects = app.update(status("w2:p1", AgentStatus::Blocked), at(8));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Resume { .. })), "the dialog is still up");
+        let effects = app.update(status("w2:p1", AgentStatus::Idle), at(9));
+        assert!(
+            matches!(&effects[..], [Effect::Resume { machine, record: r }] if machine == LOCAL && r.id == record.id)
+        );
+        assert!(app.waiting.is_empty());
+        assert_eq!(app.launches[0].state, LaunchState::Running("sending the task".into()));
+        app.update(Input::Resumed { result: Ok(Outcome::WaitingForStartup(record.clone())) }, at(10));
+        assert_eq!(app.launches[0].state, LaunchState::Waiting, "a second dialog");
+        assert!(app.waiting.contains_key(&l("w2:p1")));
+        app.update(Input::Resumed { result: Ok(Outcome::Sent(record.clone())) }, at(11));
+        assert_eq!(app.launches[0].state, LaunchState::Sent { unverified: false });
+    }
+
+    #[test]
+    fn launches_from_an_earlier_run_resume_too() {
+        let (mut app, _) = loaded();
+        let record = Record {
+            id: "old".into(),
+            machine_id: LOCAL.into(),
+            machine_label: "Local".into(),
+            project: "cockpit".into(),
+            repo: "/w/cockpit".into(),
+            harness: "claude".into(),
+            model: String::new(),
+            thinking: String::new(),
+            title: "Old task".into(),
+            task: "Old task".into(),
+            agent_name: "t-old".into(),
+            created_at: 0,
+            stage: Stage::StartupBlocked,
+            workspace: "worktree".into(),
+            branch: "old".into(),
+            cwd: String::new(),
+            workspace_id: Some("w3".into()),
+            pane_id: Some("w3:p1".into()),
+            tab_id: None,
+            unverified: false,
+            failed_stage: None,
+            error: None,
+        };
+        let effects = app.update(Input::Journals(vec![record]), at(1));
+        assert!(matches!(&effects[..], [Effect::Resume { .. }]), "w3:p1 is idle already");
+    }
+
+    #[test]
+    fn a_failed_resume_says_so() {
+        let mut app = composing();
+        let record = sent(&mut app);
+        app.update(
+            Input::Resumed {
+                result: Err(launch::Failure { record: Box::new(record.clone()), error: "agent is blocked".into() }),
+            },
+            at(9),
+        );
+        assert_eq!(app.launches[0].state, LaunchState::Failed("agent is blocked".into()));
+        assert!(app.notice.as_ref().unwrap().kind == NoticeKind::Error);
+    }
+
+    #[test]
+    fn the_launch_list_keeps_the_most_recent_eight() {
+        let mut app = composing();
+        for i in 0..10 {
+            type_text(&mut app, &format!("task {i}"));
+            app.update(press(KeyCode::Enter), at(5));
+        }
+        assert_eq!(app.launches.len(), 8);
+        assert_eq!(app.launches[0].title, "task 2");
+    }
+}

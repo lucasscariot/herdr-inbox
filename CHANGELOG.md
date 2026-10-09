@@ -16,6 +16,13 @@ All notable changes to Herdr Inbox. The format follows
 - Threads from every enabled saved SSH machine join the same list, open live
   over SSH, and can be archived. A status bar strip shows each machine's
   connection; an unreachable machine never blocks the others.
+- The composer (`n`): write a task, pick project, machine, harness, model,
+  thinking level and workspace, send. Launches run in the background into a
+  new git worktree by default, with progress under Launches. An agent stopped
+  at a startup dialog gets its task once the dialog is answered.
+- `config.toml` for roots, branch prefix, harness arguments and more; the
+  legacy plugin's `config.json` is read until it exists. `--config` reads
+  another file.
 
 ### Changed
 

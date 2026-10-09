@@ -1,0 +1,34 @@
+---
+source: src/ui/tests.rs
+expression: "text(&render(&app, at(1)))"
+---
+ herdr inbox                        │
+ 1 needs input · 1 ready            │  New thread                                                  esc close
+  +  New thread                  n  │
+                                    │  What should we build?
+ NEEDS INPUT  1                     │  ╭───────────────────────────────────────────────────────────────────╮
+▎cockpit                    ● input │  │ Fix the login redirect loop                                       │
+▎Fix the login redirect loop on mo… │  │                                                                   │
+▎⎇ fix-login-redirect · Claude      │  │                                                                   │
+                                    │  ╰───────────────────────────────────────────────────────────────────╯
+ READY  1                           │
+▎site                       ✓ ready │    Project    cockpit                                               F2
+▎Review navigation                  │    Machine    Local                                                 F6
+▎⎇ feat/a-very-long-branch-name-th… │    Harness    Claude                                                F3
+                                    │    Model      Default (opus)                                        F4
+ WORKING  1                         │    Thinking   Default                                               F8
+▎api                      ◐ working │    Workspace  New worktree  ⎇ fix-login-redirect-loop               F9
+▎Add invoice export                 │
+▎⎇ main · Codex                     │  ↵ send   ⌃S send & keep   ⇧↵ newline   ⇥ fields   F5 rescan
+                                    │
+ IDLE  1                            │
+▎scratch                     ○ idle │
+▎New Pi thread                      │
+▎Pi                                 │
+                                    │
+                                    │
+                                    │
+                                    │
+                                    │
+                                    │
+  NEW THREAD  esc back

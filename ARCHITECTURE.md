@@ -25,6 +25,11 @@ public interfaces.
 | `herdr::transport` | One machine's API calls, subscriptions, `herdr` runner and git probe. Local goes to the socket; remote runs `herdr remote-api-bridge` over SSH, one process per call and one per subscription. |
 | `machines` | Reads enabled saved machines from `herdr machine list --json`. |
 | `link` | One per machine. Keeps that server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots with the git facts of their checkouts (cached 15 s), a 30 s resync, reconnection with backoff. |
+| `config` | `config.toml` (or the legacy plugin's `config.json`): roots, depth, branch prefix, harness arguments and executables, extra models, per-machine overrides. |
+| `state` | Remembered choices, cached inventories and launch journals under `$XDG_STATE_HOME/herdr-inbox`, written atomically and privately. |
+| `discovery` | An embedded Python probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs. Models are cached 15 minutes. |
+| `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. |
+| `editor`, `fuzzy` | The composer's text box and its pickers' ranking. |
 | `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
@@ -61,6 +66,14 @@ public interfaces.
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
   own record: opening a finished thread, or watching it finish, shows it as
   idle until its status changes again.
+- **Launches are never replayed blindly.** The journal records each stage. A
+  prompt Herdr accepted without seeing a reaction is marked *unverified*,
+  never sent twice. An agent stopped at a startup dialog keeps its task; once
+  the user answers, the inbox waits until Herdr reports the agent idle and
+  ready twice in a row (an agent can look idle while it is still starting)
+  and only then sends it. Another dialog sends it back to waiting.
+- **Discovery and launches never block the UI.** They run on worker threads
+  and report back as inputs.
 - **The emulator cannot crash the app.** vt100 panics on some edge cases (a
   wrap in a one-row screen); the screen keeps at least 2×2 cells, catches a
   panic while parsing, and resets until the next full frame.

@@ -217,3 +217,32 @@ fn runners_build_local_and_remote_commands() {
     assert_eq!(command.get_program(), "ssh");
     assert!(remote.has_marker());
 }
+
+#[test]
+fn the_probe_runs_locally_and_over_ssh_with_the_same_result() {
+    let script = "import sys, json; print(json.dumps({'arg': sys.argv[1]}))";
+    let local = Transport::Local { socket: "/nowhere".into(), herdr: HerdrCommand::new("herdr") };
+    let out = local.probe(script, "it's \"quoted\"", Duration::from_secs(10)).unwrap();
+    assert_eq!(out.trim(), r#"{"arg": "it's \"quoted\""}"#);
+    let dir = tempfile::tempdir().unwrap();
+    let remote = Transport::Ssh(SshHerdr {
+        ssh: fake_ssh(dir.path()),
+        target: "t".into(),
+        session: None,
+        control_dir: dir.path().into(),
+    });
+    let out = remote.probe(script, "it's \"quoted\"", Duration::from_secs(10)).unwrap();
+    assert_eq!(out.trim(), r#"{"arg": "it's \"quoted\""}"#, "login noise before the marker is dropped");
+}
+
+#[test]
+fn a_failing_probe_reports_stderr_and_a_hung_one_times_out() {
+    let local = Transport::Local { socket: "/nowhere".into(), herdr: HerdrCommand::new("herdr") };
+    let err =
+        local.probe("import sys; sys.stderr.write('boom\\n'); sys.exit(3)", "{}", Duration::from_secs(10)).unwrap_err();
+    assert_eq!(err.to_string(), "boom");
+    let started = std::time::Instant::now();
+    let err = local.probe("import time; time.sleep(30)", "{}", Duration::from_millis(300)).unwrap_err();
+    assert!(err.to_string().contains("timed out"));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

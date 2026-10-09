@@ -38,10 +38,10 @@ never updates anything. Plain `herdr` keeps working beside it, on the same
 sessions.
 
 > **Status.** The standalone client is being rebuilt in stages. It already
-> covers threads on this machine and on every saved SSH machine: the live list,
-> the interactive terminal, and archiving. The composer for new threads and
-> dictation follow. The original Python plugin lives in [`legacy/`](legacy/)
-> until then.
+> covers threads on this machine and on every saved SSH machine (the live
+> list, the interactive terminal, archiving) and starting new threads from the
+> composer. Dictation and the remaining conveniences follow. The original
+> Python plugin lives in [`legacy/`](legacy/) until then.
 
 ## Install
 
@@ -66,6 +66,7 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | Threads | `j` `k` / `↓` `↑` | Move |
 | | `g` `G` / `Home` `End` | First / last |
 | | `Enter`, `o`, click | Open the thread and focus its agent |
+| | `n`, click **+ New thread** | Open the composer |
 | | `x`, `Delete`, `Backspace` | Archive: closes the thread's workspace, keeps its worktree on disk |
 | | `Tab`, `Esc` | Back to the agent |
 | | `q`, `Ctrl+C` | Quit |
@@ -77,6 +78,72 @@ at), **working** and **idle**. The most recent change in each group comes first.
 
 Herdr Inbox uses your Herdr theme: the same built-in themes, `[theme] name`,
 and `[theme.custom]` colours from `~/.config/herdr/config.toml`.
+
+### Starting a thread
+
+Press `n`. Write the task, check the choices under it, press `Enter`. The
+composer clears at once and stays open for the next task; the launch runs in
+the background and its progress shows under **Launches**.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Send |
+| `Ctrl+S`, `Ctrl+Enter` | Send and keep the task, to send it again elsewhere |
+| `Shift+Enter`, `Alt+Enter` | New line |
+| `Tab`, `Shift+Tab` | Move between the task and the choices |
+| `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
+| `F5` | Rescan projects and model catalogs |
+| `Esc` | Close a list, then the composer (the draft stays) |
+
+Every list filters as you type: `bgpk` finds `opencode/big-pickle`. A model
+the list does not know can still be used: type its id and pick **Use …**.
+
+- **Project** lists the git repositories (and folders with a project manifest)
+  found under your roots on every machine; linked worktrees are grouped under
+  their repository.
+- **Machine** lists the machines that have the project.
+- **Harness**, **Model** and **Thinking** come from the agent CLIs installed
+  on that machine and their own model lists.
+- **Workspace** is a new git worktree by default, its branch named after the
+  task (shown as `⎇ branch`), or one you name, or an existing checkout.
+  Herdr creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.
+
+The composer remembers per project which machine, harness and workspace mode
+you used, and per machine and harness which model and thinking level, so
+switching hosts never carries over another host's model.
+
+If an agent stops at a startup dialog (a folder-trust or login prompt), the
+thread shows under **needs input**. Answer the dialog in the thread and the
+task is sent as soon as the agent is ready.
+
+#### Configuration
+
+`~/.config/herdr-inbox/config.toml`, every key optional (until it exists, the
+legacy plugin's `config.json` is read):
+
+```toml
+roots = ["~/Work", "~/Projects"]   # where projects are found
+depth = 2                          # how deep to look, 0 to 3
+branch_prefix = "lucas/"           # prepended to new branch names
+default_workspace = "worktree"     # or "checkout"
+agent_start_timeout_ms = 45000
+
+[harness_args]                     # extra flags per agent CLI
+codex = ["--no-daemon"]
+
+[harness_executables]              # when a CLI has another name
+claude = "claude-dev"
+
+[models]                           # model ids to add to a CLI's list
+claude = ["claude-opus-5-5"]
+
+[[projects]]                       # repositories outside the roots
+path = "/srv/api"
+machine = "Mac Studio"
+
+[machines."Mac Studio"]            # per machine: replaces, never merges
+harness_args = { codex = ["--no-daemon", "--fast"] }
+```
 
 ### Other machines
 

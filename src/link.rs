@@ -64,6 +64,14 @@ impl Link {
     pub fn request(&self, request: Request) {
         let _ = self.tx.send(Signal::Request(request));
     }
+
+    /// A handle that asks this link for a refresh from another thread.
+    pub fn refresher(&self) -> impl Fn() + Send + 'static {
+        let tx = self.tx.clone();
+        move || {
+            let _ = tx.send(Signal::Request(Request::Refresh));
+        }
+    }
 }
 
 /// One machine's link state, owned by its thread.

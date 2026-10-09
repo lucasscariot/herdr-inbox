@@ -7,8 +7,10 @@ use crate::threads::{Group, Thread};
 
 /// Lines a thread takes in the sidebar, plus one blank line after it.
 pub const THREAD_LINES: u16 = 3;
-/// Lines above the list: title, summary, blank.
-pub const HEADER_LINES: u16 = 3;
+/// Lines above the list: title, summary, the New thread button, blank.
+pub const HEADER_LINES: u16 = 4;
+/// The header row holding the New thread button.
+pub const NEW_BUTTON_ROW: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
@@ -34,6 +36,8 @@ pub struct Layout {
     pub width: u16,
     pub height: u16,
     pub sidebar: Rect,
+    /// The New thread button in the sidebar header.
+    pub new_button: Rect,
     /// The sidebar's scrolling part, below its header.
     pub list: Rect,
     pub terminal: Rect,
@@ -51,6 +55,7 @@ impl Layout {
             width: 0,
             height: 0,
             sidebar: Rect::default(),
+            new_button: Rect::default(),
             list: Rect::default(),
             terminal: Rect::default(),
             bar: Rect::default(),
@@ -68,6 +73,8 @@ impl Layout {
         let body = height.saturating_sub(1);
         let sidebar_width = sidebar_width(width);
         self.sidebar = Rect::new(0, 0, sidebar_width, body);
+        self.new_button =
+            if body > NEW_BUTTON_ROW { Rect::new(0, NEW_BUTTON_ROW, sidebar_width, 1) } else { Rect::default() };
         self.list = Rect::new(0, HEADER_LINES.min(body), sidebar_width, body.saturating_sub(HEADER_LINES));
         // One column separates the sidebar from the terminal.
         let terminal_x = (sidebar_width + 1).min(width);
@@ -131,6 +138,10 @@ impl Layout {
 
     pub fn in_list(&self, x: u16, y: u16) -> bool {
         contains(self.list, x, y)
+    }
+
+    pub fn on_new_button(&self, x: u16, y: u16) -> bool {
+        contains(self.new_button, x, y)
     }
 
     /// Scrolls the list by `delta` rows, within bounds.
@@ -207,7 +218,8 @@ mod tests {
     fn geometry_splits_sidebar_separator_terminal_and_bar() {
         let layout = Layout::new(120, 40);
         assert_eq!(layout.sidebar, Rect::new(0, 0, 40, 39));
-        assert_eq!(layout.list, Rect::new(0, 3, 40, 36));
+        assert_eq!(layout.list, Rect::new(0, 4, 40, 35));
+        assert_eq!(layout.new_button, Rect::new(0, 2, 40, 1));
         assert_eq!(layout.terminal, Rect::new(41, 0, 79, 39));
         assert_eq!(layout.bar, Rect::new(0, 39, 120, 1));
         assert_eq!(layout.terminal_size(), (79, 39));
@@ -287,14 +299,14 @@ mod tests {
     fn the_list_scrolls_to_keep_the_cursor_visible_and_back() {
         let threads: Vec<Thread> = (0..10).map(|i| thread(&format!("t{i}"), AgentStatus::Idle)).collect();
         let threads = sorted(threads);
-        // 1 heading + 10 threads * 4 lines - 1 trailing blank = 40 rows; 12 visible.
+        // 1 heading + 10 threads * 4 lines - 1 trailing blank = 40 rows; 11 visible.
         let mut layout = Layout::new(100, 16);
-        assert_eq!(layout.list.height, 12);
+        assert_eq!(layout.list.height, 11);
         layout.update(&threads, Some(&threads[0].id));
         assert_eq!(layout.offset, 0);
         layout.update(&threads, Some(&threads[5].id));
         // Thread 5 spans rows 21..24, so the offset puts row 23 at the bottom.
-        assert_eq!(layout.offset, 24 - 12);
+        assert_eq!(layout.offset, 24 - 11);
         assert_eq!(layout.thread_at(1, layout.list.y + layout.list.height - 1), Some(5));
         layout.update(&threads, Some(&threads[2].id));
         assert_eq!(layout.offset, 9, "scrolling up aligns the thread's first line to the top");
@@ -310,7 +322,7 @@ mod tests {
         layout.scroll(-5);
         assert_eq!(layout.offset, 0);
         layout.scroll(1000);
-        assert_eq!(layout.offset, 40 - 12);
+        assert_eq!(layout.offset, 40 - 11);
         layout.resize(100, 100);
         assert_eq!(layout.offset, 0, "everything fits again");
     }
