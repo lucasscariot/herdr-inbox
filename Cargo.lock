@@ -512,6 +512,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "ratatui",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",

@@ -2303,6 +2303,169 @@ mod space_bar {
     }
 }
 
+mod self_updates {
+    use super::*;
+    use crate::update::{Installed, Release};
+
+    fn release() -> Release {
+        Release {
+            tag: "v2.0.0".into(),
+            version: semver::Version::new(2, 0, 0),
+            notes: "A new inbox.".into(),
+            newer: true,
+            asset: Some("herdr-inbox-linux-x86_64.tar.gz".into()),
+        }
+    }
+
+    fn ctrl_g() -> Input {
+        press_with(KeyCode::Char('g'), KeyModifiers::CONTROL)
+    }
+
+    fn ready(app: &mut App) {
+        assert_eq!(app.update(ctrl_g(), at(1)), vec![Effect::CheckUpdate]);
+        assert!(app.update(Input::UpdateChecked(Ok(release())), at(2)).is_empty());
+    }
+
+    #[test]
+    fn updates_are_only_checked_on_request_and_work_without_a_server() {
+        let mut app = app();
+        assert!(app.update(Input::Tick, at(0)).is_empty());
+        app.update(connection(LOCAL, Connection::NoServer), at(0));
+        assert_eq!(app.update(ctrl_g(), at(1)), vec![Effect::CheckUpdate]);
+        assert!(app.updates.visible);
+        assert_eq!(app.updates.phase, UpdatePhase::Checking);
+        assert!(app.update(press(KeyCode::Enter), at(1)).is_empty(), "no install or server start while checking");
+        assert!(app.update(ctrl_g(), at(1)).is_empty(), "no duplicate check");
+        assert!(app.update(press(KeyCode::Char('r')), at(1)).is_empty(), "no overlapping recheck");
+        assert!(app.update(press(KeyCode::Esc), at(1)).is_empty());
+        assert!(!app.updates.visible);
+        app.update(Input::UpdateChecked(Ok(release())), at(2));
+        assert!(!app.updates.visible, "a late check does not reopen the dialog");
+        assert_eq!(app.update(ctrl_g(), at(3)), vec![Effect::CheckUpdate], "a later visit checks fresh");
+    }
+
+    #[test]
+    fn ctrl_g_remains_an_agent_key() {
+        let (mut app, _) = loaded();
+        app.focus = Focus::Terminal;
+        let generation = app.open.as_ref().unwrap().generation;
+        assert_eq!(app.update(ctrl_g(), at(1)), vec![Effect::Send { generation, control: Control::Input(vec![7]) }]);
+        assert!(!app.updates.visible);
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.update(ctrl_g(), at(1)), vec![Effect::CheckUpdate]);
+    }
+
+    #[test]
+    fn the_dialog_preserves_the_draft_and_owns_keys_paste_and_clicks() {
+        let (mut app, _) = loaded();
+        app.focus = Focus::Composer;
+        app.composer.task.set("Keep this draft");
+        app.composer.open_picker(Field::Harness, "cl");
+        let draft = app.composer.clone();
+        ready(&mut app);
+        for input in [
+            press_with(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            press_with(KeyCode::Char('t'), KeyModifiers::CONTROL),
+            press(KeyCode::F(10)),
+            Input::Paste("unwanted text\n".into()),
+            Input::Clipboard(Ok(crate::clipboard::Clip::Text("clipboard".into()))),
+            mouse(MouseEventKind::Down(MouseButton::Left), 5, 8),
+        ] {
+            assert!(app.update(input, at(2)).is_empty());
+            assert_eq!(app.composer, draft);
+            assert!(app.dictation.is_none());
+        }
+        assert!(!app.space_holds(), "holding space cannot dictate behind a dialog");
+        app.update(press(KeyCode::Esc), at(3));
+        assert_eq!(app.composer, draft);
+        assert_eq!(app.focus, Focus::Composer);
+        app.composer.close_picker();
+        app.update(press_with(KeyCode::Char('u'), KeyModifiers::CONTROL), at(3));
+        assert!(app.composer.task.is_blank(), "Ctrl+U still clears text");
+    }
+
+    #[test]
+    fn browsing_never_installs_and_enter_confirms_exactly_once() {
+        let (mut app, _) = loaded();
+        ready(&mut app);
+        assert_eq!(app.update(press(KeyCode::Char('b')), at(2)), vec![Effect::OpenUrl(release().url())]);
+        assert_eq!(app.updates.phase, UpdatePhase::Ready(release()));
+        assert_eq!(app.update(press(KeyCode::Enter), at(2)), vec![Effect::InstallUpdate(release())]);
+        assert_eq!(app.updates.phase, UpdatePhase::Installing(release()));
+        assert!(app.update(press(KeyCode::Enter), at(2)).is_empty());
+        assert!(app.update(press(KeyCode::Char('r')), at(2)).is_empty());
+        app.update(press(KeyCode::Esc), at(2));
+        assert!(app.update(ctrl_g(), at(3)).is_empty(), "reopening keeps the in-flight install");
+        assert_eq!(app.updates.phase, UpdatePhase::Installing(release()));
+    }
+
+    #[test]
+    fn failures_can_be_retried_without_losing_the_reviewed_release() {
+        let (mut app, _) = loaded();
+        app.update(ctrl_g(), at(1));
+        app.update(Input::UpdateChecked(Err("HTTP 403".into())), at(2));
+        assert!(app.update(press(KeyCode::Enter), at(2)).is_empty());
+        assert_eq!(
+            app.update(press(KeyCode::Char('b')), at(2)),
+            vec![Effect::OpenUrl(crate::update::RELEASES_URL.into())]
+        );
+        assert_eq!(app.update(press(KeyCode::Char('r')), at(3)), vec![Effect::CheckUpdate]);
+        app.update(Input::UpdateChecked(Ok(release())), at(3));
+        app.update(press(KeyCode::Enter), at(4));
+        app.update(Input::UpdateInstalled(Err("checksum mismatch".into())), at(5));
+        assert_eq!(app.updates.release(), Some(&release()));
+        assert!(app.updates.notes(60).join("\n").contains("checksum mismatch"));
+        assert_eq!(app.update(press(KeyCode::Enter), at(6)), vec![Effect::InstallUpdate(release())]);
+    }
+
+    #[test]
+    fn a_completed_update_waits_for_restart_and_is_not_installed_again() {
+        let (mut app, _) = loaded();
+        ready(&mut app);
+        app.update(press(KeyCode::Enter), at(3));
+        app.update(press(KeyCode::Esc), at(3));
+        let installed = Installed { version: release().version, path: "/custom/bin/herdr-inbox".into() };
+        app.update(Input::UpdateInstalled(Ok(installed.clone())), at(4));
+        assert!(!app.updates.visible);
+        assert_eq!(app.updates.phase, UpdatePhase::Installed(installed));
+        assert!(app.update(ctrl_g(), at(5)).is_empty());
+        assert!(app.updates.visible);
+        assert!(app.update(press(KeyCode::Enter), at(5)).is_empty());
+        assert!(app.update(press(KeyCode::Char('r')), at(5)).is_empty());
+    }
+
+    #[test]
+    fn no_newer_release_or_missing_assets_cannot_trigger_an_install() {
+        for (newer, asset) in [(false, release().asset), (true, None)] {
+            let (mut app, _) = loaded();
+            app.update(ctrl_g(), at(1));
+            let release = Release { newer, asset, ..release() };
+            app.update(Input::UpdateChecked(Ok(release.clone())), at(2));
+            assert!(app.update(press(KeyCode::Enter), at(3)).is_empty());
+            assert_eq!(app.update(press(KeyCode::Char('b')), at(3)), vec![Effect::OpenUrl(release.url())]);
+        }
+    }
+
+    #[test]
+    fn notes_scroll_stays_in_bounds_and_reset_on_recheck() {
+        let (mut app, _) = loaded();
+        app.update(ctrl_g(), at(1));
+        let release = Release { notes: (0..80).map(|n| format!("Release note {n}\n")).collect(), ..release() };
+        app.update(Input::UpdateChecked(Ok(release)), at(2));
+        app.update(press(KeyCode::End), at(2));
+        let last = app.updates.scroll;
+        assert!(last > 50 && last < 80);
+        app.update(press(KeyCode::Down), at(2));
+        assert_eq!(app.updates.scroll, last);
+        app.update(press(KeyCode::Home), at(2));
+        assert_eq!(app.updates.scroll, 0);
+        app.update(press(KeyCode::PageDown), at(2));
+        assert_eq!(app.updates.scroll, 8);
+        assert_eq!(app.update(press(KeyCode::Char('r')), at(3)), vec![Effect::CheckUpdate]);
+        assert_eq!(app.updates.scroll, 0);
+    }
+}
+
 mod pasted_images {
     use super::*;
     use crate::clipboard::Clip;

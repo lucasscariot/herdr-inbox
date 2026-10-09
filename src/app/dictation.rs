@@ -137,6 +137,7 @@ impl App {
     pub(crate) fn space_holds(&self) -> bool {
         self.config.speech.space_hold_enabled()
             && self.menu.is_none()
+            && !self.updates.visible
             && self.dictation.is_none()
             && !self.needs_server_screen()
             && match self.focus {

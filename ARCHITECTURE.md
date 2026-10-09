@@ -34,6 +34,8 @@ public interfaces.
 | `clipboard` | Reads the clipboard for `Ctrl+V` (`wl-paste`, `xclip`, `osascript`) and saves an image privately under the cache directory. |
 | `presets` | Named harness, model and thinking combinations, in the plugin's `presets.json` format. |
 | `speech` | Dictation: `recorder` (whatever is installed, stopped with SIGINT so the WAV is finalized), `meter` (an FFT over the file being written, twelve bands, an adaptive noise floor), `backends` (a command, voxtype, whisper.cpp, or a hosted service through `curl` with the key on stdin), `whisper` (builds whisper.cpp and downloads a model). |
+| `update` | Checks GitHub's latest stable release through a bounded `curl` request, compares semantic versions, and runs the embedded checksum-checked installer against the current executable. |
+| `app::updates` | The update dialog's state, confirmation and notes scrolling. Checks and installs are effects, never I/O in the app. |
 | `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
@@ -87,8 +89,15 @@ public interfaces.
   notice; while the microphone is open no key reaches an agent.
 - **Secrets stay out of sight.** API keys go to `curl` on its standard input,
   never in its arguments, and a key being typed is drawn as dots.
-- **Discovery and launches never block the UI.** They run on worker threads
-  and report back as inputs.
+- **Discovery, launches and self-updates never block the UI.** They run on
+  worker threads and report back as inputs.
+- **Updates are explicit and local.** Ctrl+G in the list or composer checks the
+  latest stable GitHub release; Enter confirms the exact tag shown. The archive
+  and SHA-256 must both be published for this platform. The installer verifies
+  the checksum and the binary's version before an atomic rename next to the
+  current executable. It never updates Herdr, settings or remote machines.
+  Closing the dialog keeps in-flight work; reopening cannot start duplicate
+  installs. A successful update waits for a user restart.
 - **Spaces type immediately by default.** Ctrl+T dictates; only an explicit
   `[speech] space_hold = true` enables key-repeat detection and its wait.
 - **Forwarding a key does not spend a frame.** A terminal key whose only

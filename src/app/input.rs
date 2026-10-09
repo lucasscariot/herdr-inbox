@@ -59,11 +59,18 @@ pub(super) fn settle_spaces(app: &mut App, now: SystemTime, effects: &mut Vec<Ef
 }
 
 fn dispatch(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    if app.updates.visible {
+        return app.updates.key(key, app.layout.width, app.layout.height, effects);
+    }
     if app.menu.is_some() {
         return app.menu_key(key, effects);
     }
     if app.dictation_key(key, effects) {
         return;
+    }
+    let ctrl_g = key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL);
+    if ctrl_g && (app.focus != Focus::Terminal || app.needs_server_screen()) {
+        return app.updates.open(effects);
     }
     let ctrl_t = key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl_t && !app.needs_server_screen() {
@@ -501,6 +508,9 @@ fn select(app: &mut App, index: usize, now: SystemTime, effects: &mut Vec<Effect
 }
 
 pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
+    if app.updates.visible {
+        return;
+    }
     if let Some(reply) = app.reply.as_mut() {
         reply.editor.insert(text);
         return;
@@ -532,6 +542,9 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
 /// The clipboard read for Ctrl+V: an image joins the reply or the task being
 /// written as `[Image #N]`, text is pasted there like any paste.
 pub(super) fn clipboard(app: &mut App, result: Result<Clip, String>, now: SystemTime, effects: &mut Vec<Effect>) {
+    if app.updates.visible {
+        return;
+    }
     let writing_task =
         app.focus == Focus::Composer && app.composer.picker.is_none() && app.composer.field == Field::Task;
     if app.reply.is_none() && !writing_task {
@@ -549,6 +562,9 @@ pub(super) fn clipboard(app: &mut App, result: Result<Clip, String>, now: System
 }
 
 pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    if app.updates.visible {
+        return;
+    }
     let (x, y) = (mouse.column, mouse.row);
     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
         && app.layout.on_new_button(x, y)

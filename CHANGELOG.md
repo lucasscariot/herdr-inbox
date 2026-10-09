@@ -49,6 +49,12 @@ never changes it.
   while a thread needs input. It animates only while on screen.
 - Prebuilt binaries for Linux and macOS on every release, and a one-line
   installer that checks their SHA-256.
+- Ctrl+G in the thread list or composer checks GitHub's latest stable release,
+  shows its notes and opens its page with B. Enter confirms installation of
+  that exact release into the running binary's directory, after verifying
+  its SHA-256 and version. Checks and installs run in the background, drafts
+  stay intact, and a successful update asks for a restart without changing
+  Herdr or stopping agents.
 - A quieter frame: the sidebar divider and an unfocused task box are faint
   hairlines, the focused task box and the reply box wear a softened accent,
   and idle threads (badge, marker, heading, orbit bead) are faint. Themes that

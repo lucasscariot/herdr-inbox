@@ -21,4 +21,4 @@ expression: "text(&render(&app, at(0)))"
                                  │
                                  │       Agent threads you start in Herdr appear on the left.
                                  │
-  THREADS  ↵ agent  j/k move  n new  x archive  tab agent  q quit
+  THREADS  ↵ agent  j/k move  n new  x archive  ⌃G updates  tab agent  q quit

@@ -982,6 +982,111 @@ mod orbit_view {
     }
 }
 
+mod self_updates {
+    use super::*;
+    use crate::app::{UpdatePhase, Updates};
+    use crate::update::{Installed, Release};
+
+    fn release() -> Release {
+        Release {
+            tag: "v2.0.0".into(),
+            version: semver::Version::new(2, 0, 0),
+            notes: "## Changes\nFaster inbox navigation.\nSafer updates.".into(),
+            newer: true,
+            asset: Some("herdr-inbox-linux-x86_64.tar.gz".into()),
+        }
+    }
+
+    fn showing(phase: UpdatePhase) -> App {
+        let mut app = loaded(100, 30);
+        app.updates = Updates { visible: true, phase, scroll: 0 };
+        app
+    }
+
+    #[test]
+    fn the_dialog_shows_the_versions_notes_and_confirmation_keys() {
+        let app = showing(UpdatePhase::Ready(release()));
+        let terminal = render(&app, at(2));
+        let screen = text(&terminal);
+        assert!(screen.contains(&format!("Running {}", crate::update::CURRENT_VERSION)), "{screen}");
+        for needle in [
+            "Latest stable 2.0.0",
+            "Enter installs this release",
+            "Faster inbox navigation.",
+            "Enter install",
+            "b GitHub",
+            "Esc back",
+        ] {
+            assert!(screen.contains(needle), "missing {needle:?}:\n{screen}");
+        }
+        insta::assert_snapshot!(screen);
+    }
+
+    #[test]
+    fn checking_installing_errors_and_restart_instructions_stay_visible() {
+        for (phase, needle) in [
+            (UpdatePhase::Checking, "Checking GitHub"),
+            (UpdatePhase::Installing(release()), "Downloading and checking SHA-256"),
+            (UpdatePhase::Failed { release: None, error: "HTTP 403: rate limit".into() }, "HTTP 403: rate limit"),
+            (UpdatePhase::Failed { release: Some(release()), error: "checksum mismatch".into() }, "checksum mismatch"),
+            (
+                UpdatePhase::Installed(Installed {
+                    version: release().version,
+                    path: "/custom/bin/herdr-inbox".into(),
+                }),
+                "/custom/bin/herdr-inbox",
+            ),
+        ] {
+            let app = showing(phase);
+            let terminal = render(&app, at(2));
+            let screen = text(&terminal);
+            assert!(screen.contains(needle), "{screen}");
+            if matches!(app.updates.phase, UpdatePhase::Installed(_)) {
+                assert!(screen.contains("Restart Inbox") && screen.contains("agents keep running"), "{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn up_to_date_and_unavailable_releases_do_not_offer_an_install() {
+        for (release, reason) in [
+            (Release { newer: false, ..release() }, "No newer stable release"),
+            (Release { asset: None, ..release() }, "no binary and checksum"),
+        ] {
+            let screen = text(&render(&showing(UpdatePhase::Ready(release)), at(2)));
+            assert!(screen.contains(reason), "{screen}");
+            assert!(!screen.contains("Enter install"), "{screen}");
+            assert!(screen.contains("b GitHub"), "{screen}");
+        }
+    }
+
+    #[test]
+    fn notes_scroll_and_tiny_terminals_do_not_hide_or_crash_the_dialog() {
+        let release = Release { notes: (0..80).map(|i| format!("Change {i}\n")).collect(), ..release() };
+        let mut app = showing(UpdatePhase::Ready(release));
+        app.updates.scroll = 70;
+        let screen = text(&render(&app, at(2)));
+        assert!(screen.contains("Change 70") && !screen.contains("Change 0\n"), "{screen}");
+        for (width, height) in [(1, 1), (18, 6), (44, 16), (80, 24), (180, 60)] {
+            app.update(Input::Resize { width, height }, at(2));
+            render(&app, at(2));
+        }
+    }
+
+    #[test]
+    fn the_update_shortcut_is_advertised_only_where_it_is_handled() {
+        let mut app = loaded(120, 30);
+        for focus in [Focus::List, Focus::Composer] {
+            app.focus = focus;
+            assert!(text(&render(&app, at(1))).contains("⌃G updates"));
+        }
+        app.focus = Focus::Terminal;
+        assert!(!text(&render(&app, at(1))).contains("⌃G updates"));
+        app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(2));
+        assert!(text(&render(&app, at(2))).contains("⌃G updates"));
+    }
+}
+
 mod space_hold_hints {
     use super::*;
     use crate::app::{Dictation, Phase, Target};

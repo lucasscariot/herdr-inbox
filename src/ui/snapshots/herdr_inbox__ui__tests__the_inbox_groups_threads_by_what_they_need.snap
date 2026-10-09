@@ -25,4 +25,4 @@ expression: "text(&render(&app, at(0)))"
 ▎scratch                  ○ idle │
 ▎New Pi thread                   │
 ▎Pi                              │
-  THREADS  ↵ agent  j/k move  n new  x archive  tab agent  q quit
+  THREADS  ↵ agent  j/k move  n new  x archive  ⌃G updates  tab agent  q quit
