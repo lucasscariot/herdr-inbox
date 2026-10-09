@@ -339,10 +339,10 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
     match key.code {
         KeyCode::Char('c') if ctrl => effects.push(Effect::Quit),
         KeyCode::Char('q') => effects.push(Effect::Quit),
-        KeyCode::Char('j') | KeyCode::Down => move_cursor(app, 1),
-        KeyCode::Char('k') | KeyCode::Up => move_cursor(app, -1),
-        KeyCode::Char('g') | KeyCode::Home => select(app, 0),
-        KeyCode::Char('G') | KeyCode::End => select(app, app.threads.len().saturating_sub(1)),
+        KeyCode::Char('j') | KeyCode::Down => move_cursor(app, 1, now, effects),
+        KeyCode::Char('k') | KeyCode::Up => move_cursor(app, -1, now, effects),
+        KeyCode::Char('g') | KeyCode::Home => select(app, 0, now, effects),
+        KeyCode::Char('G') | KeyCode::End => select(app, app.threads.len().saturating_sub(1), now, effects),
         KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('l') | KeyCode::Right => {
             if let Some(id) = app.cursor.clone() {
                 focus_thread(app, &id, now, effects);
@@ -352,8 +352,11 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
             app.filter.clear();
             app.rebuild_now();
         }
-        KeyCode::Tab | KeyCode::Esc if app.open.is_some() => {
-            app.focus = Focus::Terminal;
+        KeyCode::Tab | KeyCode::Esc => {
+            if let Some(id) = app.open.as_ref().map(|open| open.id.clone()) {
+                app.mark_seen(&id, now);
+                app.focus = Focus::Terminal;
+            }
         }
         KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
             app.confirm_archive = app.cursor.clone();
@@ -477,20 +480,23 @@ fn focus_thread(app: &mut App, id: &str, now: SystemTime, effects: &mut Vec<Effe
     }
 }
 
-fn move_cursor(app: &mut App, delta: isize) {
+fn move_cursor(app: &mut App, delta: isize, now: SystemTime, effects: &mut Vec<Effect>) {
     let Some(current) = app.cursor_index() else {
         if !app.threads.is_empty() {
-            select(app, 0);
+            select(app, 0, now, effects);
         }
         return;
     };
     let last = app.threads.len().saturating_sub(1);
-    select(app, current.saturating_add_signed(delta).min(last));
+    select(app, current.saturating_add_signed(delta).min(last), now, effects);
 }
 
-fn select(app: &mut App, index: usize) {
-    if let Some(thread) = app.threads.get(index) {
-        app.cursor = Some(thread.id.clone());
+fn select(app: &mut App, index: usize, now: SystemTime, effects: &mut Vec<Effect>) {
+    if let Some(id) = app.threads.get(index).map(|thread| thread.id.clone()) {
+        app.cursor = Some(id.clone());
+        if app.open.as_ref().is_none_or(|open| open.id != id) {
+            app.show_thread(&id, now, effects);
+        }
     }
 }
 
@@ -558,7 +564,7 @@ pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: 
             MouseEventKind::Down(MouseButton::Left) => {
                 app.confirm_archive = None;
                 if let Some(index) = app.layout.thread_at(x, y) {
-                    select(app, index);
+                    select(app, index, now, effects);
                     if let Some(id) = app.cursor.clone() {
                         focus_thread(app, &id, now, effects);
                     }
@@ -584,7 +590,8 @@ pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: 
         MouseEventKind::ScrollUp => Some(Control::Scroll { direction: ScrollDirection::Up, lines: WHEEL_LINES }),
         MouseEventKind::ScrollDown => Some(Control::Scroll { direction: ScrollDirection::Down, lines: WHEEL_LINES }),
         MouseEventKind::Down(button) => {
-            app.focus = Focus::Terminal;
+            let id = open.id.clone();
+            focus_thread(app, &id, now, effects);
             app.confirm_archive = None;
             wants_mouse.then(|| pane_mouse(MouseAction::Down, button, column, row, mouse.modifiers))
         }

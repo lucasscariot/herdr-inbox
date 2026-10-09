@@ -379,6 +379,45 @@ fn the_inbox_shows_threads_drives_an_agent_and_archives() {
     assert_eq!(workspaces["result"]["workspaces"].as_array().map(Vec::len), Some(0));
 }
 
+#[test]
+fn navigating_tasks_shows_their_live_discussions_without_enter() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let repo = git_repo(sandbox.root.path(), "discussions", "main");
+    for (title, state, marker) in
+        [("First task", "blocked", "first-discussion"), ("Second task", "working", "second-discussion")]
+    {
+        let created =
+            sandbox.herdr(&["workspace", "create", "--cwd", repo.to_str().unwrap(), "--label", title, "--no-focus"]);
+        let pane = created["result"]["root_pane"]["pane_id"].as_str().expect("pane id");
+        sandbox.herdr(&["pane", "run", pane, &format!("printf '\\033[2J\\033[H{marker}-%s\\n' 42")]);
+        sandbox.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "claude", "--state", state, pane]);
+        sandbox.herdr(&["pane", "report-metadata", pane, "--source", "e2e", "--token", &format!("thread={title}")]);
+    }
+    let mut inbox = Inbox::start(&sandbox, 110, 24);
+    inbox.wait_for_text("First task");
+    inbox.wait_for_text("Second task");
+    inbox.wait_for_text("first-discussion-42");
+    inbox.wait_for_text("THREADS");
+
+    for (key, marker, previous) in [
+        ("j", "second-discussion-42", "first-discussion-42"),
+        ("\x1b[A", "first-discussion-42", "second-discussion-42"),
+        ("\x1b[B", "second-discussion-42", "first-discussion-42"),
+    ] {
+        inbox.keys(key);
+        inbox.wait_for_text(marker);
+        inbox.wait_until_gone(previous);
+        assert!(inbox.text().contains("THREADS"), "browsing keeps keyboard focus in the list");
+    }
+    inbox.keys("\t");
+    inbox.wait_for_text("AGENT");
+    inbox.keys("echo selected-$((40 + 2))\r");
+    inbox.wait_for_text("selected-42");
+}
+
 /// A fake `ssh` that runs the remote command locally, against `remote`'s
 /// Herdr server: the inbox's whole SSH path, minus the network.
 fn fake_ssh(local: &Sandbox, remote: &Sandbox) -> PathBuf {

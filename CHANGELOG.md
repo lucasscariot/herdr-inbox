@@ -62,6 +62,11 @@ never changes it.
   echo arrives, avoiding an extra 16 ms wait. The frame limit for streaming
   output stays in place. Runtime scheduling and PTY latency tests cover both.
 
+- Moving through tasks with j/k, arrow keys, g/G or Home/End shows each
+  discussion immediately, without Enter. Keyboard focus stays in the list;
+  Enter or Tab moves it to the agent. Finished tasks stay ready while browsing
+  so their rows do not move until the agent gets keyboard focus.
+
 ### Removed
 
 - The Herdr plugin (composer and inbox panes) and the patched thread-only

@@ -166,17 +166,18 @@ fn idle_threads_and_dividers_stay_faint() {
 }
 
 #[test]
-fn the_cursor_row_is_highlighted_in_the_list_and_the_open_title_is_accented() {
+fn the_selected_discussion_is_highlighted_and_accented_while_browsing() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Char('j'));
     let terminal = render(&app, at(0));
     let palette = Palette::default();
     let buffer = terminal.backend().buffer();
-    let (_, cursor_y) = find(&terminal, "Review navigation");
+    let (x, cursor_y) = find(&terminal, "Review navigation");
     assert_eq!(buffer[(5, cursor_y)].bg, palette.active_row_bg);
-    let (x, open_y) = find(&terminal, "Fix the login");
-    assert_eq!(buffer[(x, open_y)].fg, palette.accent, "the open thread keeps an accent title");
-    assert_ne!(buffer[(5, open_y)].bg, palette.active_row_bg);
+    assert_eq!(buffer[(x, cursor_y)].fg, palette.accent, "the selected discussion is already open");
+    let (x, previous_y) = find(&terminal, "Fix the login");
+    assert_ne!(buffer[(x, previous_y)].fg, palette.accent);
+    assert_ne!(buffer[(5, previous_y)].bg, palette.active_row_bg);
 }
 
 #[test]

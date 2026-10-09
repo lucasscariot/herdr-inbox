@@ -827,7 +827,7 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
         (_, Focus::List) if app.filtering => ("FILTER", vec![("↵", "keep"), ("esc", "clear")]),
         (_, Focus::List) => (
             "THREADS",
-            vec![("↵", "open"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],
+            vec![("↵", "agent"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("tab", "agent"), ("q", "quit")],
         ),
         (_, Focus::Terminal) if app.config.speech.space_hold_enabled() => {
             ("AGENT", vec![("tab", "threads"), ("hold ␣", "dictate")])
