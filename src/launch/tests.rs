@@ -426,3 +426,64 @@ fn records_round_trip_through_json() {
     let back: Record = serde_json::from_str(&json).unwrap();
     assert_eq!(back, plan.record);
 }
+
+const IMAGE_A: &str = "/home/u/.cache/herdr-inbox/images/image-1.png";
+const IMAGE_B: &str = "/home/u/.cache/herdr-inbox/images/image-2.png";
+
+#[test]
+fn pasted_images_are_left_out_of_the_title_and_branch() {
+    let task = format!("{IMAGE_A}\nwhy is the login {IMAGE_B} broken");
+    let plan = plan_for(&request(&task, WorkspaceChoice::NewWorktree { branch: None }), &settings(), None).unwrap();
+    assert_eq!(plan.record.title, "why is the login broken");
+    assert_eq!(plan.record.branch, "why-is-login-broken");
+    assert_eq!(plan.record.task, task, "the task keeps its images");
+    let only = plan_for(&request(IMAGE_A, WorkspaceChoice::NewWorktree { branch: None }), &settings(), None).unwrap();
+    assert_eq!((only.record.title.as_str(), only.record.branch.as_str()), ("image", "image"));
+}
+
+#[test]
+fn each_image_is_pasted_on_its_own_then_the_rest_is_prompted() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let task = format!("why {IMAGE_A}\nbroken {IMAGE_B} see?");
+    let plan = plan_for(&request(&task, WorkspaceChoice::NewWorktree { branch: None }), &settings(), None).unwrap();
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
+    let calls = calls(dir.path());
+    let sent: Vec<&str> = calls.iter().skip_while(|c| !c.starts_with("pane send-text")).map(String::as_str).collect();
+    assert_eq!(
+        sent,
+        [
+            "pane send-text w5:p1 \x1b[200~why \x1b[201~".to_string(),
+            format!("pane send-text w5:p1 \x1b[200~{IMAGE_A}\x1b[201~"),
+            "pane send-text w5:p1 \x1b[200~\rbroken \x1b[201~".to_string(),
+            format!("pane send-text w5:p1 \x1b[200~{IMAGE_B}\x1b[201~"),
+            "agent prompt w5:p1  see? --wait --until working --until blocked --timeout 15000".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_task_ending_with_an_image_prompts_with_that_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    assert_eq!(prompt(&runner, "w2:p1", &format!("look: {IMAGE_A}")), Ok(false));
+    assert_eq!(
+        calls(dir.path()),
+        [
+            "pane send-text w2:p1 \x1b[200~look: \x1b[201~".to_string(),
+            format!("agent prompt w2:p1 {IMAGE_A} --wait --until working --until blocked --timeout 8000"),
+        ]
+    );
+}
+
+#[test]
+fn text_without_saved_images_is_prompted_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    assert_eq!(prompt(&runner, "w2:p1", "read /tmp/shot.png"), Ok(false));
+    assert_eq!(
+        calls(dir.path()),
+        ["agent prompt w2:p1 read /tmp/shot.png --wait --until working --until blocked --timeout 8000"]
+    );
+}

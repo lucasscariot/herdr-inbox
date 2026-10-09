@@ -143,6 +143,8 @@ pub struct Composer {
     pub history_index: Option<usize>,
     /// The task being written before browsing the history.
     pub history_draft: String,
+    /// Pasted images, shown in the task as `[Image #N]`.
+    pub images: Vec<String>,
 }
 
 impl Default for Composer {
@@ -160,6 +162,7 @@ impl Default for Composer {
             error: None,
             history_index: None,
             history_draft: String::new(),
+            images: Vec::new(),
         }
     }
 }
@@ -395,7 +398,7 @@ impl Composer {
     pub fn browse_history(&mut self, history: &[String], older: bool) {
         let next = match (self.history_index, older) {
             (None, true) if !history.is_empty() => {
-                self.history_draft = self.task.text().to_string();
+                self.history_draft = self.task_text();
                 Some(0)
             }
             (None, _) => return,
@@ -405,12 +408,24 @@ impl Composer {
         };
         self.history_index = next;
         match next {
-            Some(index) => self.task.set(&history[index]),
+            Some(index) => self.set_task(&history[index]),
             None => {
                 let draft = std::mem::take(&mut self.history_draft);
-                self.task.set(&draft);
+                self.set_task(&draft);
             }
         }
+    }
+
+    /// The task as it is sent: pasted images as their paths.
+    pub fn task_text(&self) -> String {
+        crate::images::expand(self.task.text(), &self.images)
+    }
+
+    /// Fills the task from sent text, its images as `[Image #N]` again.
+    pub fn set_task(&mut self, text: &str) {
+        let (text, images) = crate::images::collapse(text);
+        self.task.set(&text);
+        self.images = images;
     }
 
     /// The branch a new worktree would get right now.
@@ -423,7 +438,7 @@ impl Composer {
                 let project = ctx.project(self)?;
                 let machine = ctx.machine(self.machine.as_deref()?)?;
                 let prefix = ctx.config.for_machine(&machine.id, &machine.label, machine.is_local()).branch_prefix;
-                Some(launch::branch_name(self.task.text(), &project.taken_branches(), &prefix))
+                Some(launch::branch_name(&launch::task_words(self.task.text()), &project.taken_branches(), &prefix))
             }
             WorkspaceSel::Checkout(_) => None,
         }
@@ -637,7 +652,7 @@ impl Composer {
             harness,
             model: self.model.clone(),
             thinking: self.thinking.clone(),
-            task: self.task.text().to_string(),
+            task: self.task_text(),
             workspace,
         })
     }

@@ -38,3 +38,11 @@ HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
 - Keep render pure: `ui::draw` reads `&App` only.
 - Herdr changes between releases: every type tolerates unknown fields, every
   enum has a fallback, and nothing depends on Herdr's private protocol.
+
+## Commits and pull requests
+
+Work on a branch in its own worktree, never on `main`. Commit messages and
+pull request titles follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+(`feat(composer): paste screenshots`); pull requests are squash-merged with
+their title. [AGENTS.md](AGENTS.md) has the full rules that coding agents
+follow here.

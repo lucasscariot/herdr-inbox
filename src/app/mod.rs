@@ -210,6 +210,8 @@ pub enum Effect {
         text: String,
     },
     OpenUrl(String),
+    /// Read the clipboard for Ctrl+V in the composer or the reply box.
+    ReadClipboard,
     VerifyKey {
         service: &'static str,
         key: String,
@@ -236,6 +238,8 @@ pub enum Input {
     },
     Key(KeyEvent),
     Paste(String),
+    /// The clipboard, read for Ctrl+V.
+    Clipboard(Result<crate::clipboard::Clip, String>),
     Mouse(MouseEvent),
     Resize {
         width: u16,
@@ -353,6 +357,19 @@ pub struct App {
 pub struct Reply {
     pub thread: ThreadId,
     pub editor: crate::editor::Editor,
+    /// Pasted images, shown as `[Image #N]`.
+    pub images: Vec<String>,
+}
+
+impl Reply {
+    pub fn new(thread: ThreadId) -> Self {
+        Self { thread, editor: crate::editor::Editor::default(), images: Vec::new() }
+    }
+
+    /// The reply as it is sent: trimmed, pasted images as their paths.
+    pub fn message(&self) -> String {
+        crate::images::expand(self.editor.text(), &self.images).trim().to_string()
+    }
 }
 
 /// Synthetic threads for failed launches have ids under this prefix.
@@ -469,6 +486,7 @@ impl App {
                 input::settle_spaces(self, now, &mut effects);
                 input::paste(self, &text, &mut effects);
             }
+            Input::Clipboard(result) => input::clipboard(self, result, now, &mut effects),
             Input::Mouse(mouse) => {
                 // A click may move the focus: spaces typed before it land
                 // where they were typed. Mere movement never interrupts.
@@ -613,7 +631,8 @@ impl App {
             self.launches.remove(0);
         }
         self.composer.error = None;
-        let task = self.composer.task.text().trim().to_string();
+        let task = self.composer.task_text().trim().to_string();
+        self.warn_if_images_stay_here(&request.machine_id, &task, now);
         self.history = crate::state::with_task(std::mem::take(&mut self.history), &task);
         self.composer.history_index = None;
         effects.push(Effect::SaveHistory(task));
@@ -668,7 +687,7 @@ impl App {
                     (_, "checkout") if !record.cwd.is_empty() => WorkspaceSel::Checkout(record.cwd.clone()),
                     _ => WorkspaceSel::New,
                 };
-                composer.task.set(&record.task);
+                composer.set_task(&record.task);
             }
             None => {
                 composer.project = Some(thread.project.clone());
@@ -802,6 +821,21 @@ impl App {
     pub fn cursor_index(&self) -> Option<usize> {
         let cursor = self.cursor.as_deref()?;
         self.threads.iter().position(|t| t.id == cursor)
+    }
+
+    /// Pasted images are saved on this machine: another one only gets their
+    /// paths, which it cannot open. Say so rather than fail quietly.
+    pub(crate) fn warn_if_images_stay_here(&mut self, machine_id: &str, text: &str, now: SystemTime) {
+        let has_images = crate::images::segments(text).iter().any(|s| matches!(s, crate::images::Segment::Image(_)));
+        if !has_images || machine_id == threads::LOCAL {
+            return;
+        }
+        let label = self.machine(machine_id).map(|m| m.label.clone()).unwrap_or_else(|| machine_id.to_string());
+        self.notify(
+            format!("Pasted images stay on this machine: {label} only gets their paths."),
+            NoticeKind::Error,
+            now,
+        );
     }
 
     pub fn machine(&self, id: &str) -> Option<&MachineState> {

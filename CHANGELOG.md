@@ -37,6 +37,10 @@ never changes it.
 - Presets (`F7`, `Ctrl+D`), task history (`Ctrl+P`/`Ctrl+N`), a list filter
   (`/`), replies without opening a thread (`r`), sending a thread's task again
   (`e`), and failed launches as rows to retry or dismiss (`d`).
+- Screenshots in the composer and in replies: `Ctrl+V`, or the desktop's
+  paste when only an image is copied, adds it as `[Image #1]`. Claude Code and
+  Codex receive it as an attachment, other agents as a path. This machine
+  only for now.
 - The plugin's remembered choices, presets, history and dictation keys are
   copied on first start.
 - The orbit, the inbox's logo: a turning armillary sphere drawn in Braille

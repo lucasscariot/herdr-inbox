@@ -349,6 +349,15 @@ fn perform(
             }
         }
         Effect::OpenUrl(url) => open_url(&url),
+        Effect::ReadClipboard => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let dir = crate::clipboard::image_dir().ok_or("No cache directory to save the image in.".to_string());
+                let result =
+                    crate::clipboard::tool().and_then(|tool| crate::clipboard::read(&tool, &dir?, SystemTime::now()));
+                let _ = tx.send(Input::Clipboard(result));
+            });
+        }
         Effect::VerifyKey { service, key } => {
             let tx = tx.clone();
             thread::spawn(move || {
