@@ -358,6 +358,28 @@ pub fn clip(text: &str, width: usize) -> String {
     out
 }
 
+/// Keeps the end of `text` within `width` columns, starting with `…` when it
+/// had to cut: for a query, whose end is where the typing happens.
+pub fn clip_start(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for ch in text.chars().rev() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > width - 1 {
+            break;
+        }
+        tail.push(ch);
+        used += w;
+    }
+    std::iter::once('…').chain(tail.into_iter().rev()).collect()
+}
+
 /// Draws `left` and `right` on one line of `area`, clipping `left` so `right`
 /// always fits.
 fn split_line(buf: &mut Buffer, x: u16, y: u16, width: u16, left: &[(String, Style)], right: &[(String, Style)]) {
@@ -433,25 +455,27 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     }
 
     // The filter sits under New thread, drawn as a field: a glyph, then the
-    // query or a placeholder, and its key or how many threads it kept.
+    // query or a placeholder, and its key or how many threads it kept. The
+    // query wins the room: the count goes first, then the query's start, so
+    // what was just typed and the cursor stay in sight.
     let search = app.layout.search;
     if search.height > 0 {
         let bg = if app.filtering { palette.selection_bg } else { palette.sidebar_bg };
         fill(buf, Rect::new(search.x + 1, search.y, search.width.saturating_sub(2), 1), Style::new().bg(bg));
         let glyph = Style::new().fg(palette.overlay0).bg(bg);
+        let room = inner_w.saturating_sub(2) as usize;
+        let prefix = "/  ";
         let (text, right) = if app.filtering || !app.filter.is_empty() {
+            let query = format!("{}{}", app.filter, if app.filtering { "▏" } else { "" });
             let shown = format!("{} of {}", app.threads.len(), app.tally.iter().sum::<usize>());
-            (
-                (
-                    format!("{}{}", app.filter, if app.filtering { "▏" } else { "" }),
-                    Style::new().fg(palette.text).bg(bg),
-                ),
-                (shown, glyph),
-            )
+            let fits = prefix.width() + query.width() + 1 + shown.width() <= room;
+            let query = clip_start(&query, room.saturating_sub(prefix.width()));
+            ((query, Style::new().fg(palette.text).bg(bg)), fits.then_some((shown, glyph)))
         } else {
-            (("Filter threads".into(), glyph), ("/".into(), glyph))
+            (("Filter threads".into(), glyph), Some(("/".into(), glyph)))
         };
-        split_line(buf, inner_x + 1, search.y, inner_w.saturating_sub(2), &[("/  ".into(), glyph), text], &[right]);
+        let right: Vec<_> = right.into_iter().collect();
+        split_line(buf, inner_x + 1, search.y, room as u16, &[(prefix.into(), glyph), text], &right);
     }
 
     let list = app.layout.list;

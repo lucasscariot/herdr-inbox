@@ -61,6 +61,10 @@ All notable changes to Herdr Inbox. The format follows
   harness on the metadata line, so thread rows get their full width back.
 - Archiving is a double tap: pressing `Backspace`, `Delete` or `x` again
   confirms, alongside `Enter` and `y`, and `Esc` cancels the prompt.
+- The sidebar header has three bands divided by hairline rules: the wordmark
+  with a count per status (taken before the filter, so filtering never hides
+  what is waiting), then New thread and the filter field, then the list. The
+  filter shows `N of M` while it is active.
 
 ### Fixed
 

@@ -825,6 +825,27 @@ mod conveniences {
     }
 
     #[test]
+    fn a_narrow_filter_keeps_the_query_and_the_cursor_over_the_count() {
+        let typed = |width: u16, query: &str| {
+            let mut app = loaded(width, 30);
+            key(&mut app, KeyCode::Char('/'));
+            for c in query.chars() {
+                key(&mut app, KeyCode::Char(c));
+            }
+            let screen = text(&render(&app, at(1)));
+            screen.lines().nth(4).unwrap().to_string()
+        };
+        let row = typed(10, "a");
+        assert!(row.contains("/  a▏") && !row.contains(" of "), "{row:?}");
+        let row = typed(60, "invoice export for the billing page");
+        assert!(row.contains("/  …") && row.contains("page▏"), "{row:?}");
+        assert!(!row.contains(" of "), "no room for the count: {row:?}");
+        assert!(typed(110, "invoice").contains("1 of 4"));
+        assert_eq!(crate::ui::clip_start("abcdef", 4), "…def");
+        assert_eq!(crate::ui::clip_start("abc", 4), "abc");
+    }
+
+    #[test]
     fn the_filter_shows_in_the_header() {
         let mut app = loaded(110, 30);
         key(&mut app, KeyCode::Char('/'));
