@@ -4,6 +4,13 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1](https://github.com/lucasscariot/herdr-inbox/compare/v1.2.0...v1.2.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **ci:** keep a hung end-to-end test from holding the macOS runner ([#28](https://github.com/lucasscariot/herdr-inbox/issues/28)) ([12ab932](https://github.com/lucasscariot/herdr-inbox/commit/12ab9328f0831ff34f75baa55539d721bd829e97))
+
 ## [1.2.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.1.1...v1.2.0) (2026-10-10)
 
 
