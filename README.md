@@ -187,7 +187,9 @@ the list does not know can still be used: type its id and pick **Use …**.
   says so rather than silently disappearing. `F5` refreshes the catalog.
 - **Workspace** is a new git worktree by default, its branch named after the
   task (shown as `⎇ branch`), or one you name, or an existing checkout.
-  Herdr creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.
+  The name keeps up to four content words of the task's first sentence:
+  "Please can you add a CSV export?" launches on `add-csv-export`. Herdr
+  creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.
 
 **Comparing agents.** Off by default, the **Compare** row (`F12`) sends the
 same task to two or three agents at once, to compare their results. Add a
