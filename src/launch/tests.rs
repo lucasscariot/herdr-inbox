@@ -179,6 +179,13 @@ fn branch_names_stay_short() {
         "bump-v1-2-release",
         "dots inside words do not end a sentence"
     );
+    assert_eq!(
+        branch_name("Implement e.g. JSON support", &[], ""),
+        "implement-e-g-json",
+        "abbreviations do not end one"
+    );
+    assert_eq!(branch_name("Support PNG, JPEG, etc. in the composer", &[], ""), "support-png-jpeg-composer");
+    assert_eq!(branch_name("Ship. Then fix the login loop", &[], ""), "ship", "a real one-word sentence still does");
 }
 
 #[test]

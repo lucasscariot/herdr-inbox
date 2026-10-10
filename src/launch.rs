@@ -194,8 +194,8 @@ pub fn branch_slug(task: &str) -> String {
 }
 
 /// A line's sentences: split where punctuation ends one (`. ! ? : ;`) before
-/// a space or the end, and at a dash set off by spaces. "v1.2" and "e.g.x"
-/// stay whole.
+/// a space or the end, and at a dash set off by spaces. "v1.2", "e.g." and
+/// "etc." stay whole.
 fn sentences(line: &str) -> Vec<&str> {
     const DASHES: [&str; 3] = [" - ", " — ", " – "];
     let mut out = Vec::new();
@@ -206,7 +206,9 @@ fn sentences(line: &str) -> Vec<&str> {
         let next = rest.as_bytes().get(1).copied();
         let width = if let Some(dash) = DASHES.iter().find(|d| rest.starts_with(*d)) {
             Some(dash.len())
-        } else if ends_sentence(rest.as_bytes()[0]) && next.is_none_or(|c| c.is_ascii_whitespace() || ends_sentence(c))
+        } else if ends_sentence(rest.as_bytes()[0])
+            && next.is_none_or(|c| c.is_ascii_whitespace() || ends_sentence(c))
+            && !(rest.starts_with('.') && is_abbreviation(&line[start..i]))
         {
             Some(1)
         } else {
@@ -223,6 +225,16 @@ fn sentences(line: &str) -> Vec<&str> {
     }
     out.push(&line[start..]);
     out.into_iter().map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+/// Whether the text ends in an abbreviation whose period does not end a
+/// sentence: a single letter ("e.g.", "i.e.", "J. Doe") or a common short
+/// form ("etc.", "vs.", "approx.").
+fn is_abbreviation(before: &str) -> bool {
+    const ABBREVIATIONS: &str = "etc vs cf approx incl excl resp fig eq ref no nr vol dr mr mrs ms prof st";
+    let letters = before.trim_end_matches(|c: char| !c.is_ascii_alphabetic());
+    let last = letters.rsplit(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("").to_lowercase();
+    last.len() == 1 || ABBREVIATIONS.split_whitespace().any(|a| a == last)
 }
 
 fn is_filler(word: &str) -> bool {
