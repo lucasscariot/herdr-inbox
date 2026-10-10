@@ -4,6 +4,34 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0](https://github.com/lucasscariot/herdr-inbox/compare/v0.4.0...v1.0.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* automate standalone releases on self-hosted runners ([#18](https://github.com/lucasscariot/herdr-inbox/issues/18))
+
+### Features
+
+* **composer:** paste screenshots into the composer and replies ([#13](https://github.com/lucasscariot/herdr-inbox/issues/13)) ([b46e836](https://github.com/lucasscariot/herdr-inbox/commit/b46e836ff8983ba5b7870f179ff61ff55d2c130d))
+* **install:** add ctrl+g self-updates ([#17](https://github.com/lucasscariot/herdr-inbox/issues/17)) ([6e26ef0](https://github.com/lucasscariot/herdr-inbox/commit/6e26ef040141d4b2e30630e6647e5df6e2368772))
+
+
+### Bug Fixes
+
+* **threads:** show discussions while navigating tasks ([#15](https://github.com/lucasscariot/herdr-inbox/issues/15)) ([1dd8542](https://github.com/lucasscariot/herdr-inbox/commit/1dd85425fd7c67553e7b6aa2175b06a893a07d35))
+* **ui:** soften the sidebar divider, the task frame and idle tones ([#14](https://github.com/lucasscariot/herdr-inbox/issues/14)) ([6c07768](https://github.com/lucasscariot/herdr-inbox/commit/6c07768b1a9ad3d34c5aeb4584d287af86583eb0))
+
+
+### Performance Improvements
+
+* **ui:** remove typing delays and add latency regression tests ([#16](https://github.com/lucasscariot/herdr-inbox/issues/16)) ([75928ef](https://github.com/lucasscariot/herdr-inbox/commit/75928ef935f888d9a9f71553cc1aa631c732b73d))
+
+
+### Continuous Integration
+
+* automate standalone releases on self-hosted runners ([#18](https://github.com/lucasscariot/herdr-inbox/issues/18)) ([40104af](https://github.com/lucasscariot/herdr-inbox/commit/40104afea0c77753d4c13dc510056ab296dfa49e))
+
 ## [1.0.0] - Unreleased
 
 Herdr Inbox is now one program, `herdr-inbox`, instead of a Herdr plugin plus
