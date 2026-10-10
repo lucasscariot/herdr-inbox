@@ -251,31 +251,51 @@ fn is_filler(word: &str) -> bool {
 /// `users-not-sign-in`, "the loop on mobile" drops its preposition.
 fn content_words(words: &[String]) -> Vec<&str> {
     let mut content: Vec<&str> = Vec::new();
-    let mut after_verb = false;
+    let mut after_verb = Verb::No;
     for (i, word) in words.iter().enumerate() {
-        let phrasal = after_verb && PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
+        let is_particle = PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
+        let closes = i + 1 == words.len();
+        let phrasal = is_particle && (after_verb == Verb::Yes || (after_verb == Verb::Maybe && closes));
         if !phrasal && is_filler(word) {
-            after_verb = false;
+            after_verb = Verb::No;
             continue;
         }
         let leads = content.iter().all(|w| *w == "not");
-        let after_marker = verb_position(words, i);
-        after_verb = !phrasal && word != "not" && (leads || after_marker);
+        after_verb = match verb_position(words, i) {
+            _ if phrasal || word == "not" => Verb::No,
+            Verb::No if leads => Verb::Yes,
+            position => position,
+        };
         content.push(word);
     }
     content
 }
 
-/// Whether the word at `i` is a verb, going by what precedes it: an
-/// auxiliary or a negation ("cannot sign out", "doesn't start up"), or "to"
-/// after one of those ("want to log in"). A bare "to" is as often a
-/// preposition ("a shortcut to settings") and marks nothing.
-fn verb_position(words: &[String], i: usize) -> bool {
+/// Whether a word is a verb, going by what precedes it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Verb {
+    No,
+    /// After an auxiliary or a negation: "cannot sign out", "doesn't start up".
+    Yes,
+    /// After a bare "to", which is an infinitive marker ("a button to sign
+    /// out") as often as a preposition ("a shortcut to settings in the
+    /// sidebar"): a particle is kept only when it closes the sentence.
+    Maybe,
+}
+
+fn verb_position(words: &[String], i: usize) -> Verb {
     let marker = |w: &str| w == "not" || AUXILIARIES.split_whitespace().any(|a| a == w);
     match i {
-        0 => false,
-        _ if words[i - 1] == "to" => i >= 2 && marker(&words[i - 2]),
-        _ => marker(&words[i - 1]),
+        0 => Verb::No,
+        _ if words[i - 1] == "to" => {
+            if i >= 2 && marker(&words[i - 2]) {
+                Verb::Yes
+            } else {
+                Verb::Maybe
+            }
+        }
+        _ if marker(&words[i - 1]) => Verb::Yes,
+        _ => Verb::No,
     }
 }
 

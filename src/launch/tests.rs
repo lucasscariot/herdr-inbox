@@ -154,6 +154,13 @@ fn branch_names_keep_the_direction_of_a_request() {
         "so does \"to\" before a noun"
     );
     assert_eq!(
+        branch_name("Add a button to sign out", &[], ""),
+        "add-button-sign-out",
+        "unless the particle closes the sentence"
+    );
+    assert_eq!(branch_name("Add a button to sign in", &[], ""), "add-button-sign-in");
+    assert_eq!(branch_name("Give users a way to clean up", &[], ""), "give-users-way-clean", "four words come first");
+    assert_eq!(
         branch_name("Fix the login loop on mobile", &[], ""),
         "fix-login-loop-mobile",
         "but is filler as a preposition"
