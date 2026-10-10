@@ -504,8 +504,9 @@ impl Composer {
 
     /// Applies a picked choice and re-settles everything after it.
     pub fn apply(&mut self, ctx: &Context, pick: Pick) {
-        if matches!(pick, Pick::Harness(_) | Pick::Model(_) | Pick::Thinking(_) | Pick::Preset(_)) {
-            // A choice made by hand outranks the first-preset default.
+        if matches!(pick, Pick::Harness(_) | Pick::Model(_) | Pick::Thinking(_)) {
+            // A choice made by hand outranks the first-preset default. A
+            // preset counts once it has been applied, below.
             self.start_preset = false;
         }
         match pick {
@@ -572,6 +573,7 @@ impl Composer {
                         Some(format!("{} is not installed on this machine.", harness_label_for(&preset.harness)));
                     return;
                 }
+                self.start_preset = false;
                 self.harness = Some(preset.harness.clone());
                 self.model = Some(preset.model.clone());
                 self.thinking = Some(preset.thinking.clone()).filter(|t| !t.is_empty());

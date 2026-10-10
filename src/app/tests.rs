@@ -1795,6 +1795,31 @@ mod conveniences {
     }
 
     #[test]
+    fn a_failed_discovery_and_a_rejected_preset_pick_leave_the_default_pending() {
+        let (app, _) = loaded();
+        let presets = vec![preset("Fast", "codex", "gpt-5", ""), preset("Deep", "claude", "opus", "high")];
+        let mut app = app.with_memory(presets, vec![]);
+        let mut cached = inventory();
+        cached.harnesses = vec!["claude".into()];
+        app.inventories.insert(LOCAL.into(), cached);
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        // Discovery fails: the cache stays and so does the pending default.
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Err("python3: not found".into()) }, at(2));
+        assert!(app.composer.start_preset, "no fresh word yet");
+        // Picking the dimmed Codex chip is refused and changes nothing.
+        app.update(press(KeyCode::F(7)), at(3));
+        app.update(press(KeyCode::Char('1')), at(3));
+        assert!(app.composer.error.as_deref().unwrap().contains("not installed"));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert!(app.composer.start_preset, "a refused pick is not a choice");
+        // A later refresh finds Codex and the first preset takes over.
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(4));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert!(!app.composer.start_preset);
+    }
+
+    #[test]
     fn resending_a_thread_keeps_its_own_choices_over_the_first_preset() {
         let (mut app, _) = loaded();
         app = app.with_memory(two_presets(), vec![]);
