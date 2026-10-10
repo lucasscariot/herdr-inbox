@@ -144,6 +144,10 @@ fn branch_names_keep_the_direction_of_a_request() {
         "even after a negation"
     );
     assert_eq!(branch_name("Don't sign in automatically", &[], ""), "not-sign-in-automatically");
+    assert_eq!(branch_name("Users cannot sign out automatically", &[], ""), "users-not-sign-out", "or after a subject");
+    assert_eq!(branch_name("Users cannot sign in automatically", &[], ""), "users-not-sign-in");
+    assert_eq!(branch_name("I want to log in with a key", &[], ""), "log-in-key", "\"to\" marks a verb");
+    assert_eq!(branch_name("Fix the crash on startup", &[], ""), "fix-crash-startup", "a noun's preposition goes");
     assert_eq!(
         branch_name("Fix the login loop on mobile", &[], ""),
         "fix-login-loop-mobile",
@@ -158,6 +162,7 @@ fn branch_names_skip_sentences_that_say_nothing() {
     assert_eq!(branch_name("Please\n\nFix the login loop", &[], ""), "fix-login-loop", "and so are filler lines");
     assert_eq!(branch_name("1. Fix the login loop", &[], ""), "fix-login-loop", "a list marker is not a sentence");
     assert_eq!(branch_name("2026-10-11: ship it", &[], ""), "ship", "nor is a date");
+    assert_eq!(branch_name("On 2026-10-11: ship it", &[], ""), "ship", "even behind a filler word");
     assert_eq!(branch_name("!!!", &[], ""), "thread");
     assert_eq!(branch_name("404", &[], ""), "thread", "digits alone never name a branch");
     assert_eq!(branch_name("Übersetze die Seite", &[], ""), "bersetze-die-seite");
