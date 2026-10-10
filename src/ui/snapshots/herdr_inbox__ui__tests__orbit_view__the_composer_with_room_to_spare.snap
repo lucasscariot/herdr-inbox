@@ -2,39 +2,39 @@
 source: src/ui/tests.rs
 expression: "text(&render(&app, at(7)))"
 ---
- herdr inbox                     │
+ herdr inbox                 1/4 │
  1 needs input · 1 ready         │  New thread                                     scanning Local…
   +  New thread               n  │
-                                 │
- NEEDS INPUT  1                  │
-▎cockpit                 ● input │
-▎Fix the login redirect loop on… │
-▎⎇ fix-login-redirect · Claude   │                      ⣤⠤⠤⢤⣀⣀ ⡀
-                                 │                     ⠐⢿⢷⡀  ⠈⠉⠛⠒⠤⣄⣀
- READY  1                        │                        ⠉⠓⢤⣀   ⣴⣿⣿⢟⠒⠤⣀⡀
-▎site                    ✓ ready │                           ⠈⠙⠲⠤⣟⣟⠟⠁⠁  ⠉⠒⢦⣀
-▎Review navigation               │                                ⠉⠑⠲⠤⣤⣄   ⠈⢳⣶
-▎⎇ feat/a-very-long-branch-name… │                                    ⠉⠁⠉⠉⠒⠒⠒⠚
-                                 │
- WORKING  1                      │
-▎api                   ◐ working │
-▎Add invoice export              │
-▎⎇ main · Codex                  │
-                                 │  What should we build?
- IDLE  1                         │  ╭────────────────────────────────────────────────────────────╮
-▎scratch                  ○ idle │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
-▎New Pi thread                   │  │                                                            │
-▎Pi                              │  │                                                            │
+ / Filter threads                │  What should we build?
+ NEEDS INPUT  1                  │  ╭────────────────────────────────────────────────────────────╮
+▎▄ █ ▄ cockpit           ● input │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
+▎▄███▄ Fix the login redirect l… │  │                                                            │
+▎▀ █ ▀ Claude · ⎇ fix-login-red… │  │                                                            │
                                  │  ╰────────────────────────────────────────────────────────────╯
-                                 │
-                                 │    Project    none found yet                                 F2
-                                 │    Machine    —                                              F6
-                                 │    Preset     None yet · Ctrl+D saves one                    F7
-                                 │    Harness    none installed                                 F3
-                                 │    Model      Default                                        F4
-                                 │    Workspace  New worktree                                   F9
-                                 │
+ READY  1                        │
+▎█▀▀▀█ site              ✓ ready │    Project    none found yet                              F2  ›
+▎█ ▀▄█ Review navigation         │    Machine    —                                           F6  ›
+▎█▄▄▄█ OpenCode · ⎇ feat/a-very… │    Preset     None yet · Ctrl+D saves one                 F7  ›
+                                 │    Harness    none installed                              F3  ›
+ WORKING  1                      │    Model      Default                                     F4  ›
+▎▄▀▀▀▄ api             ◐ working │    Thinking   No levels reported
+▎█▄█▀█ Add invoice export        │    Workspace  New worktree                                F9  ›
+▎▀▄▄▄▀ Codex · ⎇ main            │
                                  │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
+ IDLE  1                         │
+▎▄▄▄▄▄ scratch            ○ idle │
+▎ █ █  New Pi thread             │
+▎ █ █▄ Pi                        │
+                                 │
+                                 │
+                                 │                      ⣤⠤⠤⢤⣀⣀ ⡀
+                                 │                     ⠐⢿⢷⡀  ⠈⠉⠛⠒⠤⣄⣀
+                                 │                        ⠉⠓⢤⣀   ⣴⣿⣿⢟⠒⠤⣀⡀
+                                 │                           ⠈⠙⠲⠤⣟⣟⠟⠁⠁  ⠉⠒⢦⣀
+                                 │                                ⠉⠑⠲⠤⣤⣄   ⠈⢳⣶
+                                 │                                    ⠉⠁⠉⠉⠒⠒⠒⠚
+                                 │
+                                 │
                                  │
                                  │
                                  │

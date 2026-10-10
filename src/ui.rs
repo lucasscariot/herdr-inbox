@@ -144,7 +144,9 @@ fn menu(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) -> Option<(u
         ratatui::widgets::Block::new()
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
-            .border_style(Style::new().fg(palette.accent).bg(palette.surface0))
+            .style(Style::new().fg(palette.text).bg(palette.surface0))
+            .border_style(frame(palette, true).bg(palette.surface0))
+            .title_style(Style::new().fg(palette.subtext0).bg(palette.surface0))
             .title(" Dictation "),
         rect,
         buf,
@@ -393,7 +395,8 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
         ("herdr ".to_string(), Style::new().fg(palette.overlay0)),
         ("inbox".to_string(), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
     ];
-    split_line(buf, inner_x, area.y, inner_w, &title, &[]);
+    let position = app.cursor_index().map(|index| format!("{}/{}", index + 1, app.threads.len())).unwrap_or_default();
+    split_line(buf, inner_x, area.y, inner_w, &title, &[(position, Style::new().fg(palette.overlay0))]);
     if area.height > 1 {
         split_line(buf, inner_x, area.y + 1, inner_w, &summary(app, palette), &[]);
     }
@@ -413,6 +416,18 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
             &[("+  New thread".into(), style)],
             &[("n".into(), Style::new().fg(palette.overlay0).bg(style.bg.unwrap_or_default()))],
         );
+    }
+
+    let search = app.layout.search;
+    if search.height > 0 {
+        let active = app.filtering || !app.filter.is_empty();
+        let style = Style::new().fg(if active { palette.text } else { palette.overlay0 }).bg(palette.sidebar_bg);
+        let text = if active {
+            format!("/ {}{}  {} shown", app.filter, if app.filtering { "▏" } else { "" }, app.threads.len())
+        } else {
+            "/ Filter threads".into()
+        };
+        split_line(buf, inner_x, search.y, inner_w, &[(text, style)], &[]);
     }
 
     let list = app.layout.list;
@@ -440,7 +455,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     if app.threads.is_empty() && list.height > 0 && app.overall_connection().is_live() {
         let text = Paragraph::new(vec![
             Line::styled("No agent threads yet.", Style::new().fg(palette.subtext0)),
-            Line::styled("Start one in Herdr; it shows up here.", Style::new().fg(palette.overlay0)),
+            Line::styled("Click New thread or press n.", Style::new().fg(palette.overlay0)),
         ])
         .wrap(Wrap { trim: true });
         ratatui::widgets::Widget::render(text, Rect::new(inner_x, list.y, inner_w, list.height), buf);
@@ -449,14 +464,6 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
 
 fn summary(app: &App, palette: &Palette) -> Vec<(String, Style)> {
     let dim = Style::new().fg(palette.overlay0);
-    if app.filtering || !app.filter.is_empty() {
-        let caret = if app.filtering { "▏" } else { "" };
-        return vec![
-            ("/ ".into(), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
-            (format!("{}{caret}", app.filter), Style::new().fg(palette.text)),
-            (format!("  {} shown", app.threads.len()), dim),
-        ];
-    }
     match app.overall_connection() {
         Connection::Connecting => return vec![("connecting…".into(), dim)],
         Connection::Lost(_) => return vec![("reconnecting…".into(), Style::new().fg(palette.red))],
@@ -520,8 +527,11 @@ fn thread_line(
 ) {
     let status = status_style(thread.status, palette);
     buf.set_string(area.x, area.y, "▎", status);
-    let x = area.x + 1;
-    let width = area.width.saturating_sub(2);
+    let kind = thread.kind.as_deref().unwrap_or(&thread.harness);
+    let (mark, style) = harness::row(kind, line, palette);
+    buf.set_stringn(area.x + 1, area.y, mark, area.width.saturating_sub(1) as usize, style);
+    let x = area.x + harness::WIDTH + 2;
+    let width = area.width.saturating_sub(harness::WIDTH + 3);
     let dim = Style::new().fg(palette.overlay0);
     match line {
         0 => split_line(
@@ -544,12 +554,8 @@ fn thread_line(
             x,
             area.y,
             width,
-            &[
-                ("Archive this thread? ".into(), Style::new().fg(palette.red).add_modifier(Modifier::BOLD)),
-                ("y".into(), Style::new().fg(palette.text).add_modifier(Modifier::BOLD)),
-                (" / n".into(), dim),
-            ],
-            &[],
+            &[("Archive this thread?".into(), Style::new().fg(palette.red).add_modifier(Modifier::BOLD))],
+            &[("y/n".into(), Style::new().fg(palette.text).add_modifier(Modifier::BOLD))],
         ),
         _ if note_line(thread).is_some() => {
             let (text, color) = note_line(thread).unwrap_or_default();
@@ -561,16 +567,17 @@ fn thread_line(
             split_line(buf, x, area.y, width, &[(text, Style::new().fg(color))], &[]);
         }
         _ => {
-            let mut left = Vec::new();
-            if let Some(branch) = &thread.branch {
-                left.push((format!("⎇ {branch}"), Style::new().fg(palette.mauve)));
-                left.push((" · ".into(), dim));
-            }
+            // Keep the harness name visible even when a branch is long. Icons
+            // help recognition but never replace the readable label.
+            let mut left = vec![(thread.harness.clone(), dim)];
             if let Some(machine) = &thread.machine_label {
-                left.push((machine.clone(), Style::new().fg(palette.subtext0)));
                 left.push((" · ".into(), dim));
+                left.push((machine.clone(), Style::new().fg(palette.subtext0)));
             }
-            left.push((thread.harness.clone(), dim));
+            if let Some(branch) = &thread.branch {
+                left.push((" · ".into(), dim));
+                left.push((format!("⎇ {branch}"), Style::new().fg(palette.mauve)));
+            }
             let right = thread.changed_at.map(|changed| vec![(age(changed, now), dim)]).unwrap_or_default();
             split_line(buf, x, area.y, width, &left, &right);
         }
@@ -616,7 +623,9 @@ fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &P
         ratatui::widgets::Block::new()
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Rounded)
+            .style(Style::new().fg(palette.text).bg(palette.surface0))
             .border_style(frame(palette, true).bg(palette.surface0))
+            .title_style(Style::new().fg(palette.subtext0).bg(palette.surface0))
             .title(format!(" Reply to “{}” ", clip(&title, inner_width.saturating_sub(12) as usize))),
         rect,
         buf,
@@ -649,7 +658,18 @@ fn separator(buf: &mut Buffer, app: &App, palette: &Palette) {
         return;
     }
     for y in 0..app.layout.sidebar.height {
-        buf.set_string(x, y, "│", hairline(palette));
+        buf.set_string(x, y, "│", hairline(palette).bg(palette.panel_bg));
+    }
+    let list = app.layout.list;
+    let total = app.layout.rows.len();
+    if total > list.height as usize && list.height > 0 {
+        let height = (list.height as usize * list.height as usize / total).max(1) as u16;
+        let travel = list.height - height;
+        let max_offset = total - list.height as usize;
+        let top = list.y + (travel as usize * app.layout.offset / max_offset) as u16;
+        for y in top..top + height {
+            buf.set_string(x, y, "▐", frame(palette, true).bg(palette.panel_bg));
+        }
     }
 }
 
@@ -664,7 +684,9 @@ fn terminal(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
         let message = match app.overall_connection() {
             Connection::Connecting => "Connecting to Herdr…",
             Connection::Lost(_) => "Lost the connection to Herdr. Retrying…",
-            _ if app.threads.is_empty() => "Agent threads you start in Herdr appear on the left.",
+            _ if app.threads.is_empty() => {
+                "Start a thread with n or + New thread. Agents already running in Herdr appear on the left."
+            }
             _ => "Pick a thread on the left and press Enter.",
         };
         let message = [Line::styled(message, Style::new().fg(palette.overlay0))];
@@ -893,6 +915,7 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
 }
 
 mod composer;
+mod harness;
 mod updates;
 
 #[cfg(test)]

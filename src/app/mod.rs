@@ -25,6 +25,7 @@ use crate::screen::Screen;
 use crate::state::{Preferences, Remembered};
 use crate::threads::{self, Activity, Source, Thread, ThreadId};
 
+pub use composer::layout::ComposerLayout;
 pub use composer::{Choice, Composer, Field, Pick, Picker, WorkspaceSel};
 pub use dictation::{Dictation, Entry, Menu, MenuItem, Phase, SpeechStatus, Target, Then, menu_items};
 pub use layout::{Layout, Row, RowKind};
@@ -571,6 +572,8 @@ impl App {
     /// Opens the composer, discovering every reachable machine again.
     pub(crate) fn open_composer(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
         self.focus = Focus::Composer;
+        self.composer.picker = None;
+        self.composer.field = Field::Task;
         self.confirm_archive = None;
         self.discover(false, now, effects);
         self.with_composer(|composer, ctx| composer.settle(ctx));

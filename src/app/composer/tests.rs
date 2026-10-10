@@ -81,6 +81,7 @@ fn world() -> World {
             harnesses: vec!["codex".into(), "claude".into()],
             models: BTreeMap::from([("claude".into(), claude()), ("codex".into(), codex())]),
             models_at: 1,
+            models_revision: crate::discovery::MODELS_REVISION,
         },
     );
     inventories.insert(
@@ -90,6 +91,7 @@ fn world() -> World {
             harnesses: vec!["codex".into()],
             models: BTreeMap::from([("codex".into(), codex())]),
             models_at: 1,
+            models_revision: crate::discovery::MODELS_REVISION,
         },
     );
     inventories.insert(
@@ -253,6 +255,35 @@ fn the_thinking_field_shows_only_for_harnesses_with_levels() {
     assert_eq!(composer.field, Field::Task, "wraps around");
     composer.next_field(&world.ctx(), false);
     assert_eq!(composer.field, Field::Workspace);
+}
+
+#[test]
+fn thinking_choices_follow_the_model_and_drop_an_incompatible_level() {
+    let mut world = world();
+    let catalog = world.inventories.get_mut("local").unwrap().models.get_mut("codex").unwrap();
+    catalog.default = "gpt-5".into();
+    catalog.thinking_flag = "--config".into();
+    catalog.thinking = vec!["low".into(), "high".into(), "ultra".into()];
+    catalog.thinking_by_model = BTreeMap::from([
+        ("gpt-5".into(), vec!["low".into(), "high".into(), "ultra".into()]),
+        ("gpt-lite".into(), vec!["low".into()]),
+        ("no-reasoning".into(), vec![]),
+    ]);
+    let mut composer = settled(&world);
+    composer.apply(&world.ctx(), Pick::Harness("codex".into()));
+    assert!(composer.fields(&world.ctx()).contains(&Field::Thinking));
+    composer.apply(&world.ctx(), Pick::Thinking(Some("ultra".into())));
+    assert_eq!(composer.choices(&world.ctx(), Field::Thinking, "").len(), 4);
+    composer.apply(&world.ctx(), Pick::Model(Some("gpt-lite".into())));
+    assert_eq!(composer.thinking, None, "ultra must not leak to a model that cannot use it");
+    let levels: Vec<_> = composer.choices(&world.ctx(), Field::Thinking, "").into_iter().map(|c| c.label).collect();
+    assert_eq!(levels, ["Default thinking", "low"]);
+    composer.apply(&world.ctx(), Pick::Thinking(Some("low".into())));
+    composer.apply(&world.ctx(), Pick::Model(Some("gpt-5".into())));
+    assert_eq!(composer.thinking.as_deref(), Some("low"), "compatible choices stay");
+    composer.apply(&world.ctx(), Pick::Model(Some("no-reasoning".into())));
+    assert_eq!(composer.thinking, None);
+    assert!(!composer.fields(&world.ctx()).contains(&Field::Thinking));
 }
 
 #[test]

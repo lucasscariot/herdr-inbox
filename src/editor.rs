@@ -122,6 +122,26 @@ impl Editor {
         self.cursor = start;
     }
 
+    /// Places the cursor at a displayed cell, using the same wrapping as drawing.
+    /// A click in a wide character lands before it; past a line lands at its end.
+    pub fn place_cursor(&mut self, width: u16, row: u16, column: u16) {
+        let lines = wrapped_lines(&self.text, width.max(1) as usize);
+        let Some((line, start)) = lines.get(row as usize) else {
+            self.cursor = self.text.len();
+            return;
+        };
+        let mut used = 0;
+        self.cursor = *start;
+        for ch in line.chars() {
+            let cells = ch.width().unwrap_or(0) as u16;
+            if used + cells > column {
+                break;
+            }
+            used += cells;
+            self.cursor += ch.len_utf8();
+        }
+    }
+
     /// Word-wrapped lines for a box `width` columns wide, and the cursor's
     /// `(row, column)` in them.
     pub fn layout(&self, width: u16) -> (Vec<String>, (u16, u16)) {
@@ -137,24 +157,28 @@ fn advance(text: &str, from: usize, columns: usize, limit: usize) -> usize {
 fn layout(text: &str, cursor: usize, width: usize) -> (Vec<String>, (u16, u16)) {
     let mut lines = Vec::new();
     let mut position = (0u16, 0u16);
-    let mut offset = 0;
-    for logical in text.split('\n') {
-        let wrapped = wrap(logical, width);
-        for (index, (line, start)) in wrapped.iter().enumerate() {
-            let line_start = offset + start;
-            let line_end = line_start + line.len();
-            let is_last = index + 1 == wrapped.len();
-            // The cursor belongs to this row if it falls inside it, or at its
-            // end when the row ends the logical line.
-            if cursor >= line_start && (cursor < line_end || (cursor == line_end && is_last)) {
-                let column: usize = text[line_start..cursor].chars().map(|c| c.width().unwrap_or(0)).sum();
-                position = (lines.len() as u16, column as u16);
-            }
-            lines.push(line.clone());
+    for (line, start) in wrapped_lines(text, width) {
+        let end = start + line.len();
+        // A cursor at a soft wrap belongs to the next row, but a newline or
+        // the end of the text keeps it on this one.
+        if cursor >= start && (cursor < end || (cursor == end && (end == text.len() || text[end..].starts_with('\n'))))
+        {
+            let column: usize = text[start..cursor].chars().map(|c| c.width().unwrap_or(0)).sum();
+            position = (lines.len() as u16, column as u16);
         }
-        offset += logical.len() + 1;
+        lines.push(line);
     }
     (lines, position)
+}
+
+fn wrapped_lines(text: &str, width: usize) -> Vec<(String, usize)> {
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for logical in text.split('\n') {
+        lines.extend(wrap(logical, width).into_iter().map(|(line, start)| (line, offset + start)));
+        offset += logical.len() + 1;
+    }
+    lines
 }
 
 /// Breaks one logical line into rows, preferring spaces. Returns each row
@@ -330,6 +354,21 @@ mod tests {
         assert_eq!(cursor, (0, 0));
         assert!(Editor::default().is_blank());
         assert!(editor(" \n ").is_blank());
+    }
+
+    #[test]
+    fn clicks_follow_wrapping_newlines_and_unicode_cell_widths() {
+        let mut e = editor("fix the login\n日本語\n\ne\u{301}nd");
+        e.place_cursor(8, 1, 3);
+        assert_eq!(e.cursor(), "fix the log".len());
+        e.place_cursor(8, 2, 3);
+        assert_eq!(e.cursor(), "fix the login\n日".len(), "inside a wide cell lands before it");
+        e.place_cursor(8, 3, 5);
+        assert_eq!(e.cursor(), "fix the login\n日本語\n".len(), "blank line");
+        e.place_cursor(8, 4, 1);
+        assert_eq!(e.cursor(), "fix the login\n日本語\n\ne\u{301}".len());
+        e.place_cursor(8, 50, 50);
+        assert_eq!(e.cursor(), e.text().len());
     }
 
     #[test]

@@ -60,6 +60,11 @@ impl Sandbox {
         let mut command = Command::new(herdr_bin());
         command.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         let sandbox_env = Self::env_for(root.path());
+        // macOS's login /bin/sh runs path_helper, which otherwise drops our
+        // fixture directory and can launch an installed agent instead. Restore
+        // the isolated PATH after /etc/profile, only in this scratch HOME.
+        let path = sandbox_env.iter().find(|(key, _)| key == "PATH").expect("sandbox PATH").1.as_str();
+        std::fs::write(root.path().join("home/.profile"), format!("export PATH='{path}'\n")).expect("shell profile");
         apply_env(&mut command, &sandbox_env);
         let server = command.spawn().expect("start herdr server");
         let sandbox = Self { root, server };
@@ -242,6 +247,17 @@ impl Inbox {
             assert!(Instant::now() < deadline, "{needle:?} never went away; screen:\n{}", self.text());
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    fn click_text(&mut self, needle: &str, offset: u16) {
+        use unicode_width::UnicodeWidthStr;
+        let text = self.text();
+        let (row, column) = text
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| line.find(needle).map(|byte| (row as u16, line[..byte].width() as u16 + offset)))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{text}"));
+        self.press(&format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", column + 1, row + 1, column + 1, row + 1));
     }
 
     /// Writes keys with no pause after, for timing-sensitive input.
@@ -464,7 +480,7 @@ fn the_inbox_shows_threads_drives_an_agent_and_archives() {
     let mut inbox = Inbox::start(&sandbox, 110, 24);
     inbox.wait_for_text("NEEDS INPUT");
     inbox.wait_for_text("Fix the login loop");
-    inbox.wait_for_text("⎇ fix-login · Claude");
+    inbox.wait_for_text("Claude · ⎇ fix-login");
 
     // Enter focuses the agent; what we type runs in the pane.
     inbox.keys("\r");
@@ -578,7 +594,7 @@ fn threads_on_a_saved_machine_open_live_over_ssh() {
 
     let mut inbox = Inbox::start_with(&local, 110, 24, &[("HERDR_INBOX_SSH", ssh.to_str().unwrap())]);
     inbox.wait_for_text("Ship the release");
-    inbox.wait_for_text("Studio · Codex");
+    inbox.wait_for_text("Codex · Studio");
     inbox.wait_for_text("● Local  ● Studio");
 
     // The remote thread is the only one, so it opened on its own.
@@ -597,6 +613,67 @@ fn threads_on_a_saved_machine_open_live_over_ssh() {
     inbox.wait_for_text("Archived “Ship the release”");
     let workspaces = remote.herdr(&["workspace", "list"]);
     assert_eq!(workspaces["result"]["workspaces"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn composer_mouse_input_and_codex_thinking_work_in_the_real_terminal() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    real_repo(&root.join("work"), "cockpit");
+    write_executable(
+        &root.join("bin/codex"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --help ]; then printf '%s\\n' '--model <MODEL>' '-c, --config <key=value>'; exit 0; fi\nprintf '%s\\n' \"$@\" > '{}/codex-start.args'\necho 'not really codex'\nexit 3\n",
+            root.display()
+        ),
+    );
+    let codex_home = root.join("home/.codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("models_cache.json"),
+        serde_json::json!({"models": [{
+            "slug": "gpt-test", "display_name": "GPT test", "visibility": "list",
+            "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}, {"effort": "ultra"}]
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(codex_home.join("config.toml"), "model = \"gpt-test\"\n").unwrap();
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).unwrap();
+    std::fs::write(
+        root.join("config/herdr-inbox/config.toml"),
+        format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display()),
+    )
+    .unwrap();
+    let mut inbox = Inbox::start_with(&sandbox, 120, 34, &[("CODEX_HOME", codex_home.to_str().unwrap())]);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.click_text("+  New thread", 3);
+    inbox.wait_for_text("Model      Default (gpt-test)");
+    inbox.click_text("Model      Default", 12);
+    inbox.wait_for_text("╭ Model ");
+    inbox.click_text("GPT test", 2);
+    inbox.wait_until_gone("╭ Model ");
+    inbox.wait_for_text("Model      GPT test");
+    inbox.click_text("Thinking   Default", 12);
+    inbox.wait_for_text("╭ Thinking ");
+    inbox.click_text("ultra", 2);
+    inbox.wait_until_gone("╭ Thinking ");
+    inbox.wait_for_text("Thinking   ultra");
+    inbox.click_text("Describe the task.", 0);
+    inbox.press("Fix login");
+    inbox.wait_for_text("Fix login");
+    inbox.click_text("Fix login", 4);
+    inbox.press("the ");
+    inbox.wait_for_text("Fix the login");
+    inbox.click_text("↵ send", 2);
+    inbox.wait_for_text("✗ cockpit · Codex");
+    let args = std::fs::read_to_string(root.join("codex-start.args"))
+        .unwrap_or_else(|err| panic!("the sandbox Codex was not launched: {err}; screen:\n{}", inbox.text()));
+    assert!(args.contains("--model\ngpt-test\n"), "{args}");
+    assert!(args.contains("--config\nmodel_reasoning_effort=\"ultra\"\n"), "{args}");
 }
 
 #[test]

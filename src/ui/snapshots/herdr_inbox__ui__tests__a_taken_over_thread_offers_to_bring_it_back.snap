@@ -2,27 +2,27 @@
 source: src/ui/tests.rs
 expression: "text(&render(&app, at(1)))"
 ---
- herdr inbox                     │
+ herdr inbox                 1/4 │
  1 needs input · 1 ready         │
   +  New thread               n  │
-                                 │
+ / Filter threads                │
  NEEDS INPUT  1                  │
-▎cockpit                 ● input │
-▎Fix the login redirect loop on… │
-▎⎇ fix-login-redirect · Claude   │
+▎▄ █ ▄ cockpit           ● input │
+▎▄███▄ Fix the login redirect l… │
+▎▀ █ ▀ Claude · ⎇ fix-login-red… │
                                  │
  READY  1                        │
-▎site                    ✓ ready │              This thread is open in another window.
-▎Review navigation               │                    Enter to bring it back here
-▎⎇ feat/a-very-long-branch-name… │
+▎█▀▀▀█ site              ✓ ready │              This thread is open in another window.
+▎█ ▀▄█ Review navigation         │                    Enter to bring it back here
+▎█▄▄▄█ OpenCode · ⎇ feat/a-very… │
                                  │
  WORKING  1                      │
-▎api                   ◐ working │
-▎Add invoice export              │
-▎⎇ main · Codex                  │
+▎▄▀▀▀▄ api             ◐ working │
+▎█▄█▀█ Add invoice export        │
+▎▀▄▄▄▀ Codex · ⎇ main            │
                                  │
  IDLE  1                         │
-▎scratch                  ○ idle │
-▎New Pi thread                   │
-▎Pi                              │
+▎▄▄▄▄▄ scratch            ○ idle │
+▎ █ █  New Pi thread             │
+▎ █ █▄ Pi                        │
   THREADS  ↵ agent  j/k move  n new  x archive  ⌃G updates  tab agent  q quit

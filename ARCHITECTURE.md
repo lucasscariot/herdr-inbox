@@ -27,9 +27,9 @@ public interfaces.
 | `link` | One per machine. Keeps that server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots with the git facts of their checkouts (cached 15 s), a 30 s resync, reconnection with backoff. |
 | `config` | `config.toml` (or the legacy plugin's `config.json`): roots, depth, branch prefix, harness arguments and executables, extra models, per-machine overrides. |
 | `state` | Remembered choices, cached inventories and launch journals under `$XDG_STATE_HOME/herdr-inbox`, written atomically and privately. |
-| `discovery` | An embedded Python probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs. Models are cached 15 minutes. |
+| `discovery` | An embedded Python probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs. Codex's cache supplies per-model reasoning levels, with `CODEX_HOME` respected. Models are cached 15 minutes; a capability revision expires older inventories once. |
 | `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. |
-| `editor`, `fuzzy` | The composer's text box and its pickers' ranking. |
+| `editor`, `fuzzy` | The composer's text box, cell-to-cursor placement using the same Unicode-aware wrapping as drawing, and its pickers' ranking. Model pickers match labels and ids. |
 | `images` | Pasted images: `[Image #N]` placeholders in the editor, their paths in the sent text, and the split that pastes each image on its own so agents attach it. Pure. |
 | `clipboard` | Reads the clipboard for `Ctrl+V` (`wl-paste`, `xclip`, `osascript`) and saves an image privately under the cache directory. |
 | `presets` | Named harness, model and thinking combinations, in the plugin's `presets.json` format. |
@@ -37,6 +37,7 @@ public interfaces.
 | `update` | Checks GitHub's latest stable release through a bounded `curl` request, compares semantic versions, and runs the embedded checksum-checked installer against the current executable. |
 | `app::updates` | The update dialog's state, confirmation and notes scrolling. Checks and installs are effects, never I/O in the app. |
 | `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
+| `app::composer::layout` | Pure geometry shared by composer drawing and mouse input: task viewport, field rows, send target and scrolled picker rows. Decoration sits below the controls. |
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
 | `keys` | Encodes key presses as xterm bytes for the pane, honouring its cursor-key and bracketed-paste modes. |
@@ -44,7 +45,8 @@ public interfaces.
 | `hold` | Telling a held space bar from typed spaces by key-repeat timing. Pure. |
 | `orbit` | The orbit logo: the fleet as rings and beads, rendered to Braille cells. Pure, a function of the time. |
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
-| `ui` | Pure drawing from `&App`. |
+| `ui` | Pure drawing from `&App`, including themed frames and explicit popup title styles. |
+| `ui::harness` | Five-column, three-row logo-inspired pixel marks made of half-block characters. Claude, Codex, Pi and OpenCode have distinct marks; other harnesses keep a generic mark and their readable name. |
 | `runtime` | Terminal setup, the event loop, effect execution. |
 | `runtime::redraw` | Applies inputs and schedules draws with a 16 ms frame limit. Forwarded keys wait for the agent's echo instead of redrawing an unchanged screen. |
 
@@ -92,6 +94,19 @@ Only branches in this repository can run source on the personal runners.
   probe over SSH elsewhere) and hands them over with the snapshot.
 - **Threads are tracked by identity.** The cursor follows its thread when the
   list reorders, and lands on a neighbour when the thread disappears.
+- **Mouse hit testing uses drawn geometry.** Composer clicks use the same
+  layout as rendering, including wrapped and scrolled text and picker rows.
+  Keyboard and mouse choices share the same action handler. Composer clicks
+  never become pane input, and modal dialogs and dictation swallow mouse events.
+- **Wheel scrolling is independent of selection.** Updates and ticks keep the
+  manual sidebar offset. Keyboard navigation resumes following the selected
+  thread and keeps all three lines visible. The divider shows the scroll thumb.
+- **Thinking belongs to the selected model.** Catalogs with per-model levels
+  constrain both the picker and launch validation; changing models clears an
+  incompatible level. Older catalogs keep their harness-wide levels. Codex
+  uses `--config model_reasoning_effort=\"level\"`, replacing only that key in
+  configured arguments and preserving unrelated overrides. Agent terminal
+  colours are never recoloured to match Inbox's own frames.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
   own record: focusing a finished thread, or watching it finish, shows it as

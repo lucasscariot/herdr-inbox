@@ -6,8 +6,23 @@ All notable changes to Herdr Inbox. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Clickable composer text, fields, picker choices and send action, with mouse
+  wheel navigation in pickers. The input stays near the top of a tall window.
+- Pixel-style marks for Claude Code, Codex, Pi and OpenCode, readable harness
+  names before branches, a clickable sidebar filter, a position counter,
+  PageUp/PageDown navigation and a scroll thumb.
+- Codex thinking selection using each model's advertised reasoning levels and
+  the CLI's config override. Model changes drop incompatible levels; old model
+  caches refresh once to pick up the new capabilities.
+
 ### Fixed
 
+- Sidebar wheel scrolling no longer snaps back to the selection on every tick.
+- Model ids remain selectable when their display name differs from the id.
+- Composer backgrounds, popup titles and dialog frames now use explicit theme
+  styles rather than terminal-default white. Agent output colours stay intact.
 - Linux release builds use native Rust cross-compilation and LLVM linking,
   avoiding the emulated GCC linker crash. Verify the ELF architecture before
   exporting each binary.
