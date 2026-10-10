@@ -180,7 +180,8 @@ pub fn branch_slug(task: &str) -> String {
     let mut fallback: Option<String> = None;
     for sentence in sentences {
         let words = slug_words(sentence);
-        if words.is_empty() {
+        // Nothing, or a list marker ("1." before "Fix login"), is not a sentence.
+        if !words.iter().any(|w| w.chars().any(|c| c.is_ascii_alphabetic())) {
             continue;
         }
         let content = content_words(&words);
@@ -231,12 +232,14 @@ fn is_filler(word: &str) -> bool {
 }
 
 /// The words that name the task: everything but filler, plus a particle
-/// that directly follows the leading word and so completes its verb.
+/// that directly follows the leading word (after any negation) and so
+/// completes its verb: "do not sign out" keeps `not-sign-out`.
 fn content_words(words: &[String]) -> Vec<&str> {
     let mut content: Vec<&str> = Vec::new();
     let mut previous_kept = false;
     for word in words {
-        let phrasal = content.len() == 1 && previous_kept && PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
+        let leading_verb = previous_kept && content.iter().filter(|w| **w != "not").count() == 1;
+        let phrasal = leading_verb && PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
         previous_kept = phrasal || !is_filler(word);
         if previous_kept {
             content.push(word);
