@@ -107,6 +107,14 @@ assert the compiled version separately from the version-independent layout.
 - **Wheel scrolling is independent of selection.** Updates and ticks keep the
   manual sidebar offset. Keyboard navigation resumes following the selected
   thread and keeps all three lines visible. The divider shows the scroll thumb.
+- **Colour comes from Herdr, not UI literals.** `theme::load` reads Herdr's
+  config at startup, honouring `HERDR_CONFIG_PATH` before the default path.
+  Headings, ordinary actions, composer hints and thread metadata use `text`
+  and `subtext0`; `accent` marks focus, selected entries and the orbit core. Opening the composer removes the previous discussion's accent.
+  Status colours and small harness glyphs still use their palette tokens,
+  and agent ANSI output is unchanged. Render tests assert these roles, and
+  a real-binary PTY test changes the Herdr config between runs to check both
+  orange and non-orange accents.
 - **The sidebar header has three bands.** The wordmark and stats (each
   group's count, before the filter, so the filter never hides how much is
   waiting), then the actions (New thread and the filter field), then the list,

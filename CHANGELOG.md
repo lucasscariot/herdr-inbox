@@ -87,6 +87,12 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Fixed
 
+- Read the theme from `HERDR_CONFIG_PATH` when set, matching Herdr instead of
+  silently using the default config file.
+- Limit Herdr's configured accent to focus and selected items rather than
+  headings, inactive actions and mode labels. Hints and branch metadata use
+  neutral theme colours; the previous discussion loses its accent while the
+  composer is open. Status colours, harness glyphs and agent output stay intact.
 - Herdr E2E sandboxes wait for an API ping instead of treating a socket file as
   server readiness, and report startup exits with their stderr.
 - Release version bumps no longer break the update dialog's layout snapshot;

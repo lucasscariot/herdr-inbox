@@ -418,7 +418,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     // Header, in three bands: who and how much, what to do, then the list.
     let title = [
         ("herdr ".to_string(), Style::new().fg(palette.overlay0)),
-        ("inbox".to_string(), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
+        ("inbox".to_string(), Style::new().fg(palette.text).add_modifier(Modifier::BOLD)),
     ];
     let position = app.cursor_index().map(|index| format!("{}/{}", index + 1, app.threads.len())).unwrap_or_default();
     let faint = Style::new().fg(palette.overlay0).add_modifier(Modifier::DIM);
@@ -441,7 +441,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
         let style = if app.focus == Focus::Composer {
             Style::new().fg(palette.accent).bg(palette.selection_bg).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(palette.accent).bg(palette.surface0).add_modifier(Modifier::BOLD)
+            Style::new().fg(palette.text).bg(palette.surface0).add_modifier(Modifier::BOLD)
         };
         fill(buf, Rect::new(button.x + 1, button.y, button.width.saturating_sub(2), 1), style);
         split_line(
@@ -462,7 +462,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     if search.height > 0 {
         let bg = if app.filtering { palette.selection_bg } else { palette.sidebar_bg };
         fill(buf, Rect::new(search.x + 1, search.y, search.width.saturating_sub(2), 1), Style::new().bg(bg));
-        let glyph = Style::new().fg(palette.overlay0).bg(bg);
+        let glyph = Style::new().fg(palette.subtext0).bg(bg).add_modifier(Modifier::DIM);
         let room = inner_w.saturating_sub(2) as usize;
         let prefix = "/  ";
         let (text, right) = if app.filtering || !app.filter.is_empty() {
@@ -490,7 +490,7 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
                     continue;
                 };
                 let is_highlighted = highlighted.is_some_and(|id| id == thread.id);
-                let is_open = app.open.as_ref().is_some_and(|o| o.id == thread.id);
+                let is_open = app.focus != Focus::Composer && app.open.as_ref().is_some_and(|o| o.id == thread.id);
                 let confirming = app.confirm_archive.as_deref() == Some(thread.id.as_str());
                 let row_area = Rect::new(area.x, y, area.width, 1);
                 if is_highlighted {
@@ -592,7 +592,7 @@ fn thread_line(
     buf.set_string(area.x, area.y, "▎", status);
     let x = area.x + 1;
     let width = area.width.saturating_sub(2);
-    let dim = Style::new().fg(palette.overlay0);
+    let dim = Style::new().fg(palette.subtext0).add_modifier(Modifier::DIM);
     match line {
         0 => split_line(
             buf,
@@ -638,7 +638,7 @@ fn thread_line(
             }
             if let Some(branch) = &thread.branch {
                 left.push((" · ".into(), dim));
-                left.push((format!("⎇ {branch}"), Style::new().fg(palette.mauve)));
+                left.push((format!("⎇ {branch}"), Style::new().fg(palette.subtext0)));
             }
             let right = thread.changed_at.map(|changed| vec![(age(changed, now), dim)]).unwrap_or_default();
             split_line(buf, x, area.y, width, &left, &right);
@@ -825,7 +825,7 @@ fn closed_card(buf: &mut Buffer, area: Rect, reason: Option<&str>, palette: &Pal
         lines.push(Line::styled(reason.to_string(), Style::new().fg(palette.overlay0)));
     }
     lines.push(Line::from(vec![
-        Span::styled("Enter", Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
+        Span::styled("Enter", Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD)),
         Span::styled(" to bring it back here", Style::new().fg(palette.subtext0)),
     ]));
     let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
@@ -858,15 +858,15 @@ fn no_server(buf: &mut Buffer, area: Rect, app: &App, palette: &Palette) {
         _ => vec![
             Line::from(vec![
                 Span::styled("herdr ", Style::new().fg(palette.overlay0)),
-                Span::styled("inbox", Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
+                Span::styled("inbox", Style::new().fg(palette.text).add_modifier(Modifier::BOLD)),
             ]),
             Line::default(),
             Line::styled("No Herdr server is running.", Style::new().fg(palette.text)),
             Line::default(),
             Line::from(vec![
-                Span::styled("Enter", Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
+                Span::styled("Enter", Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD)),
                 Span::styled(" start one   ", Style::new().fg(palette.subtext0)),
-                Span::styled("q", Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
+                Span::styled("q", Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD)),
                 Span::styled(" quit", Style::new().fg(palette.subtext0)),
             ]),
         ],
@@ -907,9 +907,9 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     }
     fill(buf, area, Style::new());
     let key = Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD);
-    let text = Style::new().fg(palette.overlay0);
-    // The mode badge is accent text, not a filled block: terminals extend the
-    // last row's background into their padding.
+    let text = Style::new().fg(palette.subtext0).add_modifier(Modifier::DIM);
+    // Keep the mode label neutral and the background unset: terminals extend
+    // the last row's background into their padding.
     let (badge, hints): (&str, Vec<(&str, &str)>) = match (app.needs_server_screen(), app.focus) {
         (_, _) if app.updates.visible => ("UPDATES", vec![("esc", "back")]),
         (true, _) => ("", vec![("⌃G", "updates")]),
@@ -936,7 +936,7 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     };
     let mut left: Vec<(String, Style)> = Vec::new();
     if !badge.is_empty() {
-        left.push((format!(" {badge} "), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)));
+        left.push((format!(" {badge} "), Style::new().fg(palette.subtext0).add_modifier(Modifier::BOLD)));
         left.push((" ".into(), text));
     }
     for (index, (k, label)) in hints.iter().enumerate() {

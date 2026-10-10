@@ -118,10 +118,23 @@ thread in its status colour. The core breathes while a thread needs input,
 and a ring goes dashed while its machine connects or red when it is
 unreachable.
 
-Herdr Inbox uses your Herdr theme: the same built-in themes, `[theme] name`,
-and `[theme.custom]` colours from `~/.config/herdr/config.toml`. Inbox's own
-frames and popup titles use that palette; the live agent terminal keeps the
-agent's original colours.
+Herdr Inbox reads your Herdr theme at startup: the same built-in themes,
+`[theme] name`, and `[theme.custom]` colours from
+`$XDG_CONFIG_HOME/herdr/config.toml` or `~/.config/herdr/config.toml`.
+`HERDR_CONFIG_PATH` overrides that file, just as it does in Herdr.
+Headings, composer hints and thread metadata use the theme's neutral `text` and
+`subtext0` colours. The configured `accent` marks focus and selected items,
+plus the small orbit core; statuses and harness glyphs keep their own theme
+colours. The live agent terminal keeps the agent's original colours.
+
+To change the accent, set it in Herdr's config, not Inbox's:
+
+```toml
+[theme.custom]
+accent = "#89b4fa"
+```
+
+The legacy `[ui] accent` also works; `[theme.custom] accent` takes precedence.
 
 ### Updating Inbox
 
