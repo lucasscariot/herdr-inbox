@@ -36,26 +36,23 @@ const AGENT_SLUG_LIMIT: usize = 24;
 /// hedges around it, and the contractions of both once their apostrophe is
 /// gone. Negations are not filler: see [`NEGATIONS`]. Space-separated so
 /// the lists stay dense.
-const FILLER: &[&str] = &[
-    // determiners and pronouns
-    "a an the this that these those it its i me my we us our you your they them their he him his she her there \
-     here what which who whom whose something anything everything one ones some any all each every",
-    // auxiliaries and the verbs a request is framed with
-    "is are was were be been being am do does did done have has had having will would shall should can could may \
-     might must let lets get gets got make makes made want wants wanted need needs needed like try go going able \
-     think see look know seems seem",
-    // politeness, hedges and openers
-    "please thanks thank kindly maybe perhaps just really very actually basically also still currently right ok \
-     okay hi hello hey so now then well",
-    // prepositions, conjunctions, particles and question words
-    "to of in on for and or with at by from as into onto about over under up out through if but than when while \
-     where how why yes too yet much many via per vs etc",
-    // contractions without their apostrophe; the negative ones are negations
-    "im ive id ill youre youve weve were theyre thats theres heres whats hes shes itll",
-];
+const FILLER: &[&str] = &[DETERMINERS, AUXILIARIES, HEDGES, PARTICLES, CONTRACTIONS];
+const DETERMINERS: &str = "a an the this that these those it its i me my we us our you your they them their he him his she \
+     her there here what which who whom whose something anything everything one ones some any all each every";
+/// Auxiliaries and the verbs a request is framed with; the word after one
+/// of them is a verb, which matters to [`content_words`].
+const AUXILIARIES: &str = "is are was were be been being am do does did done have has had having will would shall should \
+     can could may might must let lets get gets got make makes made want wants wanted need needs needed like try go \
+     going able think see look know seems seem";
+const HEDGES: &str = "please thanks thank kindly maybe perhaps just really very actually basically also still currently \
+     right ok okay hi hello hey so now then well";
+const PARTICLES: &str = "to of in on for and or with at by from as into onto about over under up out through if but than \
+     when while where how why yes too yet much many via per vs etc";
+/// Contractions without their apostrophe; the negative ones are negations.
+const CONTRACTIONS: &str = "im ive id ill youre youve weve were theyre thats theres heres whats hes shes itll";
 /// Particles that are filler as prepositions ("the loop on mobile") but
-/// carry the meaning of a phrasal verb right after the leading word: "turn
-/// on auth" is `turn-on-auth`, "clean up tests" is `clean-up-tests`.
+/// carry the meaning of a phrasal verb right after a verb: "turn on auth"
+/// is `turn-on-auth`, "users cannot sign out" is `users-not-sign-out`.
 const PHRASAL_PARTICLES: &str = "on in up out";
 /// Negations reverse a task's meaning, so they stay in its name as `not`:
 /// "Don't delete backups" is `not-delete-backups`.
@@ -180,24 +177,26 @@ pub fn branch_slug(task: &str) -> String {
     let mut fallback: Option<String> = None;
     for sentence in sentences {
         let words = slug_words(sentence);
-        // Nothing, or a list marker ("1." before "Fix login"), is not a sentence.
-        if !words.iter().any(|w| w.chars().any(|c| c.is_ascii_alphabetic())) {
-            continue;
-        }
         let content = content_words(&words);
-        if !content.is_empty() {
+        // A word of two or more letters: "1." and a lone "X" are not sentences.
+        let has_letters =
+            |words: &[&str]| words.iter().any(|w| w.chars().filter(char::is_ascii_alphabetic).count() > 1);
+        if has_letters(&content) {
             return join_slug(content.into_iter());
         }
         // A sentence of pure filler ("Hi there!") names the task only when
         // nothing better follows.
-        fallback.get_or_insert_with(|| join_slug(words.iter().map(String::as_str)));
+        let all: Vec<&str> = words.iter().map(String::as_str).collect();
+        if has_letters(&all) {
+            fallback.get_or_insert_with(|| join_slug(all.into_iter()));
+        }
     }
     fallback.unwrap_or_else(|| "thread".into())
 }
 
 /// A line's sentences: split where punctuation ends one (`. ! ? : ;`) before
-/// a space or the end, and at a dash set off by spaces. "v1.2" and "e.g.x"
-/// stay whole.
+/// a space or the end, and at a dash set off by spaces. "v1.2", "e.g." and
+/// "etc." stay whole.
 fn sentences(line: &str) -> Vec<&str> {
     const DASHES: [&str; 3] = [" - ", " — ", " – "];
     let mut out = Vec::new();
@@ -208,7 +207,9 @@ fn sentences(line: &str) -> Vec<&str> {
         let next = rest.as_bytes().get(1).copied();
         let width = if let Some(dash) = DASHES.iter().find(|d| rest.starts_with(*d)) {
             Some(dash.len())
-        } else if ends_sentence(rest.as_bytes()[0]) && next.is_none_or(|c| c.is_ascii_whitespace() || ends_sentence(c))
+        } else if ends_sentence(rest.as_bytes()[0])
+            && next.is_none_or(|c| c.is_ascii_whitespace() || ends_sentence(c))
+            && !(rest.starts_with('.') && is_abbreviation(&line[start..i]))
         {
             Some(1)
         } else {
@@ -227,25 +228,48 @@ fn sentences(line: &str) -> Vec<&str> {
     out.into_iter().map(str::trim).filter(|s| !s.is_empty()).collect()
 }
 
+/// Whether the text ends in an abbreviation whose period does not end a
+/// sentence: a dotted one ("e.g.", "i.e.", "a.m.") or a common short form
+/// ("etc.", "vs.", "approx."). A lone letter ends its sentence as usual:
+/// "Use plan A. Delete option B" is two sentences.
+fn is_abbreviation(before: &str) -> bool {
+    const ABBREVIATIONS: &str = "etc vs cf approx incl excl resp fig eq ref no nr vol dr mr mrs ms prof st";
+    let letters = before.trim_end_matches(|c: char| !c.is_ascii_alphabetic());
+    let last = letters.rsplit(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("").to_lowercase();
+    let dotted = last.len() == 1 && letters[..letters.len() - 1].ends_with('.');
+    dotted || ABBREVIATIONS.split_whitespace().any(|a| a == last)
+}
+
 fn is_filler(word: &str) -> bool {
     FILLER.iter().any(|group| group.split_whitespace().any(|w| w == word))
 }
 
 /// The words that name the task: everything but filler, plus a particle
-/// that directly follows the leading word (after any negation) and so
-/// completes its verb: "do not sign out" keeps `not-sign-out`.
+/// that completes the verb before it. A kept word is a verb when it leads
+/// the sentence (past any negation) or follows an auxiliary, a negation or
+/// "to": "do not sign out" keeps `not-sign-out`, "users cannot sign in"
+/// keeps `users-not-sign-in`, "the loop on mobile" drops its preposition.
 fn content_words(words: &[String]) -> Vec<&str> {
     let mut content: Vec<&str> = Vec::new();
-    let mut previous_kept = false;
-    for word in words {
-        let leading_verb = previous_kept && content.iter().filter(|w| **w != "not").count() == 1;
-        let phrasal = leading_verb && PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
-        previous_kept = phrasal || !is_filler(word);
-        if previous_kept {
-            content.push(word);
+    let mut after_verb = false;
+    for (i, word) in words.iter().enumerate() {
+        let phrasal = after_verb && PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
+        if !phrasal && is_filler(word) {
+            after_verb = false;
+            continue;
         }
+        let leads = content.iter().all(|w| *w == "not");
+        let after_marker = i > 0 && marks_verb(&words[i - 1]);
+        after_verb = !phrasal && word != "not" && (leads || after_marker);
+        content.push(word);
     }
     content
+}
+
+/// Whether the word after this one is a verb: "to log in", "cannot sign
+/// out", "doesn't start up".
+fn marks_verb(word: &str) -> bool {
+    word == "not" || word == "to" || AUXILIARIES.split_whitespace().any(|w| w == word)
 }
 
 /// The lowercase ASCII words of a sentence, apostrophes removed so that
