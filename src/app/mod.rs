@@ -28,7 +28,7 @@ use crate::threads::{self, Activity, Source, Thread, ThreadId};
 pub use composer::layout::ComposerLayout;
 pub use composer::{COMPARE_LIMIT, Choice, Composer, Contender, Field, Pick, Picker, WorkspaceSel};
 pub use dictation::{Dictation, Entry, Menu, MenuItem, Phase, SpeechStatus, Target, Then, menu_items};
-pub use layout::{Layout, Row, RowKind};
+pub use layout::{Layout, Row, RowKind, SEARCH_RULE_ROW, STATS_ROW, STATS_RULE_ROW, TITLE_ROW};
 pub use updates::{UpdatePhase, Updates, dialog as update_dialog};
 
 const NOTICE_TTL: Duration = Duration::from_secs(4);
@@ -308,7 +308,11 @@ pub enum Input {
 }
 
 pub struct App {
+    /// The threads shown: every thread, narrowed by the filter.
     pub threads: Vec<Thread>,
+    /// Threads per group before the filter, in `Group::ALL` order, so the
+    /// header's stats describe the whole inbox.
+    pub tally: [usize; threads::Group::ALL.len()],
     pub machines: Vec<MachineState>,
     /// The highlighted thread in the list, tracked by identity so it survives
     /// reordering.
@@ -390,6 +394,7 @@ impl App {
         all.extend(machines.into_iter().filter(|m| m.id != threads::LOCAL));
         Self {
             threads: Vec::new(),
+            tally: [0; threads::Group::ALL.len()],
             machines: all
                 .into_iter()
                 .map(|m| MachineState {
@@ -1078,6 +1083,7 @@ impl App {
         let mut threads = threads::build(&sources, &self.activity);
         self.annotate(&mut threads);
         threads::sort(&mut threads);
+        self.tally = threads::Group::ALL.map(|group| threads.iter().filter(|t| t.group() == group).count());
         if !self.filter.trim().is_empty() {
             // Each field on its own: letters scattered across a title and a
             // branch name are not a match.

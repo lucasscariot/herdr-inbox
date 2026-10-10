@@ -170,13 +170,50 @@ fn idle_threads_and_dividers_stay_faint() {
 }
 
 #[test]
+fn the_header_splits_stats_actions_and_list_with_hairlines() {
+    let mut app = App::new(100, 24, vec![]);
+    app.update(
+        snapshot(
+            LOCAL,
+            vec![
+                agent("w1:p1", AgentStatus::Blocked, "Fix the login", "/w/cockpit", "claude"),
+                agent("w2:p1", AgentStatus::Working, "Add invoice export", "/w/api", "codex"),
+                agent("w3:p1", AgentStatus::Working, "Write the docs", "/w/api", "codex"),
+            ],
+        ),
+        at(0),
+    );
+    let terminal = render(&app, at(0));
+    let palette = Palette::default();
+    let buffer = terminal.backend().buffer();
+    let screen = text(&terminal);
+    let lines: Vec<&str> = screen.lines().collect();
+    assert!(lines[1].contains("● 1  ✓ 0  ◐ 2  ○ 0") && lines[1].contains("3 threads"), "{screen}");
+    assert!(!lines[1].contains("·"), "no unknown group while it is empty: {screen}");
+    for row in [2, 5] {
+        let rule = &buffer[(1, row)];
+        assert_eq!(rule.symbol(), "─", "{screen}");
+        assert_eq!(rule.fg, palette.surface1);
+        assert!(rule.modifier.contains(Modifier::DIM), "rules are hairlines");
+    }
+    assert!(lines[3].contains("+  New thread") && lines[4].contains("/  Filter threads"), "{screen}");
+    assert!(lines[6].contains("NEEDS INPUT"), "the list starts under the second rule: {screen}");
+    let (x, y) = find(&terminal, "● 1");
+    assert_eq!(buffer[(x, y)].fg, palette.red);
+    let (x, y) = find(&terminal, "✓ 0");
+    assert!(buffer[(x, y)].modifier.contains(Modifier::DIM), "an empty group stays faint");
+}
+
+#[test]
 fn the_selected_discussion_is_highlighted_and_accented_while_browsing() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Char('j'));
     let terminal = render(&app, at(0));
     let palette = Palette::default();
     let buffer = terminal.backend().buffer();
-    let (x, cursor_y) = find(&terminal, "Review navigation");
+    // The terminal's placeholder names the thread too; the sidebar row has the edge.
+    let (x, cursor_y) = find(&terminal, "▎Review navigation");
+    let x = x + 1;
     assert_eq!(buffer[(5, cursor_y)].bg, palette.active_row_bg);
     assert_eq!(buffer[(x, cursor_y)].fg, palette.accent, "the selected discussion is already open");
     let (x, previous_y) = find(&terminal, "Fix the login");
@@ -199,8 +236,16 @@ fn with_the_agent_focused_the_open_thread_is_highlighted() {
 fn long_titles_and_branches_are_clipped_with_an_ellipsis() {
     let app = loaded(70, 24);
     let screen = text(&render(&app, at(0)));
-    assert!(screen.lines().any(|line| line.contains("Fix the login") && line.ends_with("… │")), "{screen}");
-    assert!(screen.lines().any(|line| line.contains("OpenCode · ⎇ feat/") && line.ends_with("… │")), "{screen}");
+    assert!(
+        screen.lines().any(|line| line.contains("Fix the login") && (line.contains("… │") || line.contains("… ▐"))),
+        "{screen}"
+    );
+    assert!(
+        screen
+            .lines()
+            .any(|line| line.contains("OpenCode · ⎇ feat/") && (line.contains("… │") || line.contains("… ▐"))),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -373,7 +418,7 @@ fn the_divider_shows_a_scroll_thumb_and_clickable_filter_affordance() {
     let terminal = render(&app, at(0));
     let x = app.layout.sidebar.right();
     assert_eq!(terminal.backend().buffer()[(x, app.layout.list.y)].symbol(), "▐");
-    assert!(text(&terminal).contains("/ Filter threads"));
+    assert!(text(&terminal).contains("/  Filter threads"));
     app.layout.scroll(1000);
     let terminal = render(&app, at(0));
     assert_eq!(terminal.backend().buffer()[(x, app.layout.list.bottom() - 1)].symbol(), "▐");
@@ -669,7 +714,7 @@ mod composer {
     fn the_new_thread_button_sits_in_the_sidebar_and_opens_the_composer() {
         let mut app = loaded(100, 24);
         let screen = text(&render(&app, at(0)));
-        assert!(screen.lines().nth(2).unwrap().contains("+  New thread"), "{screen}");
+        assert!(screen.lines().nth(3).unwrap().contains("+  New thread"), "{screen}");
         let button = app.layout.new_button;
         app.update(
             Input::Mouse(ratatui::crossterm::event::MouseEvent {
@@ -780,6 +825,27 @@ mod conveniences {
     }
 
     #[test]
+    fn a_narrow_filter_keeps_the_query_and_the_cursor_over_the_count() {
+        let typed = |width: u16, query: &str| {
+            let mut app = loaded(width, 30);
+            key(&mut app, KeyCode::Char('/'));
+            for c in query.chars() {
+                key(&mut app, KeyCode::Char(c));
+            }
+            let screen = text(&render(&app, at(1)));
+            screen.lines().nth(4).unwrap().to_string()
+        };
+        let row = typed(10, "a");
+        assert!(row.contains("/  a▏") && !row.contains(" of "), "{row:?}");
+        let row = typed(60, "invoice export for the billing page");
+        assert!(row.contains("/  …") && row.contains("page▏"), "{row:?}");
+        assert!(!row.contains(" of "), "no room for the count: {row:?}");
+        assert!(typed(110, "invoice").contains("1 of 4"));
+        assert_eq!(crate::ui::clip_start("abcdef", 4), "…def");
+        assert_eq!(crate::ui::clip_start("abc", 4), "abc");
+    }
+
+    #[test]
     fn the_filter_shows_in_the_header() {
         let mut app = loaded(110, 30);
         key(&mut app, KeyCode::Char('/'));
@@ -787,7 +853,9 @@ mod conveniences {
             key(&mut app, KeyCode::Char(c));
         }
         let screen = text(&render(&app, at(1)));
-        assert!(screen.lines().nth(3).unwrap().contains("/ invoice▏  1 shown"), "{screen}");
+        let search = screen.lines().nth(4).unwrap();
+        assert!(search.contains("/  invoice▏") && search.contains("1 of 4"), "{screen}");
+        assert!(screen.lines().nth(1).unwrap().contains("4 threads"), "the stats count the whole inbox: {screen}");
         assert!(screen.contains("Add invoice export"));
         assert!(!screen.contains("Review navigation"), "{screen}");
         assert!(screen.lines().last().unwrap().contains("FILTER"));

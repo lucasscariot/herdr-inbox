@@ -3,13 +3,13 @@ source: src/ui/tests.rs
 expression: "text(&render(&app, at(0)))"
 ---
  herdr inbox                     │
- 0 threads                       │
+ ● 0  ✓ 0  ◐ 0  ○ 0    0 threads │
+ ─────────────────────────────── │
   +  New thread               n  │
- / Filter threads                │
- No agent threads yet.           │                         ⢀⡀
- Click New thread or press n.    │                    ⢀⡴⠚⠉⠉⠁⠉⠉⠉⠉⠒⠲⠤⣄⡀
-                                 │                    ⢸             ⠉⠑⠢⣄⡀
-                                 │                    ⠸⡄          ⢀⣀    ⠉⠲⢄
+  /  Filter threads           /  │                         ⢀⡀
+ ─────────────────────────────── │                    ⢀⡴⠚⠉⠉⠁⠉⠉⠉⠉⠒⠲⠤⣄⡀
+ No agent threads yet.           │                    ⢸             ⠉⠑⠢⣄⡀
+ Click New thread or press n.    │                    ⠸⡄          ⢀⣀    ⠉⠲⢄
                                  │                     ⠙⢄       ⢀⣾⣿⣿⣗⠄     ⠙⢦⡀
                                  │                      ⠈⠳⣄     ⠘⢿⢟⠟⠕⠁       ⠑⣄
                                  │                         ⠑⠦⣀    ⠁⠁⠁         ⠘⡆

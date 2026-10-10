@@ -10,7 +10,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Connection, Focus, LAUNCH_PREFIX, NoticeKind, RowKind, StreamState, TAKEN_OVER};
+use crate::app::{
+    App, Connection, Focus, LAUNCH_PREFIX, NoticeKind, RowKind, SEARCH_RULE_ROW, STATS_ROW, STATS_RULE_ROW,
+    StreamState, TAKEN_OVER, TITLE_ROW,
+};
 use crate::herdr::types::AgentStatus;
 use crate::orbit::{self, Ink, Link};
 use crate::theme::Palette;
@@ -355,6 +358,28 @@ pub fn clip(text: &str, width: usize) -> String {
     out
 }
 
+/// Keeps the end of `text` within `width` columns, starting with `…` when it
+/// had to cut: for a query, whose end is where the typing happens.
+pub fn clip_start(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for ch in text.chars().rev() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > width - 1 {
+            break;
+        }
+        tail.push(ch);
+        used += w;
+    }
+    std::iter::once('…').chain(tail.into_iter().rev()).collect()
+}
+
 /// Draws `left` and `right` on one line of `area`, clipping `left` so `right`
 /// always fits.
 fn split_line(buf: &mut Buffer, x: u16, y: u16, width: u16, left: &[(String, Style)], right: &[(String, Style)]) {
@@ -390,16 +415,27 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     let inner_x = area.x + 1;
     let inner_w = area.width.saturating_sub(2);
 
-    // Header: wordmark and a one-line summary.
+    // Header, in three bands: who and how much, what to do, then the list.
     let title = [
         ("herdr ".to_string(), Style::new().fg(palette.overlay0)),
         ("inbox".to_string(), Style::new().fg(palette.accent).add_modifier(Modifier::BOLD)),
     ];
     let position = app.cursor_index().map(|index| format!("{}/{}", index + 1, app.threads.len())).unwrap_or_default();
-    split_line(buf, inner_x, area.y, inner_w, &title, &[(position, Style::new().fg(palette.overlay0))]);
-    if area.height > 1 {
-        split_line(buf, inner_x, area.y + 1, inner_w, &summary(app, palette), &[]);
+    let faint = Style::new().fg(palette.overlay0).add_modifier(Modifier::DIM);
+    let header_row = |row: u16| (row < area.height).then_some(area.y + row);
+    if let Some(y) = header_row(TITLE_ROW) {
+        split_line(buf, inner_x, y, inner_w, &title, &[(position, faint)]);
     }
+    if let Some(y) = header_row(STATS_ROW) {
+        let (left, right) = stats(app, inner_w as usize, palette);
+        split_line(buf, inner_x, y, inner_w, &left, &right);
+    }
+    for row in [STATS_RULE_ROW, SEARCH_RULE_ROW] {
+        if let Some(y) = header_row(row) {
+            buf.set_string(inner_x, y, "─".repeat(inner_w as usize), hairline(palette).bg(palette.sidebar_bg));
+        }
+    }
+
     let button = app.layout.new_button;
     if button.width > 0 {
         let style = if app.focus == Focus::Composer {
@@ -418,16 +454,28 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
         );
     }
 
+    // The filter sits under New thread, drawn as a field: a glyph, then the
+    // query or a placeholder, and its key or how many threads it kept. The
+    // query wins the room: the count goes first, then the query's start, so
+    // what was just typed and the cursor stay in sight.
     let search = app.layout.search;
     if search.height > 0 {
-        let active = app.filtering || !app.filter.is_empty();
-        let style = Style::new().fg(if active { palette.text } else { palette.overlay0 }).bg(palette.sidebar_bg);
-        let text = if active {
-            format!("/ {}{}  {} shown", app.filter, if app.filtering { "▏" } else { "" }, app.threads.len())
+        let bg = if app.filtering { palette.selection_bg } else { palette.sidebar_bg };
+        fill(buf, Rect::new(search.x + 1, search.y, search.width.saturating_sub(2), 1), Style::new().bg(bg));
+        let glyph = Style::new().fg(palette.overlay0).bg(bg);
+        let room = inner_w.saturating_sub(2) as usize;
+        let prefix = "/  ";
+        let (text, right) = if app.filtering || !app.filter.is_empty() {
+            let query = format!("{}{}", app.filter, if app.filtering { "▏" } else { "" });
+            let shown = format!("{} of {}", app.threads.len(), app.tally.iter().sum::<usize>());
+            let fits = prefix.width() + query.width() + 1 + shown.width() <= room;
+            let query = clip_start(&query, room.saturating_sub(prefix.width()));
+            ((query, Style::new().fg(palette.text).bg(bg)), fits.then_some((shown, glyph)))
         } else {
-            "/ Filter threads".into()
+            (("Filter threads".into(), glyph), Some(("/".into(), glyph)))
         };
-        split_line(buf, inner_x, search.y, inner_w, &[(text, style)], &[]);
+        let right: Vec<_> = right.into_iter().collect();
+        split_line(buf, inner_x + 1, search.y, room as u16, &[(prefix.into(), glyph), text], &right);
     }
 
     let list = app.layout.list;
@@ -462,32 +510,47 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
     }
 }
 
-fn summary(app: &App, palette: &Palette) -> Vec<(String, Style)> {
-    let dim = Style::new().fg(palette.overlay0);
+/// Styled pieces of one line, left to right.
+type Spans = Vec<(String, Style)>;
+
+/// The inbox at a glance: each group's badge glyph and how many threads it
+/// holds, before any filter, then the total when it fits. Empty groups stay
+/// faint so the line never jumps.
+fn stats(app: &App, width: usize, palette: &Palette) -> (Spans, Spans) {
+    let faint = Style::new().fg(palette.overlay0).add_modifier(Modifier::DIM);
     match app.overall_connection() {
-        Connection::Connecting => return vec![("connecting…".into(), dim)],
-        Connection::Lost(_) => return vec![("reconnecting…".into(), Style::new().fg(palette.red))],
+        Connection::Connecting => return (vec![("connecting…".into(), faint)], vec![]),
+        Connection::Lost(_) => return (vec![("reconnecting…".into(), Style::new().fg(palette.red))], vec![]),
         _ => {}
     }
-    let count = |group| app.threads.iter().filter(|t| t.group() == group).count();
-    let needs = count(Group::NeedsInput);
-    let ready = count(Group::Ready);
-    if needs == 0 && ready == 0 {
-        let total = app.threads.len();
-        return vec![(format!("{total} thread{}", if total == 1 { "" } else { "s" }), dim)];
-    }
-    // When something wants attention, that is the summary.
-    let mut parts = Vec::new();
-    if needs > 0 {
-        parts.push((format!("{needs} need{} input", if needs == 1 { "s" } else { "" }), Style::new().fg(palette.red)));
-    }
-    if ready > 0 {
-        if !parts.is_empty() {
-            parts.push((" · ".into(), dim));
+    let mut left: Spans = Vec::new();
+    for (group, count) in Group::ALL.into_iter().zip(app.tally) {
+        if group == Group::Unknown && count == 0 {
+            continue;
         }
-        parts.push((format!("{ready} ready"), Style::new().fg(palette.teal)));
+        if !left.is_empty() {
+            left.push(("  ".into(), faint));
+        }
+        let status = group_status(group);
+        let glyph = badge(status).split(' ').next().unwrap_or_default();
+        let style = if count == 0 { faint } else { status_style(status, palette).add_modifier(Modifier::BOLD) };
+        left.push((format!("{glyph} {count}"), style));
     }
-    parts
+    let total: usize = app.tally.iter().sum();
+    let total = format!("{total} thread{}", if total == 1 { "" } else { "s" });
+    let used: usize = left.iter().map(|(t, _)| t.width()).sum();
+    let right = if used + 1 + total.width() <= width { vec![(total, faint)] } else { vec![] };
+    (left, right)
+}
+
+fn group_status(group: Group) -> AgentStatus {
+    match group {
+        Group::NeedsInput => AgentStatus::Blocked,
+        Group::Ready => AgentStatus::Done,
+        Group::Working => AgentStatus::Working,
+        Group::Idle => AgentStatus::Idle,
+        Group::Unknown => AgentStatus::Unknown,
+    }
 }
 
 fn heading(buf: &mut Buffer, x: u16, y: u16, width: u16, group: Group, count: usize, palette: &Palette) {

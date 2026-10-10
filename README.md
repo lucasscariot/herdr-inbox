@@ -7,12 +7,14 @@ to it, fully interactive.
 
 ```
  herdr inbox                    1/3 │ ✻ Claude Code
- 1 needs input · 1 ready            │
-  +  New thread                  n  │ > Fix the login redirect loop on mobile
- / Filter threads                   │
- NEEDS INPUT  1                     │   Do you want to make this edit?
-▎cockpit                    ● input │   ❯ 1. Yes
-▎Fix the login redirect loop on mo… │     2. No
+ ● 1  ✓ 1  ◐ 1  ○ 0       3 threads │
+ ────────────────────────────────── │ > Fix the login redirect loop on mobile
+  +  New thread                  n  │
+  /  Filter threads              /  │   Do you want to make this edit?
+ ────────────────────────────────── │   ❯ 1. Yes
+ NEEDS INPUT  1                     │     2. No
+▎cockpit                    ● input │
+▎Fix the login redirect loop on mo… │
 ▎✻ Claude · ⎇ fix-login-redirect    │
                                     │
  READY  1                           │

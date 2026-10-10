@@ -3,26 +3,26 @@ source: src/ui/tests.rs
 expression: "text(&render(&app, at(1)))"
 ---
  herdr inbox                 1/4 │
- 1 needs input · 1 ready         │
+ ● 1  ✓ 1  ◐ 1  ○ 1    4 threads │
+ ─────────────────────────────── │
   +  New thread               n  │
- / Filter threads                │
- NEEDS INPUT  1                  │
-▎cockpit                 ● input │
-▎Fix the login redirect loop on… │
-▎✻ Claude · ⎇ fix-login-redirect │
-                                 │
- READY  1                        │
-▎site                    ✓ ready │              This thread is open in another window.
-▎Review navigation               │                    Enter to bring it back here
-▎◈ OpenCode · ⎇ feat/a-very-lon… │
-                                 │
- WORKING  1                      │
-▎api                   ◐ working │
-▎Add invoice export              │
-▎◆ Codex · ⎇ main                │
-                                 │
+  /  Filter threads           /  │
+ ─────────────────────────────── │
+ NEEDS INPUT  1                  ▐
+▎cockpit                 ● input ▐
+▎Fix the login redirect loop on… ▐
+▎✻ Claude · ⎇ fix-login-redirect ▐
+                                 ▐              This thread is open in another window.
+ READY  1                        ▐                    Enter to bring it back here
+▎site                    ✓ ready ▐
+▎Review navigation               ▐
+▎◈ OpenCode · ⎇ feat/a-very-lon… ▐
+                                 ▐
+ WORKING  1                      ▐
+▎api                   ◐ working ▐
+▎Add invoice export              ▐
+▎◆ Codex · ⎇ main                ▐
+                                 ▐
  IDLE  1                         │
 ▎scratch                  ○ idle │
-▎New Pi thread                   │
-▎π Pi                            │
   THREADS  ↵ agent  j/k move  n new  x archive  ⌃G updates  tab agent  q quit

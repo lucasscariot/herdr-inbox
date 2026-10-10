@@ -3,20 +3,22 @@ source: src/ui/tests.rs
 expression: screen
 ---
  herdr inbox                 1/4 │
- 1 needs input · 1 ready         │
-  +  New thread               n  │
- / Filter th╭ Update Herdr Inbox ──────────────────────────────────────────────────────╮
- NEEDS INPUT│ Running <version>                                                        │
-▎cockpit    │ Latest stable 2.0.0                                                      │
-▎Fix the log│ Enter installs this release. Only the running Inbox binary changes.      │
-▎✻ Claude · │                                                                          │
-            │ Release notes                                                            │
- READY  1   │ ## Changes                                                               │
-▎site       │ Faster inbox navigation.                                                 │
-▎Review navi│ Safer updates.                                                           │
-▎◈ OpenCode │                                                                          │
+ ● 1  ✓ 1  ◐ 1  ○ 1    4 threads │
+ ─────────────────────────────── │
+  +  New thr╭ Update Herdr Inbox ──────────────────────────────────────────────────────╮
+  /  Filter │ Running <version>                                                        │
+ ───────────│ Latest stable 2.0.0                                                      │
+ NEEDS INPUT│ Enter installs this release. Only the running Inbox binary changes.      │
+▎cockpit    │                                                                          │
+▎Fix the log│ Release notes                                                            │
+▎✻ Claude · │ ## Changes                                                               │
+            │ Faster inbox navigation.                                                 │
+ READY  1   │ Safer updates.                                                           │
+▎site       │                                                                          │
+▎Review navi│                                                                          │
+▎◈ OpenCode │                                                                          │e…
             │                                                                          │
- WORKING  1 │                                                                          │e…
+ WORKING  1 │                                                                          │
 ▎api        │                                                                          │
 ▎Add invoice│                                                                          │
 ▎◆ Codex · ⎇│                                                                          │
@@ -24,9 +26,7 @@ expression: screen
  IDLE  1    │                                                                          │
 ▎scratch    │                                                                          │
 ▎New Pi thre│                                                                          │
-▎π Pi       │                                                                          │
-            │                                                                          │
-            │ Enter install  b GitHub                                                  │
+▎π Pi       │ Enter install  b GitHub                                                  │
             │ ↑↓ notes  r recheck  Esc back                                            │
             ╰──────────────────────────────────────────────────────────────────────────╯
                                  │
