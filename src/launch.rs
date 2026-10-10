@@ -254,7 +254,8 @@ fn content_words(words: &[String]) -> Vec<&str> {
     let mut after_verb = Verb::No;
     for (i, word) in words.iter().enumerate() {
         let is_particle = PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
-        let closes = i + 1 == words.len();
+        // Trailing filler ("sign out please") does not keep a sentence open.
+        let closes = words[i + 1..].iter().all(|w| is_filler(w));
         let phrasal = is_particle && (after_verb == Verb::Yes || (after_verb == Verb::Maybe && closes));
         if !phrasal && is_filler(word) {
             after_verb = Verb::No;
