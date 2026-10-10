@@ -4,6 +4,16 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.2.1...v1.3.0) (2026-10-10)
+
+
+### Features
+
+* **composer:** show presets as a strip and start new threads on the first one ([#31](https://github.com/lucasscariot/herdr-inbox/issues/31)) ([74cc19c](https://github.com/lucasscariot/herdr-inbox/commit/74cc19cba61939fc774bfa9bd80744173e644426))
+* **launch:** name branches from the content words of the first sentence ([#32](https://github.com/lucasscariot/herdr-inbox/issues/32)) ([0fba2ee](https://github.com/lucasscariot/herdr-inbox/commit/0fba2ee1d44a008974b410e4d796810b7d03370c))
+* **threads:** archive with a double tap and cancel with esc ([#30](https://github.com/lucasscariot/herdr-inbox/issues/30)) ([c5eb190](https://github.com/lucasscariot/herdr-inbox/commit/c5eb190c9f3dfca940eca775a80983e4939ffef5))
+* **ui:** split the sidebar header into stats, actions and list ([#33](https://github.com/lucasscariot/herdr-inbox/issues/33)) ([efec082](https://github.com/lucasscariot/herdr-inbox/commit/efec0823ab217087a90a6f1b58952af64716f818))
+
 ## [1.2.1](https://github.com/lucasscariot/herdr-inbox/compare/v1.2.0...v1.2.1) (2026-10-10)
 
 
