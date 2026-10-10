@@ -99,15 +99,48 @@ fn titles_are_one_line_and_bounded() {
 }
 
 #[test]
-fn branch_names_drop_filler_and_stay_short() {
-    assert_eq!(branch_name("Fix the login redirect loop on mobile", &[], ""), "fix-login-redirect-loop-mobile");
-    assert_eq!(branch_name("Please can you add a CSV export", &[], ""), "add-csv-export");
+fn branch_names_keep_the_content_words_of_the_first_sentence() {
+    assert_eq!(branch_name("Fix the login redirect loop on mobile", &[], ""), "fix-login-redirect-loop");
+    assert_eq!(branch_name("Please can you add a CSV export?", &[], ""), "add-csv-export");
     assert_eq!(branch_name("Refactor\nsecond line ignored", &[], ""), "refactor");
-    let long = branch_name("implement the incredibly comprehensive authentication middleware rewrite", &[], "");
-    assert!(long.len() <= 32, "{long}");
-    assert_eq!(long, "implement-incredibly");
+    assert_eq!(
+        branch_name("The worktree naming we generate is bad - it doesn't capture the essence of the request", &[], ""),
+        "worktree-naming-generate-bad",
+        "the first sentence names the task; the dash starts another"
+    );
+    assert_eq!(branch_name("Why does the sidebar flicker on resize?", &[], ""), "sidebar-flicker-resize");
+    assert_eq!(
+        branch_name("Can we make the composer remember the last model?", &[], ""),
+        "composer-remember-last-model"
+    );
+    assert_eq!(branch_name("I'd like to be able to archive threads with `x`.", &[], ""), "archive-threads-x");
+    assert_eq!(branch_name("It doesn't work when I paste an image", &[], ""), "work-paste-image");
+    assert_eq!(
+        branch_name("Go through codex, opencode, claude - check how they handle this.", &[], ""),
+        "codex-opencode-claude"
+    );
+}
+
+#[test]
+fn branch_names_skip_sentences_that_say_nothing() {
+    assert_eq!(branch_name("Hi there! Fix the login loop.", &[], ""), "fix-login-loop", "greetings are skipped");
+    assert_eq!(branch_name("Hi there!", &[], ""), "hi-there", "pure filler still names the task when nothing follows");
+    assert_eq!(branch_name("Please\n\nFix the login loop", &[], ""), "fix-login-loop", "and so are filler lines");
     assert_eq!(branch_name("!!!", &[], ""), "thread");
     assert_eq!(branch_name("Übersetze die Seite", &[], ""), "bersetze-die-seite");
+}
+
+#[test]
+fn branch_names_stay_short() {
+    let long = branch_name("implement the incredibly comprehensive authentication middleware rewrite", &[], "");
+    assert!(long.len() <= 32, "{long}");
+    assert_eq!(long, "implement-incredibly", "four words at most, cut at a word boundary to fit 32 characters");
+    assert_eq!(branch_name(&"x".repeat(50), &[], "").len(), 32, "one huge word is clipped");
+    assert_eq!(
+        branch_name("Bump v1.2 for the release", &[], ""),
+        "bump-v1-2-release",
+        "dots inside words do not end a sentence"
+    );
 }
 
 #[test]
@@ -532,7 +565,7 @@ fn pasted_images_are_left_out_of_the_title_and_branch() {
     let task = format!("{IMAGE_A}\nwhy is the login {IMAGE_B} broken");
     let plan = plan_for(&request(&task, WorkspaceChoice::NewWorktree { branch: None }), &settings(), None).unwrap();
     assert_eq!(plan.record.title, "why is the login broken");
-    assert_eq!(plan.record.branch, "why-is-login-broken");
+    assert_eq!(plan.record.branch, "login-broken");
     assert_eq!(plan.record.task, task, "the task keeps its images");
     let only = plan_for(&request(IMAGE_A, WorkspaceChoice::NewWorktree { branch: None }), &settings(), None).unwrap();
     assert_eq!((only.record.title.as_str(), only.record.branch.as_str()), ("image", "image"));

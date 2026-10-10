@@ -25,9 +25,209 @@ const TITLE_LIMIT: usize = 72;
 /// How long an agent gets to attach a pasted image before the next paste.
 const IMAGE_SETTLE: Duration = Duration::from_millis(400);
 const BRANCH_SLUG_LIMIT: usize = 32;
+/// How many words of the task a branch name keeps, like the four Claude Code
+/// asks its model for.
+const BRANCH_WORDS: usize = 4;
 /// How much of a model id goes into a compared agent's branch name.
 const AGENT_SLUG_LIMIT: usize = 24;
-const FILLER: &[&str] = &["a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "with", "please", "can", "you"];
+/// Words that say nothing about a task: the grammar a request is wrapped in
+/// (determiners, pronouns, auxiliaries, prepositions, conjunctions), the
+/// politeness and hedges around it, and the contractions of both once their
+/// apostrophe is gone. What survives names the thing itself.
+const FILLER: &[&str] = &[
+    // determiners and pronouns
+    "a",
+    "an",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "i",
+    "me",
+    "my",
+    "we",
+    "us",
+    "our",
+    "you",
+    "your",
+    "they",
+    "them",
+    "their",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "there",
+    "here",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "something",
+    "anything",
+    "everything",
+    "one",
+    "ones",
+    "some",
+    "any",
+    "all",
+    "each",
+    "every",
+    // auxiliaries and the verbs a request is framed with
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "am",
+    "do",
+    "does",
+    "did",
+    "done",
+    "have",
+    "has",
+    "had",
+    "having",
+    "will",
+    "would",
+    "shall",
+    "should",
+    "can",
+    "could",
+    "may",
+    "might",
+    "must",
+    "let",
+    "lets",
+    "get",
+    "gets",
+    "got",
+    "make",
+    "makes",
+    "made",
+    "want",
+    "wants",
+    "wanted",
+    "need",
+    "needs",
+    "needed",
+    "like",
+    "try",
+    "go",
+    "going",
+    "able",
+    "think",
+    "see",
+    "look",
+    "know",
+    "seems",
+    "seem",
+    // politeness, hedges and openers
+    "please",
+    "thanks",
+    "thank",
+    "kindly",
+    "maybe",
+    "perhaps",
+    "just",
+    "really",
+    "very",
+    "actually",
+    "basically",
+    "also",
+    "still",
+    "currently",
+    "right",
+    "ok",
+    "okay",
+    "hi",
+    "hello",
+    "hey",
+    "so",
+    "now",
+    "then",
+    "well",
+    // prepositions, conjunctions, particles and question words
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "and",
+    "or",
+    "with",
+    "at",
+    "by",
+    "from",
+    "as",
+    "into",
+    "onto",
+    "about",
+    "over",
+    "under",
+    "up",
+    "out",
+    "off",
+    "through",
+    "if",
+    "but",
+    "than",
+    "when",
+    "while",
+    "where",
+    "how",
+    "why",
+    "not",
+    "no",
+    "yes",
+    "too",
+    "yet",
+    "more",
+    "less",
+    "much",
+    "many",
+    "via",
+    "per",
+    "vs",
+    "etc",
+    // contractions without their apostrophe
+    "dont",
+    "doesnt",
+    "didnt",
+    "isnt",
+    "arent",
+    "wasnt",
+    "werent",
+    "cant",
+    "cannot",
+    "couldnt",
+    "wont",
+    "wouldnt",
+    "shouldnt",
+    "im",
+    "ive",
+    "id",
+    "ill",
+    "youre",
+    "youve",
+    "weve",
+    "were",
+    "theyre",
+    "thats",
+    "theres",
+    "heres",
+    "whats",
+    "hes",
+    "shes",
+    "itll",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspaceChoice {
@@ -138,20 +338,85 @@ pub fn task_title(task: &str) -> String {
     collapsed.chars().take(TITLE_LIMIT).collect()
 }
 
-/// The branch slug for a task: its first line's words, without filler.
+/// The branch slug for a task: the first sentence that says something, kept
+/// to its content words. "Please can you add a CSV export?" becomes
+/// `add-csv-export`; "The worktree naming we generate is bad - it doesn't
+/// capture the request" becomes `worktree-naming-bad`.
 pub fn branch_slug(task: &str) -> String {
-    let first = task.trim().lines().next().unwrap_or("").to_lowercase();
-    let words: Vec<&str> = first.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let lines = task.lines().map(str::trim).filter(|l| !l.is_empty());
+    let sentences = lines.flat_map(sentences);
+    let mut fallback: Option<String> = None;
+    for sentence in sentences {
+        let words = slug_words(sentence);
+        if words.is_empty() {
+            continue;
+        }
+        let content: Vec<&String> = words.iter().filter(|w| !FILLER.contains(&w.as_str())).collect();
+        if !content.is_empty() {
+            return join_slug(content.into_iter().map(String::as_str));
+        }
+        // A sentence of pure filler ("Hi there!") names the task only when
+        // nothing better follows.
+        fallback.get_or_insert_with(|| join_slug(words.iter().map(String::as_str)));
+    }
+    fallback.unwrap_or_else(|| "thread".into())
+}
+
+/// A line's sentences: split where punctuation ends one (`. ! ? : ;`) before
+/// a space or the end, and at a dash set off by spaces. "v1.2" and "e.g.x"
+/// stay whole.
+fn sentences(line: &str) -> Vec<&str> {
+    const DASHES: [&str; 3] = [" - ", " — ", " – "];
+    let mut out = Vec::new();
+    let (mut start, mut i) = (0, 0);
+    while i < line.len() {
+        let rest = &line[i..];
+        let ends_sentence = |c: u8| matches!(c, b'.' | b'!' | b'?' | b':' | b';');
+        let next = rest.as_bytes().get(1).copied();
+        let width = if let Some(dash) = DASHES.iter().find(|d| rest.starts_with(*d)) {
+            Some(dash.len())
+        } else if ends_sentence(rest.as_bytes()[0]) && next.is_none_or(|c| c.is_ascii_whitespace() || ends_sentence(c))
+        {
+            Some(1)
+        } else {
+            None
+        };
+        match width {
+            Some(width) => {
+                out.push(&line[start..i]);
+                i += width;
+                start = i;
+            }
+            None => i += rest.chars().next().map_or(1, char::len_utf8),
+        }
+    }
+    out.push(&line[start..]);
+    out.into_iter().map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+/// The lowercase ASCII words of a sentence, apostrophes removed so that
+/// "doesn't" is one word, not `doesn` and `t`.
+fn slug_words(sentence: &str) -> Vec<String> {
+    let flat: String = sentence.chars().filter(|c| !matches!(c, '\'' | '’' | '`')).collect();
+    flat.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Up to [`BRANCH_WORDS`] words joined by dashes, cut at a word boundary to
+/// fit [`BRANCH_SLUG_LIMIT`]; a single word longer than that is clipped.
+fn join_slug<'a>(words: impl Iterator<Item = &'a str>) -> String {
     let mut slug = String::new();
-    for word in words.into_iter().filter(|w| !FILLER.contains(w)) {
+    for word in words.take(BRANCH_WORDS) {
         let candidate = if slug.is_empty() { word.to_string() } else { format!("{slug}-{word}") };
         if candidate.len() > BRANCH_SLUG_LIMIT && !slug.is_empty() {
             break;
         }
         slug = candidate;
     }
-    let slug: String = if slug.is_empty() { "thread".into() } else { slug.chars().take(40).collect() };
-    slug.trim_matches('-').to_string()
+    slug.chars().take(BRANCH_SLUG_LIMIT).collect::<String>().trim_matches('-').to_string()
 }
 
 /// A short, unique branch name from the task's first line.
