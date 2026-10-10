@@ -294,8 +294,8 @@ fn archiving_asks_on_the_thread_itself() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Char('x'));
     let screen = text(&render(&app, at(1)));
-    assert!(screen.contains("Archive this thread?") && screen.contains("y/n"), "{screen}");
-    assert!(screen.contains("y archive  n keep"), "{screen}");
+    assert!(screen.contains("Archive this thread?") && screen.contains("↵/esc"), "{screen}");
+    assert!(screen.contains("⌫/↵ archive  esc cancel"), "{screen}");
 }
 
 #[test]

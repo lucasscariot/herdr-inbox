@@ -499,6 +499,31 @@ fn archiving_asks_first_and_cancels_on_anything_else() {
 }
 
 #[test]
+fn pressing_the_archive_key_twice_archives_and_esc_cancels() {
+    for key in [KeyCode::Backspace, KeyCode::Delete, KeyCode::Char('x')] {
+        let (mut app, _) = loaded();
+        assert!(app.update(press(key), at(1)).is_empty());
+        assert_eq!(app.update(press(key), at(1)).len(), 1, "{key:?} twice archives");
+    }
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::Backspace), at(1));
+    assert!(app.update(press(KeyCode::Esc), at(1)).is_empty());
+    assert_eq!(app.confirm_archive, None);
+    assert_eq!(app.focus, Focus::List, "Esc only cancels the prompt");
+}
+
+#[test]
+fn holding_the_archive_key_does_not_confirm() {
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::Backspace), at(1));
+    let repeat =
+        Input::Key(KeyEvent { kind: KeyEventKind::Repeat, ..KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE) });
+    assert!(app.update(repeat, at(1)).is_empty());
+    assert!(app.confirm_archive.is_some(), "the prompt stays open");
+    assert_eq!(app.update(press(KeyCode::Backspace), at(1)).len(), 1);
+}
+
+#[test]
 fn archiving_the_open_thread_reports_the_archive_whichever_message_comes_first() {
     for archived_first in [true, false] {
         let (mut app, _) = loaded();

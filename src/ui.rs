@@ -552,7 +552,7 @@ fn thread_line(
             area.y,
             width,
             &[("Archive this thread?".into(), Style::new().fg(palette.red).add_modifier(Modifier::BOLD))],
-            &[("y/n".into(), Style::new().fg(palette.text).add_modifier(Modifier::BOLD))],
+            &[("↵/esc".into(), Style::new().fg(palette.text).add_modifier(Modifier::BOLD))],
         ),
         _ if note_line(thread).is_some() => {
             let (text, color) = note_line(thread).unwrap_or_default();
@@ -850,7 +850,7 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     let (badge, hints): (&str, Vec<(&str, &str)>) = match (app.needs_server_screen(), app.focus) {
         (_, _) if app.updates.visible => ("UPDATES", vec![("esc", "back")]),
         (true, _) => ("", vec![("⌃G", "updates")]),
-        (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("y", "archive"), ("n", "keep")]),
+        (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("⌫/↵", "archive"), ("esc", "cancel")]),
         (_, _) if app.reply.is_some() => ("REPLY", vec![("↵", "send"), ("esc", "cancel")]),
         (_, Focus::List) if app.filtering => ("FILTER", vec![("↵", "keep"), ("esc", "clear")]),
         (_, Focus::List) => (
