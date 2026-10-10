@@ -105,6 +105,9 @@ jobs:
           "$RUNNER_TEMP/herdr/herdr" --version
       - name: Test against a real Herdr
         # Each PTY test measures real input timing; do not run several TUIs at once.
+        # The suite takes about a minute; a hung test must not hold the only
+        # macOS runner for the job's full timeout.
+        timeout-minutes: 8
         run: HERDR_E2E=1 HERDR_BIN="$RUNNER_TEMP/herdr/herdr" cargo test --locked --test e2e -- --test-threads=1 --nocapture
 
   installer:

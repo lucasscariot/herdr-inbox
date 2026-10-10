@@ -156,7 +156,7 @@ impl Drop for Sandbox {
         apply_env(&mut stop, &self.env());
         let _ = stop.status();
         let _ = self.server.kill();
-        let _ = self.server.wait();
+        reap("herdr server", || self.server.try_wait().map(|status| status.is_some()));
     }
 }
 
@@ -334,8 +334,31 @@ impl Inbox {
 
 impl Drop for Inbox {
     fn drop(&mut self) {
+        // The inbox's own child (`herdr terminal session control`) goes first:
+        // macOS has left both stuck in the kernel's exit path, where a plain
+        // `wait` blocked a CI runner for the job's whole timeout.
+        if let Some(pid) = self.child.process_id() {
+            let _ = Command::new("pkill").args(["-9", "-P", &pid.to_string()]).status();
+        }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        reap("herdr-inbox", || self.child.try_wait().map(|status| status.is_some()));
+    }
+}
+
+/// Waits a few seconds for a killed process to be reaped, then gives up: a
+/// process stuck exiting cannot be waited for, and a test that hangs in its
+/// cleanup holds the only macOS runner until the job times out.
+fn reap(name: &str, mut exited: impl FnMut() -> std::io::Result<bool>) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match exited() {
+            Ok(true) | Err(_) => return,
+            Ok(false) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(false) => {
+                eprintln!("{name} did not exit within 5 s after SIGKILL; leaving it behind");
+                return;
+            }
+        }
     }
 }
 
