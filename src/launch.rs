@@ -30,204 +30,32 @@ const BRANCH_SLUG_LIMIT: usize = 32;
 const BRANCH_WORDS: usize = 4;
 /// How much of a model id goes into a compared agent's branch name.
 const AGENT_SLUG_LIMIT: usize = 24;
-/// Words that say nothing about a task: the grammar a request is wrapped in
-/// (determiners, pronouns, auxiliaries, prepositions, conjunctions), the
-/// politeness and hedges around it, and the contractions of both once their
-/// apostrophe is gone. What survives names the thing itself.
+/// Words that say nothing about a task, so that what survives names the
+/// thing itself: the grammar a request is wrapped in (determiners,
+/// pronouns, auxiliaries, prepositions, conjunctions), the politeness and
+/// hedges around it, and the contractions of both once their apostrophe is
+/// gone. Negations are not filler: see [`NEGATIONS`]. Space-separated so
+/// the lists stay dense.
 const FILLER: &[&str] = &[
     // determiners and pronouns
-    "a",
-    "an",
-    "the",
-    "this",
-    "that",
-    "these",
-    "those",
-    "it",
-    "its",
-    "i",
-    "me",
-    "my",
-    "we",
-    "us",
-    "our",
-    "you",
-    "your",
-    "they",
-    "them",
-    "their",
-    "he",
-    "him",
-    "his",
-    "she",
-    "her",
-    "there",
-    "here",
-    "what",
-    "which",
-    "who",
-    "whom",
-    "whose",
-    "something",
-    "anything",
-    "everything",
-    "one",
-    "ones",
-    "some",
-    "any",
-    "all",
-    "each",
-    "every",
+    "a an the this that these those it its i me my we us our you your they them their he him his she her there \
+     here what which who whom whose something anything everything one ones some any all each every",
     // auxiliaries and the verbs a request is framed with
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "being",
-    "am",
-    "do",
-    "does",
-    "did",
-    "done",
-    "have",
-    "has",
-    "had",
-    "having",
-    "will",
-    "would",
-    "shall",
-    "should",
-    "can",
-    "could",
-    "may",
-    "might",
-    "must",
-    "let",
-    "lets",
-    "get",
-    "gets",
-    "got",
-    "make",
-    "makes",
-    "made",
-    "want",
-    "wants",
-    "wanted",
-    "need",
-    "needs",
-    "needed",
-    "like",
-    "try",
-    "go",
-    "going",
-    "able",
-    "think",
-    "see",
-    "look",
-    "know",
-    "seems",
-    "seem",
+    "is are was were be been being am do does did done have has had having will would shall should can could may \
+     might must let lets get gets got make makes made want wants wanted need needs needed like try go going able \
+     think see look know seems seem",
     // politeness, hedges and openers
-    "please",
-    "thanks",
-    "thank",
-    "kindly",
-    "maybe",
-    "perhaps",
-    "just",
-    "really",
-    "very",
-    "actually",
-    "basically",
-    "also",
-    "still",
-    "currently",
-    "right",
-    "ok",
-    "okay",
-    "hi",
-    "hello",
-    "hey",
-    "so",
-    "now",
-    "then",
-    "well",
+    "please thanks thank kindly maybe perhaps just really very actually basically also still currently right ok \
+     okay hi hello hey so now then well",
     // prepositions, conjunctions, particles and question words
-    "to",
-    "of",
-    "in",
-    "on",
-    "for",
-    "and",
-    "or",
-    "with",
-    "at",
-    "by",
-    "from",
-    "as",
-    "into",
-    "onto",
-    "about",
-    "over",
-    "under",
-    "up",
-    "out",
-    "off",
-    "through",
-    "if",
-    "but",
-    "than",
-    "when",
-    "while",
-    "where",
-    "how",
-    "why",
-    "not",
-    "no",
-    "yes",
-    "too",
-    "yet",
-    "more",
-    "less",
-    "much",
-    "many",
-    "via",
-    "per",
-    "vs",
-    "etc",
-    // contractions without their apostrophe
-    "dont",
-    "doesnt",
-    "didnt",
-    "isnt",
-    "arent",
-    "wasnt",
-    "werent",
-    "cant",
-    "cannot",
-    "couldnt",
-    "wont",
-    "wouldnt",
-    "shouldnt",
-    "im",
-    "ive",
-    "id",
-    "ill",
-    "youre",
-    "youve",
-    "weve",
-    "were",
-    "theyre",
-    "thats",
-    "theres",
-    "heres",
-    "whats",
-    "hes",
-    "shes",
-    "itll",
+    "to of in on for and or with at by from as into onto about over under up out off through if but than when \
+     while where how why yes too yet more less much many via per vs etc",
+    // contractions without their apostrophe; the negative ones are negations
+    "im ive id ill youre youve weve were theyre thats theres heres whats hes shes itll",
 ];
+/// Negations reverse a task's meaning, so they stay in its name as `not`:
+/// "Don't delete backups" is `not-delete-backups`.
+const NEGATIONS: &str = "dont doesnt didnt isnt arent wasnt werent cant cannot couldnt wont wouldnt shouldnt never not";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspaceChoice {
@@ -351,7 +179,7 @@ pub fn branch_slug(task: &str) -> String {
         if words.is_empty() {
             continue;
         }
-        let content: Vec<&String> = words.iter().filter(|w| !FILLER.contains(&w.as_str())).collect();
+        let content: Vec<&String> = words.iter().filter(|w| !is_filler(w)).collect();
         if !content.is_empty() {
             return join_slug(content.into_iter().map(String::as_str));
         }
@@ -394,14 +222,18 @@ fn sentences(line: &str) -> Vec<&str> {
     out.into_iter().map(str::trim).filter(|s| !s.is_empty()).collect()
 }
 
+fn is_filler(word: &str) -> bool {
+    FILLER.iter().any(|group| group.split_whitespace().any(|w| w == word))
+}
+
 /// The lowercase ASCII words of a sentence, apostrophes removed so that
-/// "doesn't" is one word, not `doesn` and `t`.
+/// "doesn't" is one word, not `doesn` and `t`, and every negation as `not`.
 fn slug_words(sentence: &str) -> Vec<String> {
     let flat: String = sentence.chars().filter(|c| !matches!(c, '\'' | '’' | '`')).collect();
     flat.to_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
-        .map(str::to_string)
+        .map(|w| if NEGATIONS.split_whitespace().any(|n| n == w) { "not".to_string() } else { w.to_string() })
         .collect()
 }
 

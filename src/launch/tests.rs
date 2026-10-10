@@ -114,11 +114,19 @@ fn branch_names_keep_the_content_words_of_the_first_sentence() {
         "composer-remember-last-model"
     );
     assert_eq!(branch_name("I'd like to be able to archive threads with `x`.", &[], ""), "archive-threads-x");
-    assert_eq!(branch_name("It doesn't work when I paste an image", &[], ""), "work-paste-image");
+    assert_eq!(branch_name("It doesn't work when I paste an image", &[], ""), "not-work-paste-image");
     assert_eq!(
         branch_name("Go through codex, opencode, claude - check how they handle this.", &[], ""),
         "codex-opencode-claude"
     );
+}
+
+#[test]
+fn branch_names_keep_negations() {
+    assert_eq!(branch_name("Do not delete backups", &[], ""), "not-delete-backups");
+    assert_eq!(branch_name("Don't delete backups", &[], ""), "not-delete-backups", "contractions count");
+    assert_eq!(branch_name("Never retry a failed launch", &[], ""), "not-retry-failed-launch");
+    assert_eq!(branch_name("No auth required", &[], ""), "no-auth-required");
 }
 
 #[test]
