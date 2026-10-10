@@ -31,6 +31,7 @@ fn request(task: &str, workspace: WorkspaceChoice) -> Request {
         thinking: None,
         task: task.into(),
         workspace,
+        comparison: None,
     }
 }
 
@@ -50,6 +51,44 @@ fn claude() -> Catalog {
 
 fn plan_for(request: &Request, settings: &Effective, catalog: Option<&Catalog>) -> Result<Plan, String> {
     plan(request, settings, catalog, "0123456789abcdef".into(), UNIX_EPOCH)
+}
+
+#[test]
+fn two_launches_in_the_same_second_get_different_agent_names() {
+    let request = request("Fix login", WorkspaceChoice::NewWorktree { branch: None });
+    let a = plan(&request, &settings(), None, "0000000100000001".into(), UNIX_EPOCH).unwrap();
+    let b = plan(&request, &settings(), None, "0000000100000002".into(), UNIX_EPOCH).unwrap();
+    assert_ne!(a.record.agent_name, b.record.agent_name);
+    assert_eq!(short_id("short"), "short");
+}
+
+#[test]
+fn compared_agents_get_short_telling_branch_suffixes() {
+    assert_eq!(agent_slug("claude", None), "claude");
+    assert_eq!(agent_slug("claude", Some("claude-opus-5-5")), "claude-opus-5-5", "the harness is not repeated");
+    assert_eq!(agent_slug("codex", Some("gpt-5")), "codex-gpt-5");
+    assert_eq!(agent_slug("pi", Some("openai-codex/gpt-6.1-sol")), "pi-openai-codex-gpt-6-1-sol");
+    assert_eq!(agent_slug("pi", Some(&"m".repeat(40))).len(), "pi-".len() + 24, "long ids are cut");
+    assert_eq!(agent_slug("Claude Code", Some("  ")), "claude-code", "a blank model is no model");
+    assert_eq!(agent_slug("", None), "agent");
+    assert_eq!(unique_branch("fix", &["fix", "fix-2"]), "fix-3");
+    assert_eq!(unique_branch("fix", &[]), "fix");
+}
+
+#[test]
+fn a_plan_keeps_the_agents_place_in_a_comparison() {
+    let mut compared = request("Fix login", WorkspaceChoice::NewWorktree { branch: Some("fix-login-claude".into()) });
+    compared.comparison = Some(Comparison { index: 1, total: 3 });
+    let plan = plan_for(&compared, &settings(), Some(&claude())).unwrap();
+    assert_eq!(plan.record.comparison, Some(Comparison { index: 1, total: 3 }));
+    assert_eq!(plan.record.branch, "fix-login-claude");
+    let json = serde_json::to_string(&plan.record).unwrap();
+    assert!(json.contains("\"comparison\":{\"index\":1,\"total\":3}"), "{json}");
+    let single =
+        plan_for(&request("Fix login", WorkspaceChoice::NewWorktree { branch: None }), &settings(), None).unwrap();
+    assert!(!serde_json::to_string(&single.record).unwrap().contains("comparison"), "absent for a single agent");
+    let old: Record = serde_json::from_str(&serde_json::to_string(&single.record).unwrap()).unwrap();
+    assert_eq!(old.comparison, None, "journals from before comparisons still read");
 }
 
 #[test]
@@ -96,7 +135,7 @@ fn a_new_worktree_gets_a_branch_from_the_task() {
     assert_eq!(plan.record.branch, "fix-login-loop");
     assert_eq!(plan.record.cwd, "");
     assert_eq!(plan.record.stage, Stage::Creating);
-    assert_eq!(plan.record.agent_name, "t-fix-login-loop-01234567");
+    assert_eq!(plan.record.agent_name, "t-fix-login-loop-4567cdef");
     assert_eq!(plan.record.title, "Fix login loop");
 }
 
@@ -311,7 +350,7 @@ fn a_worktree_launch_runs_every_step_in_order_and_journals_each() {
         [
             "worktree create --cwd /w/cockpit --branch fix-login-loop --label cockpit --no-focus",
             "tab rename w5:t1 Fix login loop",
-            "agent start t-fix-login-loop-01234567 --kind claude --pane w5:p1 --timeout 45000 -- --effort high",
+            "agent start t-fix-login-loop-4567cdef --kind claude --pane w5:p1 --timeout 45000 -- --effort high",
             "pane report-metadata w5:p1 --source herdr-inbox --display-agent Claude --token thread=Fix login loop",
             "agent prompt w5:p1 Fix login loop --wait --until working --until blocked --timeout 15000",
         ]

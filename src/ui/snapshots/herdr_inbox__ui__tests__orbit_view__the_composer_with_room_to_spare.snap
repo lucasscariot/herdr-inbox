@@ -19,12 +19,13 @@ expression: "text(&render(&app, at(7)))"
  WORKING  1                      │    Model      Default                                     F4  ›
 ▎api                   ◐ working │    Thinking   No levels reported
 ▎Add invoice export              │    Workspace  New worktree                                F9  ›
-▎◆ Codex · ⎇ main                │
-                                 │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
- IDLE  1                         │
+▎◆ Codex · ⎇ main                │    Compare    Off · one agent                            F12  ›
+                                 │
+ IDLE  1                         │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
 ▎scratch                  ○ idle │
 ▎New Pi thread                   │
 ▎π Pi                            │
+                                 │
                                  │
                                  │
                                  │                      ⣤⠤⠤⢤⣀⣀ ⡀
@@ -33,7 +34,6 @@ expression: "text(&render(&app, at(7)))"
                                  │                           ⠈⠙⠲⠤⣟⣟⠟⠁⠁  ⠉⠒⢦⣀
                                  │                                ⠉⠑⠲⠤⣤⣄   ⠈⢳⣶
                                  │                                    ⠉⠁⠉⠉⠒⠒⠒⠚
-                                 │
                                  │
                                  │
                                  │

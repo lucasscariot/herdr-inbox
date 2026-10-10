@@ -1101,6 +1101,95 @@ mod composer_flow {
     }
 
     #[test]
+    fn comparing_sends_the_task_to_every_agent_in_its_own_worktree_then_resets() {
+        let mut app = composing();
+        type_text(&mut app, "Fix login");
+        app.update(press(KeyCode::F(12)), at(2));
+        let picker = app.composer.picker.clone().expect("the compare picker");
+        assert_eq!(picker.field, Field::Compare);
+        let choices = app.composer.choices_with_actions(&app.composer_context(), Field::Compare, "");
+        let codex = choices.iter().position(|c| c.label == "Codex").expect("Codex is installed here");
+        for _ in 0..codex {
+            app.update(press(KeyCode::Down), at(2));
+        }
+        app.update(press(KeyCode::Enter), at(2));
+        assert!(app.composer.picker.is_none(), "the picker closes after a pick");
+        assert_eq!(app.composer.value(&app.composer_context(), Field::Compare), "2 agents · also Codex");
+
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        let launches: Vec<&Record> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Launch { machine, plan } if machine == LOCAL => Some(&plan.record),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(launches.len(), 2, "{effects:?}");
+        assert_eq!((launches[0].harness.as_str(), launches[0].branch.as_str()), ("claude", "fix-login-claude"));
+        assert_eq!((launches[1].harness.as_str(), launches[1].branch.as_str()), ("codex", "fix-login-codex"));
+        assert_ne!(launches[0].id, launches[1].id);
+        assert_eq!(launches[0].agent_name[..2], *"t-");
+        assert_ne!(launches[0].agent_name, launches[1].agent_name, "Herdr agent names stay unique");
+        assert_eq!(launches[0].task, launches[1].task);
+        assert_eq!(launches[0].workspace, "worktree");
+        assert_eq!(launches[1].workspace, "worktree");
+        assert_eq!(
+            effects.iter().filter(|e| matches!(e, Effect::SaveHistory(_))).count(),
+            1,
+            "the task joins the history once"
+        );
+        assert_eq!(app.launches.len(), 2);
+        assert_eq!(app.launches[0].harness, "Claude");
+        assert_eq!(app.launches[1].harness, "Codex");
+        assert!(!app.composer.is_comparing(), "a comparison is used once");
+        assert_eq!(app.composer.task.text(), "");
+    }
+
+    #[test]
+    fn a_comparison_with_one_bad_agent_launches_nothing() {
+        let mut app = composing();
+        type_text(&mut app, "Fix login");
+        app.composer.compare.push(crate::app::Contender {
+            harness: "codex".into(),
+            model: None,
+            thinking: Some("ultra".into()),
+        });
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Launch { .. })), "{effects:?}");
+        assert!(app.launches.is_empty());
+        assert_eq!(app.composer.error.as_deref(), Some("codex does not support thinking level ultra"));
+        assert_eq!(app.composer.task.text(), "Fix login", "the task stays to fix the choice");
+        assert!(app.composer.is_comparing());
+    }
+
+    #[test]
+    fn only_the_composers_own_agent_is_remembered_from_a_comparison() {
+        let mut app = composing();
+        type_text(&mut app, "Fix login");
+        app.composer.compare.push(crate::app::Contender { harness: "codex".into(), model: None, thinking: None });
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        let records: Vec<Record> = effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Launch { plan, .. } => Some(plan.record.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut second = records[1].clone();
+        second.stage = Stage::Submitted;
+        let effects =
+            app.update(Input::LaunchFinished { id: second.id.clone(), result: Ok(Outcome::Sent(second)) }, at(7));
+        assert!(effects.is_empty(), "the Codex run is the challenger, not the next default");
+        assert_eq!(app.launches[1].state, LaunchState::Sent { unverified: false });
+        let mut first = records[0].clone();
+        first.stage = Stage::Submitted;
+        let effects =
+            app.update(Input::LaunchFinished { id: first.id.clone(), result: Ok(Outcome::Sent(first)) }, at(8));
+        assert!(matches!(&effects[..], [Effect::Remember(r)] if r.harness == "claude"));
+        assert_eq!(app.preferences.project("cockpit").harness.as_deref(), Some("claude"));
+    }
+
+    #[test]
     fn ctrl_s_sends_and_keeps_the_task_for_another_launch() {
         let mut app = composing();
         type_text(&mut app, "Same task twice");
@@ -1319,6 +1408,7 @@ mod composer_flow {
             unverified: false,
             failed_stage: None,
             error: None,
+            comparison: None,
         };
         let effects = app.update(Input::Journals(vec![record]), at(1));
         assert!(matches!(&effects[..], [Effect::Resume { .. }]), "w3:p1 is idle already");
@@ -1428,6 +1518,7 @@ mod conveniences {
             unverified: false,
             failed_stage: None,
             error: Some("expected claude, detected bash\nfull log".into()),
+            comparison: None,
         }
     }
 

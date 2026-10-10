@@ -28,7 +28,7 @@ public interfaces.
 | `config` | `config.toml` (or the legacy plugin's `config.json`): roots, depth, branch prefix, harness arguments and executables, extra models, per-machine overrides. |
 | `state` | Remembered choices, cached inventories and launch journals under `$XDG_STATE_HOME/herdr-inbox`, written atomically and privately. |
 | `discovery` | An embedded Python probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs. Codex's cache supplies per-model reasoning levels, with `CODEX_HOME` respected. Models are cached 15 minutes; a capability revision expires older inventories once. |
-| `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. |
+| `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. A comparison is one plan per agent, each with its own worktree, planned together before any runs. |
 | `editor`, `fuzzy` | The composer's text box, cell-to-cursor placement using the same Unicode-aware wrapping as drawing, and its pickers' ranking. Model pickers match labels and ids. |
 | `images` | Pasted images: `[Image #N]` placeholders in the editor, their paths in the sent text, and the split that pastes each image on its own so agents attach it. Pure. |
 | `clipboard` | Reads the clipboard for `Ctrl+V` (`wl-paste`, `xclip`, `osascript`) and saves an image privately under the cache directory. |
@@ -120,6 +120,14 @@ assert the compiled version separately from the version-independent layout.
   selected discussion without moving keyboard focus or marking it seen, so
   ready threads stay in place while browsing. Focusing the terminal marks the
   thread seen.
+- **Compared agents never share files.** A task sent to several agents
+  (off by default, `Compare` in the composer) is one independent launch per
+  agent, always into a new worktree whose branch ends with that agent's
+  harness and model. The composer plans every launch first, so one bad choice
+  starts nothing; the journals carry the agent's place in the comparison, and
+  only the first agent, the composer's own choice, updates the remembered
+  defaults. Agent names mix the launch's second and its counter, so two
+  launches in one send never collide.
 - **Launches are never replayed blindly.** The journal records each stage. A
   prompt Herdr accepted without seeing a reaction is marked *unverified*,
   never sent twice. An agent stopped at a startup dialog keeps its task; once

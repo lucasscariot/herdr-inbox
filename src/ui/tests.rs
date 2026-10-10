@@ -734,6 +734,7 @@ mod conveniences {
             unverified,
             failed_stage: None,
             error: Some("expected claude, detected bash".into()),
+            comparison: None,
         }
     }
 

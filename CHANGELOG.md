@@ -27,6 +27,11 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Added
 
+- Compare agents from the composer (`F12`, off by default): the same task
+  goes to two or three agents at once, each in its own new worktree whose
+  branch ends with the agent's harness and model. One bad choice launches
+  nothing, the comparison resets after sending, and only the first agent's
+  choices are remembered.
 - Clickable composer text, fields, picker choices and send action, with mouse
   wheel navigation in pickers. The input stays near the top of a tall window.
 - Coloured harness glyphs for Claude Code, Codex, Pi and OpenCode, readable
