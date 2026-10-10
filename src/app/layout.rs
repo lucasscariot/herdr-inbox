@@ -7,10 +7,16 @@ use crate::threads::{Group, Thread};
 
 /// Lines a thread takes in the sidebar, plus one blank line after it.
 pub const THREAD_LINES: u16 = 3;
-/// Lines above the list: title, summary, New thread, search.
-pub const HEADER_LINES: u16 = 4;
-/// The header row holding the New thread button.
-pub const NEW_BUTTON_ROW: u16 = 2;
+/// The sidebar header, in three bands divided by rules: the wordmark and the
+/// inbox's stats, then the actions (New thread and the filter), then the list.
+pub const TITLE_ROW: u16 = 0;
+pub const STATS_ROW: u16 = 1;
+pub const STATS_RULE_ROW: u16 = 2;
+pub const NEW_BUTTON_ROW: u16 = 3;
+pub const SEARCH_ROW: u16 = 4;
+pub const SEARCH_RULE_ROW: u16 = 5;
+/// Lines above the list.
+pub const HEADER_LINES: u16 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
@@ -78,9 +84,9 @@ impl Layout {
         let body = height.saturating_sub(1);
         let sidebar_width = sidebar_width(width);
         self.sidebar = Rect::new(0, 0, sidebar_width, body);
-        self.new_button =
-            if body > NEW_BUTTON_ROW { Rect::new(0, NEW_BUTTON_ROW, sidebar_width, 1) } else { Rect::default() };
-        self.search = if body > 3 { Rect::new(0, 3, sidebar_width, 1) } else { Rect::default() };
+        let row = |y: u16| if body > y { Rect::new(0, y, sidebar_width, 1) } else { Rect::default() };
+        self.new_button = row(NEW_BUTTON_ROW);
+        self.search = row(SEARCH_ROW);
         self.list = Rect::new(0, HEADER_LINES.min(body), sidebar_width, body.saturating_sub(HEADER_LINES));
         // One column separates the sidebar from the terminal.
         let terminal_x = (sidebar_width + 1).min(width);
@@ -234,8 +240,9 @@ mod tests {
     fn geometry_splits_sidebar_separator_terminal_and_bar() {
         let layout = Layout::new(120, 40);
         assert_eq!(layout.sidebar, Rect::new(0, 0, 40, 39));
-        assert_eq!(layout.list, Rect::new(0, 4, 40, 35));
-        assert_eq!(layout.new_button, Rect::new(0, 2, 40, 1));
+        assert_eq!(layout.list, Rect::new(0, 6, 40, 33));
+        assert_eq!(layout.new_button, Rect::new(0, 3, 40, 1));
+        assert_eq!(layout.search, Rect::new(0, 4, 40, 1));
         assert_eq!(layout.terminal, Rect::new(41, 0, 79, 39));
         assert_eq!(layout.bar, Rect::new(0, 39, 120, 1));
         assert_eq!(layout.terminal_size(), (79, 39));
@@ -316,7 +323,7 @@ mod tests {
         let threads: Vec<Thread> = (0..10).map(|i| thread(&format!("t{i}"), AgentStatus::Idle)).collect();
         let threads = sorted(threads);
         // 1 heading + 10 threads * 4 lines - 1 trailing blank = 40 rows; 11 visible.
-        let mut layout = Layout::new(100, 16);
+        let mut layout = Layout::new(100, 18);
         assert_eq!(layout.list.height, 11);
         layout.update(&threads, Some(&threads[0].id));
         assert_eq!(layout.offset, 0);
@@ -332,10 +339,10 @@ mod tests {
 
     #[test]
     fn a_heading_does_not_push_the_selected_threads_last_line_off_screen() {
-        let mut layout = Layout::new(100, 9);
+        let mut layout = Layout::new(100, 11);
         layout.update(&[thread("a", AgentStatus::Working)], Some("a"));
         assert_eq!(layout.offset, 0);
-        layout.resize(100, 8);
+        layout.resize(100, 10);
         layout.update(&[thread("a", AgentStatus::Working)], Some("a"));
         assert_eq!(layout.offset, 1);
         let last = layout.offset + layout.list.height as usize - 1;
@@ -345,7 +352,7 @@ mod tests {
     #[test]
     fn manual_scrolling_is_clamped() {
         let threads = sorted((0..10).map(|i| thread(&format!("t{i}"), AgentStatus::Idle)).collect());
-        let mut layout = Layout::new(100, 16);
+        let mut layout = Layout::new(100, 18);
         layout.update(&threads, None);
         layout.scroll(-5);
         assert_eq!(layout.offset, 0);

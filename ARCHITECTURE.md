@@ -107,6 +107,10 @@ assert the compiled version separately from the version-independent layout.
 - **Wheel scrolling is independent of selection.** Updates and ticks keep the
   manual sidebar offset. Keyboard navigation resumes following the selected
   thread and keeps all three lines visible. The divider shows the scroll thumb.
+- **The sidebar header has three bands.** The wordmark and stats (each
+  group's count, before the filter, so the filter never hides how much is
+  waiting), then the actions (New thread and the filter field), then the list,
+  separated by hairline rules. `app::layout` names each header row.
 - **Thinking belongs to the selected model.** Catalogs with per-model levels
   constrain both the picker and launch validation; changing models clears an
   incompatible level. Older catalogs keep their harness-wide levels. Codex
