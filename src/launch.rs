@@ -246,9 +246,9 @@ fn is_filler(word: &str) -> bool {
 
 /// The words that name the task: everything but filler, plus a particle
 /// that completes the verb before it. A kept word is a verb when it leads
-/// the sentence (past any negation) or follows an auxiliary, a negation or
-/// "to": "do not sign out" keeps `not-sign-out`, "users cannot sign in"
-/// keeps `users-not-sign-in`, "the loop on mobile" drops its preposition.
+/// the sentence (past any negation) or sits in [`verb_position`]: "do not
+/// sign out" keeps `not-sign-out`, "users cannot sign in" keeps
+/// `users-not-sign-in`, "the loop on mobile" drops its preposition.
 fn content_words(words: &[String]) -> Vec<&str> {
     let mut content: Vec<&str> = Vec::new();
     let mut after_verb = false;
@@ -259,17 +259,24 @@ fn content_words(words: &[String]) -> Vec<&str> {
             continue;
         }
         let leads = content.iter().all(|w| *w == "not");
-        let after_marker = i > 0 && marks_verb(&words[i - 1]);
+        let after_marker = verb_position(words, i);
         after_verb = !phrasal && word != "not" && (leads || after_marker);
         content.push(word);
     }
     content
 }
 
-/// Whether the word after this one is a verb: "to log in", "cannot sign
-/// out", "doesn't start up".
-fn marks_verb(word: &str) -> bool {
-    word == "not" || word == "to" || AUXILIARIES.split_whitespace().any(|w| w == word)
+/// Whether the word at `i` is a verb, going by what precedes it: an
+/// auxiliary or a negation ("cannot sign out", "doesn't start up"), or "to"
+/// after one of those ("want to log in"). A bare "to" is as often a
+/// preposition ("a shortcut to settings") and marks nothing.
+fn verb_position(words: &[String], i: usize) -> bool {
+    let marker = |w: &str| w == "not" || AUXILIARIES.split_whitespace().any(|a| a == w);
+    match i {
+        0 => false,
+        _ if words[i - 1] == "to" => i >= 2 && marker(&words[i - 2]),
+        _ => marker(&words[i - 1]),
+    }
 }
 
 /// The lowercase ASCII words of a sentence, apostrophes removed so that

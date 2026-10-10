@@ -149,6 +149,11 @@ fn branch_names_keep_the_direction_of_a_request() {
     assert_eq!(branch_name("I want to log in with a key", &[], ""), "log-in-key", "\"to\" marks a verb");
     assert_eq!(branch_name("Fix the crash on startup", &[], ""), "fix-crash-startup", "a noun's preposition goes");
     assert_eq!(
+        branch_name("Add a shortcut to settings in the sidebar", &[], ""),
+        "add-shortcut-settings-sidebar",
+        "so does \"to\" before a noun"
+    );
+    assert_eq!(
         branch_name("Fix the login loop on mobile", &[], ""),
         "fix-login-loop-mobile",
         "but is filler as a preposition"
