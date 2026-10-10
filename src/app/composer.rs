@@ -5,6 +5,8 @@
 //! level for that machine. A choice that stops being valid (the machine lost
 //! the project, the harness is not installed there) falls back to a valid one.
 
+pub mod layout;
+
 use std::collections::HashMap;
 
 use crate::config::{Config, WorkspaceMode};
@@ -217,9 +219,9 @@ impl Context<'_> {
 }
 
 impl Composer {
-    /// Fields worth showing: Thinking only when the harness takes a level.
+    /// Keyboard-reachable fields: Thinking only when the model reports levels.
     pub fn fields(&self, ctx: &Context) -> Vec<Field> {
-        let thinking = ctx.catalog(self).is_some_and(|c| !c.thinking.is_empty());
+        let thinking = ctx.catalog(self).is_some_and(|c| !c.thinking_levels(self.model.as_deref()).is_empty());
         Field::ORDER.into_iter().filter(|f| *f != Field::Thinking || thinking).collect()
     }
 
@@ -294,7 +296,7 @@ impl Composer {
             if self.model.is_some() && !catalog.selectable {
                 self.model = None;
             }
-            if self.thinking.as_ref().is_some_and(|t| !catalog.thinking.contains(t)) {
+            if self.thinking.as_ref().is_some_and(|t| !catalog.thinking_levels(self.model.as_deref()).contains(t)) {
                 self.thinking = None;
             }
         }
@@ -353,7 +355,10 @@ impl Composer {
                     self.settle(ctx);
                 }
             }
-            Pick::Model(model) => self.model = model,
+            Pick::Model(model) => {
+                self.model = model;
+                self.settle(ctx);
+            }
             Pick::Thinking(level) => self.thinking = level,
             Pick::Workspace(workspace) => self.workspace = workspace,
             Pick::Preset(name) => {
@@ -447,7 +452,19 @@ impl Composer {
     /// Every choice for a field, best match for the picker's query first.
     pub fn choices(&self, ctx: &Context, field: Field, query: &str) -> Vec<Choice> {
         let all = self.all_choices(ctx, field, query);
-        crate::fuzzy::rank(query, &all, |c| c.label.clone()).into_iter().cloned().collect()
+        crate::fuzzy::rank(query, &all, |c| {
+            if let Pick::Model(Some(id)) = &c.pick
+                && c.detail == *id
+                && let Some(id_score) = crate::fuzzy::score(query, id)
+                && crate::fuzzy::score(query, &c.label).is_none_or(|label_score| id_score < label_score)
+            {
+                return id.clone();
+            }
+            c.label.clone()
+        })
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     fn all_choices(&self, ctx: &Context, field: Field, query: &str) -> Vec<Choice> {
@@ -519,7 +536,7 @@ impl Composer {
                 let mut choices = vec![choice("Default thinking".into(), String::new(), Pick::Thinking(None))];
                 choices.extend(
                     catalog
-                        .thinking
+                        .thinking_levels(self.model.as_deref())
                         .iter()
                         .map(|level| choice(level.clone(), String::new(), Pick::Thinking(Some(level.clone())))),
                 );
@@ -680,7 +697,13 @@ impl Composer {
                 (None, Some(catalog)) if !catalog.default.is_empty() => format!("Default ({})", catalog.default),
                 (None, _) => "Default".into(),
             },
-            Field::Thinking => self.thinking.clone().unwrap_or_else(|| "Default".into()),
+            Field::Thinking => {
+                if !self.fields(ctx).contains(&Field::Thinking) {
+                    "No levels reported".into()
+                } else {
+                    self.thinking.clone().unwrap_or_else(|| "Default".into())
+                }
+            }
             Field::Preset => match self.matching_preset(ctx.presets) {
                 Some(preset) => preset.name.clone(),
                 None if ctx.presets.is_empty() => "None yet · Ctrl+D saves one".into(),

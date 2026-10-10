@@ -2,29 +2,29 @@
 source: src/ui/tests.rs
 expression: "text(&render(&app, at(1)))"
 ---
- herdr inbox                        │
+ herdr inbox                    1/4 │
  1 needs input · 1 ready            │  New thread                                                  esc close
   +  New thread                  n  │
-                                    │  What should we build?
+ / Filter threads                   │  What should we build?
  NEEDS INPUT  1                     │  ╭───────────────────────────────────────────────────────────────────╮
-▎cockpit                    ● input │  │ Fix the login redirect loop                                       │
-▎Fix the login redirect loop on mo… │  │                                                                   │
-▎⎇ fix-login-redirect · Claude      │  │                                                                   │
+▎▄ █ ▄ cockpit              ● input │  │ Fix the login redirect loop                                       │
+▎▄███▄ Fix the login redirect loop… │  │                                                                   │
+▎▀ █ ▀ Claude · ⎇ fix-login-redire… │  │                                                                   │
                                     │  ╰───────────────────────────────────────────────────────────────────╯
  READY  1                           │
-▎site                       ✓ ready │    Project    cockpit                                               F2
-▎Review navigation                  │    Machine    Local                                                 F6
-▎⎇ feat/a-very-long-branch-name-th… │    Preset     None yet · Ctrl+D saves one                           F7
-                                    │    Harness    Claude                                                F3
- WORKING  1                         │    Model      Default (opus)                                        F4
-▎api                      ◐ working │    Thinking   Default                                               F8
-▎Add invoice export                 │    Workspace  New worktree  ⎇ fix-login-redirect-loop               F9
-▎⎇ main · Codex                     │
+▎█▀▀▀█ site                 ✓ ready │    Project    cockpit                                            F2  ›
+▎█ ▀▄█ Review navigation            │    Machine    Local                                              F6  ›
+▎█▄▄▄█ OpenCode · ⎇ feat/a-very-lo… │    Preset     None yet · Ctrl+D saves one                        F7  ›
+                                    │    Harness    Claude                                             F3  ›
+ WORKING  1                         │    Model      Default (opus)                                     F4  ›
+▎▄▀▀▀▄ api                ◐ working │    Thinking   Default                                            F8  ›
+▎█▄█▀█ Add invoice export           │    Workspace  New worktree  ⎇ fix-login-redirect-loop            F9  ›
+▎▀▄▄▄▀ Codex · ⎇ main               │
                                     │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
  IDLE  1                            │
-▎scratch                     ○ idle │
-▎New Pi thread                      │
-▎Pi                                 │
+▎▄▄▄▄▄ scratch               ○ idle │
+▎ █ █  New Pi thread                │
+▎ █ █▄ Pi                           │
                                     │
                                     │
                                     │

@@ -109,6 +109,65 @@ fn ids(app: &App) -> Vec<&str> {
 }
 
 #[test]
+fn regression_the_sidebar_wheel_scroll_survives_updates() {
+    let mut app = App::new(100, 16, vec![]);
+    app.update(snapshot((0..20).map(|i| agent(&format!("w{i}:p1"), AgentStatus::Working, "Task")).collect()), at(0));
+    let y = app.layout.list.y + 1;
+    app.update(mouse(MouseEventKind::ScrollDown, 2, y), at(1));
+    assert_eq!(app.layout.offset, 3, "the wheel scroll must not snap back to the selected thread");
+    app.update(Input::Tick, at(2));
+    assert_eq!(app.layout.offset, 3);
+    app.update(press(KeyCode::Home), at(3));
+    assert_eq!(app.layout.offset, 0, "keyboard navigation brings the cursor back into view");
+}
+
+#[test]
+fn the_search_row_is_clickable_and_page_keys_navigate_threads() {
+    let mut app = App::new(100, 16, vec![]);
+    app.update(
+        snapshot((0..20).map(|i| agent(&format!("w{i}:p1"), AgentStatus::Working, &format!("Task {i}"))).collect()),
+        at(0),
+    );
+    app.update(press(KeyCode::PageDown), at(1));
+    assert_eq!(app.cursor_index(), Some(2));
+    app.update(press(KeyCode::PageUp), at(1));
+    assert_eq!(app.cursor_index(), Some(0));
+    let row = app.layout.search;
+    assert!(app.update(mouse(MouseEventKind::Down(MouseButton::Left), row.x + 2, row.y), at(1)).is_empty());
+    assert!(app.filtering);
+    app.update(Input::Paste("Task 19".into()), at(1));
+    assert_eq!(ids(&app), ["w19:p1"]);
+}
+
+#[test]
+fn an_open_modal_never_passes_mouse_clicks_to_an_agent_or_composer() {
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::F(10)), at(1));
+    let button = app.layout.new_button;
+    assert!(app.update(mouse(MouseEventKind::Down(MouseButton::Left), button.x + 2, button.y), at(1)).is_empty());
+    assert!(app.menu.is_some());
+    assert_eq!(app.focus, Focus::List);
+    app.update(press(KeyCode::Esc), at(1));
+    app.update(press(KeyCode::Char('j')), at(1));
+    app.update(press(KeyCode::Char('r')), at(1));
+    app.reply.as_mut().unwrap().editor.set("Keep this reply");
+    assert!(app.update(mouse(MouseEventKind::Down(MouseButton::Left), button.x + 2, button.y), at(1)).is_empty());
+    assert_eq!(app.reply.as_ref().unwrap().editor.text(), "Keep this reply");
+    assert_eq!(app.focus, Focus::List);
+}
+
+#[test]
+fn clicking_search_cancels_an_archive_confirmation() {
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::Char('x')), at(1));
+    assert!(app.confirm_archive.is_some());
+    let search = app.layout.search;
+    assert!(app.update(mouse(MouseEventKind::Down(MouseButton::Left), search.x + 2, search.y), at(1)).is_empty());
+    assert!(app.confirm_archive.is_none());
+    assert!(app.filtering);
+}
+
+#[test]
 fn the_first_snapshot_opens_the_most_urgent_thread_without_stealing_focus() {
     let (app, effects) = loaded();
     assert_eq!(ids(&app), ["w1:p1", "w2:p1", "w3:p1"]);
@@ -953,6 +1012,7 @@ mod composer_flow {
             harnesses: vec!["claude".into(), "codex".into()],
             models: BTreeMap::new(),
             models_at: 0,
+            models_revision: crate::discovery::MODELS_REVISION,
         }
     }
 
@@ -1318,6 +1378,7 @@ mod conveniences {
                 },
             )]),
             models_at: 0,
+            models_revision: crate::discovery::MODELS_REVISION,
         }
     }
 
@@ -1368,6 +1429,124 @@ mod conveniences {
             failed_stage: None,
             error: Some("expected claude, detected bash\nfull log".into()),
         }
+    }
+
+    fn geometry(app: &App) -> ComposerLayout {
+        ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap()
+    }
+
+    fn click(app: &mut App, x: u16, y: u16) -> Vec<Effect> {
+        app.update(mouse(MouseEventKind::Down(MouseButton::Left), x, y), at(1))
+    }
+
+    #[test]
+    fn clicking_fields_and_choices_uses_the_same_actions_as_the_keyboard() {
+        let mut app = composing(vec![], vec![]);
+        let row = geometry(&app).fields.into_iter().find(|(field, _)| *field == Field::Model).unwrap().1;
+        assert!(click(&mut app, row.x + 15, row.y).is_empty());
+        assert_eq!(app.composer.picker.as_ref().unwrap().field, Field::Model);
+        let popup = geometry(&app).picker.unwrap();
+        assert!(click(&mut app, popup.rows.x + 1, popup.rows.y + 1).is_empty());
+        assert_eq!(app.composer.model.as_deref(), Some("opus"));
+        assert!(app.composer.picker.is_none());
+        let task = geometry(&app).task_inner;
+        click(&mut app, task.x, task.y);
+        type_text(&mut app, "Fix it");
+        assert_eq!(app.composer.task.text(), "Fix it");
+        let send = geometry(&app).send;
+        let effects = click(&mut app, send.x + 2, send.y);
+        assert!(effects.iter().any(|e| matches!(e, Effect::Launch { .. })));
+        assert!(app.composer.task.is_blank());
+        assert_eq!(app.focus, Focus::Composer);
+    }
+
+    #[test]
+    fn a_scrolled_picker_maps_clicks_to_the_visible_choices() {
+        let mut app = composing(vec![], vec![]);
+        app.inventories.get_mut(LOCAL).unwrap().models.get_mut("claude").unwrap().choices =
+            (0..20).map(|i| ModelChoice { id: format!("model-{i}"), label: format!("Model {i}") }).collect();
+        app.update(press(KeyCode::F(4)), at(1));
+        for _ in 0..6 {
+            let popup = geometry(&app).picker.unwrap();
+            app.update(mouse(MouseEventKind::ScrollDown, popup.rows.x, popup.rows.y), at(1));
+        }
+        assert_eq!(app.composer.picker.as_ref().unwrap().selected, 18);
+        let popup = geometry(&app).picker.unwrap();
+        let index = popup.start + popup.rows.height as usize - 1;
+        let expected = app.composer.choices(&app.composer_context(), Field::Model, "")[index].pick.clone();
+        click(&mut app, popup.rows.x + 2, popup.rows.bottom() - 1);
+        assert_eq!(expected, Pick::Model(app.composer.model.clone()));
+    }
+
+    #[test]
+    fn disabled_choices_and_unsupported_thinking_ignore_clicks() {
+        let mut app = composing(vec![preset("Pi", "pi", "x", "")], vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        let popup = geometry(&app).picker.unwrap();
+        assert!(click(&mut app, popup.rows.x + 1, popup.rows.y).is_empty());
+        assert!(app.composer.picker.is_some());
+        app.composer.close_picker();
+        app.with_composer(|c, ctx| c.apply(ctx, Pick::Harness("codex".into())));
+        let row = geometry(&app).fields.into_iter().find(|(field, _)| *field == Field::Thinking).unwrap().1;
+        click(&mut app, row.x, row.y);
+        assert!(app.composer.picker.is_none());
+        app.update(press(KeyCode::F(8)), at(1));
+        assert!(app.composer.picker.is_none(), "F8 does not open an empty control");
+    }
+
+    #[test]
+    fn clicking_the_task_closes_a_picker_and_accounts_for_its_scrolled_text() {
+        let mut app = composing(vec![], vec![]);
+        let text = (0..12).map(|i| format!("row{i}\n")).collect::<String>();
+        app.composer.task.set(&text);
+        app.update(press(KeyCode::F(4)), at(1));
+        let layout = geometry(&app);
+        assert!(layout.task_scroll > 0);
+        let expected = text.find(&format!("row{}", layout.task_scroll)).unwrap() + 3;
+        click(&mut app, layout.task_inner.x + 3, layout.task_inner.y);
+        assert!(app.composer.picker.is_none());
+        assert_eq!(app.composer.field, Field::Task);
+        assert_eq!(app.composer.task.cursor(), expected);
+    }
+
+    #[test]
+    fn clicking_a_preset_save_runs_its_persistence_effect() {
+        let mut app = composing(vec![], vec![]);
+        app.composer.model = Some("opus".into());
+        ctrl(&mut app, 'd');
+        let popup = geometry(&app).picker.unwrap();
+        let effects = click(&mut app, popup.rows.x + 1, popup.rows.y);
+        assert_eq!(effects, vec![Effect::SavePresets(vec![preset("Claude · Opus", "claude", "opus", "")])]);
+    }
+
+    #[test]
+    fn codex_thinking_selection_reaches_the_launch_and_is_remembered() {
+        let mut app = composing(vec![], vec![]);
+        let catalog: Catalog = serde_json::from_value(serde_json::json!({
+            "selectable": true, "thinking_flag": "--config", "thinking": ["low", "high", "ultra"],
+            "thinking_by_model": {"gpt-test": ["low", "high", "ultra"]},
+            "choices": [{"id": "gpt-test", "label": "GPT test"}]
+        }))
+        .unwrap();
+        app.inventories.get_mut(LOCAL).unwrap().models.insert("codex".into(), catalog);
+        app.with_composer(|c, ctx| c.apply(ctx, Pick::Harness("codex".into())));
+        app.update(press(KeyCode::F(4)), at(1));
+        type_text(&mut app, "gpt-test");
+        app.update(press(KeyCode::Enter), at(1));
+        app.update(press(KeyCode::F(8)), at(1));
+        type_text(&mut app, "ultra");
+        app.update(press(KeyCode::Enter), at(1));
+        type_text(&mut app, "Fix it");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        let plan =
+            effects.iter().find_map(|e| if let Effect::Launch { plan, .. } = e { Some(plan) } else { None }).unwrap();
+        assert_eq!(plan.agent_args, ["--model", "gpt-test", "--config", "model_reasoning_effort=\"ultra\""]);
+        assert_eq!(plan.record.thinking, "ultra");
+        app.update(
+            Input::LaunchFinished { id: plan.record.id.clone(), result: Ok(Outcome::Sent(plan.record.clone())) },
+            at(2),
+        );
+        assert_eq!(app.preferences.project("cockpit").thinking[LOCAL]["codex"], "ultra");
     }
 
     #[test]
@@ -2489,6 +2668,7 @@ mod pasted_images {
             harnesses: vec!["claude".into()],
             models: BTreeMap::new(),
             models_at: 0,
+            models_revision: crate::discovery::MODELS_REVISION,
         };
         app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
         app

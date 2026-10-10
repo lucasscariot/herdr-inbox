@@ -183,6 +183,26 @@ fn strip_flag(args: Vec<String>, names: &[&str]) -> Vec<String> {
     kept
 }
 
+/// Removes only Codex's reasoning override, keeping unrelated config values.
+fn strip_codex_effort(args: Vec<String>) -> Vec<String> {
+    let is_effort = |value: &str| value.split_once('=').is_some_and(|(key, _)| key.trim() == "model_reasoning_effort");
+    let mut args = args.into_iter().peekable();
+    let mut kept = Vec::new();
+    while let Some(arg) = args.next() {
+        if matches!(arg.as_str(), "--config" | "-c") && args.peek().is_some_and(|value| is_effort(value)) {
+            args.next();
+            continue;
+        }
+        let attached =
+            arg.strip_prefix("--config=").or_else(|| arg.strip_prefix("-c=")).or_else(|| arg.strip_prefix("-c"));
+        if attached.is_some_and(is_effort) {
+            continue;
+        }
+        kept.push(arg);
+    }
+    kept
+}
+
 /// Validates a request and decides every argument, before anything changes.
 pub fn plan(
     request: &Request,
@@ -233,11 +253,20 @@ pub fn plan(
     let thinking = request.thinking.clone().filter(|t| !t.trim().is_empty());
     if let Some(level) = &thinking {
         let flag = catalog.thinking_flag.as_str();
-        if !matches!(flag, "--thinking" | "--effort") || !catalog.thinking.contains(level) {
+        let codex_config = request.harness == "codex" && flag == "--config";
+        if (!matches!(flag, "--thinking" | "--effort") && !codex_config)
+            || !catalog.thinking_levels(model.as_deref()).contains(level)
+        {
             return Err(format!("{} does not support thinking level {level}", request.harness));
         }
-        args = strip_flag(args, &[flag]);
-        args.extend([flag.to_string(), level.clone()]);
+        if codex_config {
+            args = strip_codex_effort(args);
+            let value = serde_json::to_string(level).map_err(|err| format!("invalid thinking level: {err}"))?;
+            args.extend(["--config".to_string(), format!("model_reasoning_effort={value}")]);
+        } else {
+            args = strip_flag(args, &[flag]);
+            args.extend([flag.to_string(), level.clone()]);
+        }
     }
     let title = task_title(&words);
     let slug: String = title

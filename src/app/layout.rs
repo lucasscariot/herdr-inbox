@@ -7,7 +7,7 @@ use crate::threads::{Group, Thread};
 
 /// Lines a thread takes in the sidebar, plus one blank line after it.
 pub const THREAD_LINES: u16 = 3;
-/// Lines above the list: title, summary, the New thread button, blank.
+/// Lines above the list: title, summary, New thread, search.
 pub const HEADER_LINES: u16 = 4;
 /// The header row holding the New thread button.
 pub const NEW_BUTTON_ROW: u16 = 2;
@@ -38,6 +38,8 @@ pub struct Layout {
     pub sidebar: Rect,
     /// The New thread button in the sidebar header.
     pub new_button: Rect,
+    /// The always-visible filter entry.
+    pub search: Rect,
     /// The sidebar's scrolling part, below its header.
     pub list: Rect,
     pub terminal: Rect,
@@ -47,6 +49,7 @@ pub struct Layout {
     /// Index of the first row shown in `list`.
     pub offset: usize,
     cursor_index: Option<usize>,
+    following_cursor: bool,
 }
 
 impl Layout {
@@ -56,12 +59,14 @@ impl Layout {
             height: 0,
             sidebar: Rect::default(),
             new_button: Rect::default(),
+            search: Rect::default(),
             list: Rect::default(),
             terminal: Rect::default(),
             bar: Rect::default(),
             rows: Vec::new(),
             offset: 0,
             cursor_index: None,
+            following_cursor: true,
         };
         layout.resize(width, height);
         layout
@@ -75,6 +80,7 @@ impl Layout {
         self.sidebar = Rect::new(0, 0, sidebar_width, body);
         self.new_button =
             if body > NEW_BUTTON_ROW { Rect::new(0, NEW_BUTTON_ROW, sidebar_width, 1) } else { Rect::default() };
+        self.search = if body > 3 { Rect::new(0, 3, sidebar_width, 1) } else { Rect::default() };
         self.list = Rect::new(0, HEADER_LINES.min(body), sidebar_width, body.saturating_sub(HEADER_LINES));
         // One column separates the sidebar from the terminal.
         let terminal_x = (sidebar_width + 1).min(width);
@@ -92,19 +98,21 @@ impl Layout {
         self.cursor_index
     }
 
-    /// Rebuilds the rows and scrolls just enough to keep the cursor's thread
-    /// fully visible.
+    /// Rebuilds rows, following the cursor only until the user scrolls manually.
     pub fn update(&mut self, threads: &[Thread], cursor: Option<&str>) {
         self.rows = rows(threads);
         self.cursor_index = cursor.and_then(|id| threads.iter().position(|t| t.id == id));
-        if let Some(index) = self.cursor_index {
-            let first = self.rows.iter().position(|row| row.kind == RowKind::Thread { index, line: 0 }).unwrap_or(0);
-            // Show the group heading with the first thread of a group.
-            let first = match first.checked_sub(1).map(|i| self.rows[i].kind) {
-                Some(RowKind::Heading { .. }) => first - 1,
-                _ => first,
+        if self.following_cursor
+            && let Some(index) = self.cursor_index
+        {
+            let thread_first =
+                self.rows.iter().position(|row| row.kind == RowKind::Thread { index, line: 0 }).unwrap_or(0);
+            // Include the heading without losing the thread's last line.
+            let first = match thread_first.checked_sub(1).map(|i| self.rows[i].kind) {
+                Some(RowKind::Heading { .. }) => thread_first - 1,
+                _ => thread_first,
             };
-            let last = first + THREAD_LINES as usize;
+            let last = thread_first + THREAD_LINES as usize;
             let visible = self.list.height as usize;
             if first < self.offset {
                 self.offset = first;
@@ -144,8 +152,14 @@ impl Layout {
         contains(self.new_button, x, y)
     }
 
-    /// Scrolls the list by `delta` rows, within bounds.
+    /// Keyboard navigation resumes following the selected thread.
+    pub fn follow_cursor(&mut self) {
+        self.following_cursor = true;
+    }
+
+    /// Scrolls the list by `delta` rows, within bounds, independently of focus.
     pub fn scroll(&mut self, delta: isize) {
+        self.following_cursor = false;
         self.offset = self.offset.saturating_add_signed(delta);
         self.clamp_offset();
     }
@@ -314,6 +328,18 @@ mod tests {
         assert_eq!(layout.offset, 9, "scrolling up aligns the thread's first line to the top");
         layout.update(&threads, Some(&threads[0].id));
         assert_eq!(layout.offset, 0, "the first thread brings its heading back");
+    }
+
+    #[test]
+    fn a_heading_does_not_push_the_selected_threads_last_line_off_screen() {
+        let mut layout = Layout::new(100, 9);
+        layout.update(&[thread("a", AgentStatus::Working)], Some("a"));
+        assert_eq!(layout.offset, 0);
+        layout.resize(100, 8);
+        layout.update(&[thread("a", AgentStatus::Working)], Some("a"));
+        assert_eq!(layout.offset, 1);
+        let last = layout.offset + layout.list.height as usize - 1;
+        assert_eq!(layout.rows[last].kind, RowKind::Thread { index: 0, line: 2 });
     }
 
     #[test]

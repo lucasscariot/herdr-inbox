@@ -78,8 +78,12 @@ fn loaded(width: u16, height: u16) -> App {
 }
 
 fn render(app: &App, now: SystemTime) -> Terminal<TestBackend> {
+    render_with_palette(app, now, &Palette::default())
+}
+
+fn render_with_palette(app: &App, now: SystemTime, palette: &Palette) -> Terminal<TestBackend> {
     let mut terminal = Terminal::new(TestBackend::new(app.layout.width, app.layout.height)).unwrap();
-    terminal.draw(|frame| draw(frame, app, &Palette::default(), now)).unwrap();
+    terminal.draw(|frame| draw(frame, app, palette, now)).unwrap();
     terminal
 }
 
@@ -195,8 +199,8 @@ fn with_the_agent_focused_the_open_thread_is_highlighted() {
 fn long_titles_and_branches_are_clipped_with_an_ellipsis() {
     let app = loaded(70, 24);
     let screen = text(&render(&app, at(0)));
-    assert!(screen.contains("▎Fix the login redirect lo… │"), "{screen}");
-    assert!(screen.contains("▎⎇ feat/a-very-long-branch… │"), "{screen}");
+    assert!(screen.lines().any(|line| line.contains("Fix the login") && line.ends_with("… │")), "{screen}");
+    assert!(screen.lines().any(|line| line.contains("OpenCode · ⎇ feat/") && line.ends_with("… │")), "{screen}");
 }
 
 #[test]
@@ -290,7 +294,7 @@ fn archiving_asks_on_the_thread_itself() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Char('x'));
     let screen = text(&render(&app, at(1)));
-    assert!(screen.contains("Archive this thread? y / n"), "{screen}");
+    assert!(screen.contains("Archive this thread?") && screen.contains("y/n"), "{screen}");
     assert!(screen.contains("y archive  n keep"), "{screen}");
 }
 
@@ -350,7 +354,29 @@ fn centred_messages_wrap_instead_of_being_cut() {
     let screen = text(&render(&app, at(0)));
     let right: Vec<&str> = screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").trim()).collect();
     let message = right.iter().filter(|l| !l.is_empty()).copied().collect::<Vec<_>>().join(" ");
-    assert_eq!(message, "Agent threads you start in Herdr appear on the left.", "{screen}");
+    assert_eq!(
+        message, "Start a thread with n or + New thread. Agents already running in Herdr appear on the left.",
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_divider_shows_a_scroll_thumb_and_clickable_filter_affordance() {
+    let mut app = App::new(100, 16, vec![]);
+    app.update(
+        snapshot(
+            LOCAL,
+            (0..20).map(|i| agent(&format!("w{i}:p1"), AgentStatus::Working, "Task", "/w/api", "codex")).collect(),
+        ),
+        at(0),
+    );
+    let terminal = render(&app, at(0));
+    let x = app.layout.sidebar.right();
+    assert_eq!(terminal.backend().buffer()[(x, app.layout.list.y)].symbol(), "▐");
+    assert!(text(&terminal).contains("/ Filter threads"));
+    app.layout.scroll(1000);
+    let terminal = render(&app, at(0));
+    assert_eq!(terminal.backend().buffer()[(x, app.layout.list.bottom() - 1)].symbol(), "▐");
 }
 
 #[test]
@@ -401,7 +427,7 @@ fn fleet(width: u16, height: u16) -> App {
 fn remote_threads_name_their_machine() {
     let app = fleet(110, 16);
     let screen = text(&render(&app, at(0)));
-    assert!(screen.contains("⎇ main · Mac Studio · Codex"), "{screen}");
+    assert!(screen.contains("Codex · Mac Studio · ⎇ main"), "{screen}");
 }
 
 #[test]
@@ -477,12 +503,43 @@ mod composer {
                 },
             )]),
             models_at: 0,
+            models_revision: crate::discovery::MODELS_REVISION,
         };
         app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
         for c in "Fix the login redirect loop".chars() {
             key(&mut app, KeyCode::Char(c));
         }
         app
+    }
+
+    #[test]
+    fn regression_clicking_the_task_restores_focus_and_places_the_cursor() {
+        let mut app = composing(110, 30);
+        key(&mut app, KeyCode::Tab);
+        let terminal = render(&app, at(1));
+        let (x, y) = find(&terminal, "Fix the login redirect loop");
+        let effects = app.update(
+            Input::Mouse(ratatui::crossterm::event::MouseEvent {
+                kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+                column: x + 4,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            at(1),
+        );
+        assert!(effects.is_empty(), "a composer click never reaches an agent");
+        assert_eq!(app.composer.field, crate::app::Field::Task);
+        assert_eq!(app.composer.task.cursor(), 4);
+        key(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.composer.task.text(), "Fix Xthe login redirect loop");
+    }
+
+    #[test]
+    fn regression_the_composer_uses_the_panel_background() {
+        let app = composing(110, 30);
+        let terminal = render(&app, at(1));
+        let (x, y) = find(&terminal, "╭");
+        assert_eq!(terminal.backend().buffer()[(x, y)].bg, Palette::default().panel_bg);
     }
 
     #[test]
@@ -549,6 +606,63 @@ mod composer {
         assert_eq!(blurred.fg, palette.surface1);
         assert!(blurred.modifier.contains(Modifier::DIM), "without focus the frame is a hairline");
         assert_eq!(blurred.symbol(), "╭");
+    }
+
+    #[test]
+    fn popup_borders_titles_and_backgrounds_follow_dark_light_and_custom_themes() {
+        for config in [
+            "[theme]\nname = \"catppuccin\"",
+            "[theme]\nname = \"catppuccin-latte\"",
+            "[theme]\nname = \"terminal\"",
+            "[theme.custom]\naccent = \"#123456\"\nsubtext0 = \"#abcdef\"\npanel_bg = \"#020304\"\nsurface0 = \"#050607\"",
+        ] {
+            let palette = crate::theme::from_herdr_config(config);
+            let mut app = composing(110, 30);
+            key(&mut app, KeyCode::F(4));
+            let layout =
+                crate::app::ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+            let popup = layout.picker.unwrap().popup;
+            let terminal = render_with_palette(&app, at(1), &palette);
+            let buffer = terminal.backend().buffer();
+            for (x, y) in [
+                (popup.x, popup.y),
+                (popup.right() - 1, popup.y),
+                (popup.x, popup.bottom() - 1),
+                (popup.right() - 1, popup.bottom() - 1),
+            ] {
+                assert_eq!(buffer[(x, y)].fg, palette.accent);
+                assert_eq!(buffer[(x, y)].bg, palette.surface0);
+                assert!(buffer[(x, y)].modifier.contains(Modifier::DIM));
+            }
+            assert_eq!(
+                buffer[(popup.x + 2, popup.y)].fg,
+                palette.subtext0,
+                "titles must not use terminal-default white"
+            );
+            assert_eq!(buffer[(layout.task_box.x, layout.task_box.y)].bg, palette.panel_bg);
+        }
+    }
+
+    #[test]
+    fn a_long_task_does_not_hide_workspace_or_send_in_a_standard_terminal() {
+        let mut app = composing(100, 24);
+        app.composer.task.set(&"A long task with several lines\n".repeat(12));
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("Workspace"), "{screen}");
+        assert!(screen.contains("↵ send"), "{screen}");
+    }
+
+    #[test]
+    fn long_picker_queries_keep_the_cursor_inside_the_popup() {
+        let mut app = composing(70, 24);
+        key(&mut app, KeyCode::F(4));
+        app.update(Input::Paste("a-model-id-that-is-much-longer-than-the-popup".into()), at(1));
+        let mut terminal = render(&app, at(1));
+        let cursor = terminal.get_cursor_position().unwrap();
+        let layout =
+            crate::app::ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        let query = layout.picker.unwrap().query;
+        assert!(cursor.x < query.right() && cursor.x >= query.x);
     }
 
     #[test]
@@ -636,9 +750,12 @@ mod conveniences {
         );
         let terminal = render(&app, at(1));
         let screen = text(&terminal);
-        assert!(screen.contains("▎failed: expected claude, detected… │"), "{screen}");
-        assert!(screen.contains("▎waiting: answer its prompt"), "{screen}");
-        assert!(screen.contains("▎sent, not confirmed yet"), "{screen}");
+        assert!(
+            screen.lines().any(|line| line.contains("failed: expected claude") && line.ends_with("… │")),
+            "{screen}"
+        );
+        assert!(screen.contains("waiting: answer its prompt"), "{screen}");
+        assert!(screen.contains("sent, not confirmed yet"), "{screen}");
         assert_eq!(terminal.backend().buffer()[find(&terminal, "failed: expected")].fg, Palette::default().red);
         assert_eq!(terminal.backend().buffer()[find(&terminal, "waiting: answer")].fg, Palette::default().yellow);
     }
@@ -669,7 +786,7 @@ mod conveniences {
             key(&mut app, KeyCode::Char(c));
         }
         let screen = text(&render(&app, at(1)));
-        assert!(screen.lines().nth(1).unwrap().contains("/ invoice▏  1 shown"), "{screen}");
+        assert!(screen.lines().nth(3).unwrap().contains("/ invoice▏  1 shown"), "{screen}");
         assert!(screen.contains("Add invoice export"));
         assert!(!screen.contains("Review navigation"), "{screen}");
         assert!(screen.lines().last().unwrap().contains("FILTER"));
@@ -882,7 +999,7 @@ mod orbit_view {
     }
 
     #[test]
-    fn the_composer_draws_the_orbit_above_the_task_in_theme_colours() {
+    fn the_composer_draws_the_orbit_below_the_controls_in_theme_colours() {
         let mut app = loaded(110, 50);
         key(&mut app, KeyCode::Char('n'));
         let terminal = render(&app, at(1));
@@ -893,12 +1010,10 @@ mod orbit_view {
         let title = screen.lines().position(|l| l.contains("New thread  ")).expect("title");
         let prompt = screen.lines().position(|l| l.contains("What should we build?")).expect("prompt");
         let rows: Vec<usize> = cells.iter().map(|c| c.1 as usize).collect();
-        assert!(
-            rows.iter().all(|&y| y > title + 1 && y < prompt - 1),
-            "between the title and the task, with a gap:\n{screen}"
-        );
+        let controls = screen.lines().position(|l| l.contains("⌃T dictate")).expect("controls");
+        assert!(rows.iter().all(|&y| y > controls + 1), "decoration stays below the controls:\n{screen}");
         assert!(cells.iter().all(|&(x, _, _)| x > app.layout.terminal.x));
-        assert!(prompt - title - 2 <= 14 + 1, "the orbit stays small enough to keep the task high:\n{screen}");
+        assert_eq!(prompt - title, 2, "the task stays near the top at every height:\n{screen}");
         for line in ["Workspace", "⌃T dictate"] {
             assert!(screen.contains(line), "everything under the task still shows: {line}");
         }
@@ -921,7 +1036,7 @@ mod orbit_view {
     }
 
     #[test]
-    fn the_task_box_moves_down_under_the_orbit_and_the_cursor_follows() {
+    fn the_task_box_and_cursor_stay_at_the_same_height_with_or_without_an_orbit() {
         let mut app = loaded(100, 44);
         key(&mut app, KeyCode::Char('n'));
         key(&mut app, KeyCode::Char('h'));
@@ -929,9 +1044,10 @@ mod orbit_view {
         let screen = text(&terminal);
         let task = screen.lines().position(|l| l.contains("│ h")).expect("task line");
         let cursor = terminal.get_cursor_position().unwrap();
+        assert_eq!(task, 5, "the task does not move down for decoration");
         assert_eq!(cursor.y as usize, task, "{screen}");
         assert_eq!(cursor.x, app.layout.terminal.x + 5);
-        // Without room the task sits right under the title, as before.
+        // Without spare room the input sits at exactly the same height.
         let mut app = loaded(100, 24);
         key(&mut app, KeyCode::Char('n'));
         let screen = text(&render(&app, at(1)));
@@ -939,7 +1055,7 @@ mod orbit_view {
     }
 
     #[test]
-    fn a_picker_opens_under_its_field_below_the_orbit() {
+    fn a_picker_opens_under_its_field() {
         let mut app = loaded(100, 44);
         key(&mut app, KeyCode::Char('n'));
         key(&mut app, KeyCode::F(3));

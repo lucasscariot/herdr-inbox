@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
-use super::{fill, split_line};
+use super::{fill, frame, split_line};
 use crate::app::{App, UpdatePhase, update_dialog};
 use crate::theme::Palette;
 use crate::update::CURRENT_VERSION;
@@ -25,7 +25,9 @@ pub(super) fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette) {
     Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(palette.accent).bg(palette.surface0))
+        .style(style)
+        .border_style(frame(palette, true).bg(palette.surface0))
+        .title_style(style.fg(palette.subtext0))
         .title(" Update Herdr Inbox ")
         .render(rect, buf);
     let x = rect.x + 2;

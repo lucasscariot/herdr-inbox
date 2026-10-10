@@ -6,23 +6,24 @@ one list, sorted by what it needs from you. The thread you pick runs live next
 to it, fully interactive.
 
 ```
- herdr inbox                        │
- 1 needs input · 1 ready            │ ✻ Claude Code
+ herdr inbox                    1/3 │ ✻ Claude Code
+ 1 needs input · 1 ready            │
+  +  New thread                  n  │ > Fix the login redirect loop on mobile
+ / Filter threads                   │
+ NEEDS INPUT  1                     │   Do you want to make this edit?
+▎▄ █ ▄ cockpit              ● input │   ❯ 1. Yes
+▎▄███▄ Fix the login redirect loop… │     2. No
+▎▀ █ ▀ Claude · ⎇ fix-login-redire… │
                                     │
- NEEDS INPUT  1                     │ > Fix the login redirect loop on mobile
-▎cockpit                    ● input │
-▎Fix the login redirect loop        │   Do you want to make this edit?
-▎⎇ fix-login-redirect · Claude      │   ❯ 1. Yes
-                                    │     2. No
  READY  1                           │
-▎site                       ✓ ready │
-▎Review navigation                  │
-▎⎇ main · OpenCode               2m │
+▎█▀▀▀█ site                 ✓ ready │
+▎█ ▀▄█ Review navigation            │
+▎█▄▄▄█ OpenCode · ⎇ main         2m │
                                     │
  WORKING  1                         │
-▎api                      ◐ working │
-▎Add invoice export                 │
-▎⎇ main · Codex                 14s │
+▎▄▀▀▀▄ api                ◐ working │
+▎█▄█▀█ Add invoice export           │
+▎▀▄▄▄▀ Codex · ⎇ main           14s │
   AGENT  tab threads
 ```
 
@@ -77,11 +78,13 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | --- | --- | --- |
 | Threads | `j` `k` / `↓` `↑` | Move and show the selected discussion |
 | | `g` `G` / `Home` `End` | Show the first / last discussion |
+| | `PageUp`, `PageDown` | Move by a page of threads |
+| | Mouse wheel | Scroll without moving the selection |
 | | `Enter`, `o`, click | Focus the selected agent |
 | | `n`, click **+ New thread** | Open the composer |
 | | `r` | Reply to the agent without opening it |
 | | `e` | Send the thread's task again, from the composer |
-| | `/` | Filter by title, project, branch, harness or machine; `Esc` clears |
+| | `/`, click **Filter threads** | Filter by title, project, branch, harness or machine; `Esc` clears |
 | | `x`, `Delete`, `Backspace` | Archive: closes the thread's workspace, keeps its worktree on disk |
 | | `d` | Dismiss a failed launch |
 | | `Ctrl+T` | Dictate to the thread under the cursor |
@@ -101,14 +104,22 @@ Keyboard focus stays in the list until you press Enter or Tab, or click the
 agent. Previewing a finished task does not mark it seen or move its row;
 focusing the agent does.
 
-Above the composer's task when there is room, and when no thread is open,
+Small pixel marks identify Claude Code, Codex, Pi and OpenCode in the sidebar.
+Harness names stay visible before branches, so a long branch cannot hide which
+agent is running. Other harnesses get a terminal mark and their own name. The
+marks use ordinary block characters, not images or a special font. A position
+counter and a scroll thumb show where you are in the list.
+
+Below the composer's controls when there is room, and when no thread is open,
 the orbit turns: the core is the inbox, each ring a machine, each bead a
 thread in its status colour. The core breathes while a thread needs input,
 and a ring goes dashed while its machine connects or red when it is
 unreachable.
 
 Herdr Inbox uses your Herdr theme: the same built-in themes, `[theme] name`,
-and `[theme.custom]` colours from `~/.config/herdr/config.toml`.
+and `[theme.custom]` colours from `~/.config/herdr/config.toml`. Inbox's own
+frames and popup titles use that palette; the live agent terminal keeps the
+agent's original colours.
 
 ### Updating Inbox
 
@@ -131,9 +142,13 @@ It does not install prereleases, unreleased `main` builds or older versions.
 
 ### Starting a thread
 
-Press `n`. Write the task, check the choices under it, press `Enter`. The
-composer clears at once and stays open for the next task; the launch runs in
-the background and its progress shows under **Launches**.
+Press `n` or click **+ New thread**. Write the task, check the choices under
+it, press `Enter` or click **send**. Click in the task to place the cursor,
+click a field to open its choices, then click a choice. The mouse wheel moves
+through a choice list. The task stays near the top even in a tall window.
+
+The composer clears at once and stays open for the next task; the launch runs
+in the background and its progress shows under **Launches**.
 
 | Key | Action |
 | --- | --- |
@@ -161,7 +176,12 @@ the list does not know can still be used: type its id and pick **Use …**.
   their repository.
 - **Machine** lists the machines that have the project.
 - **Harness**, **Model** and **Thinking** come from the agent CLIs installed
-  on that machine and their own model lists.
+  on that machine and their own model lists. Models match both their display
+  name and their id. Codex's GPT models offer the reasoning levels reported
+  in its `models_cache.json`, including new levels; `CODEX_HOME` is respected.
+  Choosing a different model clears an incompatible thinking level. **Default**
+  leaves the CLI's settings alone. If no levels are reported, the Thinking row
+  says so rather than silently disappearing. `F5` refreshes the catalog.
 - **Workspace** is a new git worktree by default, its branch named after the
   task (shown as `⎇ branch`), or one you name, or an existing checkout.
   Herdr creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.

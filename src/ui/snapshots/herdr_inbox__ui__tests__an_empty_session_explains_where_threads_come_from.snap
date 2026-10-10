@@ -5,10 +5,10 @@ expression: "text(&render(&app, at(0)))"
  herdr inbox                     │
  0 threads                       │
   +  New thread               n  │
-                                 │
+ / Filter threads                │
  No agent threads yet.           │                         ⢀⡀
- Start one in Herdr; it shows up │                    ⢀⡴⠚⠉⠉⠁⠉⠉⠉⠉⠒⠲⠤⣄⡀
- here.                           │                    ⢸             ⠉⠑⠢⣄⡀
+ Click New thread or press n.    │                    ⢀⡴⠚⠉⠉⠁⠉⠉⠉⠉⠒⠲⠤⣄⡀
+                                 │                    ⢸             ⠉⠑⠢⣄⡀
                                  │                    ⠸⡄          ⢀⣀    ⠉⠲⢄
                                  │                     ⠙⢄       ⢀⣾⣿⣿⣗⠄     ⠙⢦⡀
                                  │                      ⠈⠳⣄     ⠘⢿⢟⠟⠕⠁       ⠑⣄
@@ -19,6 +19,6 @@ expression: "text(&render(&app, at(0)))"
                                  │
                                  │
                                  │
-                                 │       Agent threads you start in Herdr appear on the left.
+                                 │ Start a thread with n or + New thread. Agents already running in
                                  │
   THREADS  ↵ agent  j/k move  n new  x archive  ⌃G updates  tab agent  q quit

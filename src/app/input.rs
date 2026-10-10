@@ -144,7 +144,9 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
         KeyCode::BackTab => return app.with_composer(|c, ctx| c.next_field(ctx, false)),
         KeyCode::F(5) => return app.discover(true, now, effects),
         KeyCode::F(n) => {
-            if let Some(field) = Field::from_key(n) {
+            if let Some(field) = Field::from_key(n)
+                && app.composer.fields(&app.composer_context()).contains(&field)
+            {
                 app.composer.open_picker(field, "");
             }
             return;
@@ -220,24 +222,7 @@ fn picker_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
         KeyCode::Enter | KeyCode::Tab => {
             if let Some(choice) = choices.get(picker.selected).filter(|c| c.enabled) {
                 let pick = choice.pick.clone();
-                app.composer.close_picker();
-                match pick {
-                    Pick::SavePreset(name) => {
-                        let preset = crate::presets::Preset {
-                            name,
-                            harness: app.composer.harness.clone().unwrap_or_default(),
-                            model: app.composer.model.clone().unwrap_or_default(),
-                            thinking: app.composer.thinking.clone().unwrap_or_default(),
-                        };
-                        let next = crate::presets::save(&app.presets, preset);
-                        app.change_presets(next, effects);
-                    }
-                    Pick::RenamePreset { from, to } => {
-                        let next = crate::presets::rename(&app.presets, &from, &to);
-                        app.change_presets(next, effects);
-                    }
-                    pick => app.with_composer(|c, ctx| c.apply(ctx, pick)),
-                }
+                choose(app, pick, effects);
             }
             return;
         }
@@ -275,6 +260,28 @@ fn picker_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
     app.composer.picker = Some(picker);
 }
 
+/// Keyboard and mouse selections run the same preset and choice actions.
+fn choose(app: &mut App, pick: Pick, effects: &mut Vec<Effect>) {
+    app.composer.close_picker();
+    match pick {
+        Pick::SavePreset(name) => {
+            let preset = crate::presets::Preset {
+                name,
+                harness: app.composer.harness.clone().unwrap_or_default(),
+                model: app.composer.model.clone().unwrap_or_default(),
+                thinking: app.composer.thinking.clone().unwrap_or_default(),
+            };
+            let next = crate::presets::save(&app.presets, preset);
+            app.change_presets(next, effects);
+        }
+        Pick::RenamePreset { from, to } => {
+            let next = crate::presets::rename(&app.presets, &from, &to);
+            app.change_presets(next, effects);
+        }
+        pick => app.with_composer(|c, ctx| c.apply(ctx, pick)),
+    }
+}
+
 fn is_ctrl_c(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
@@ -291,6 +298,7 @@ fn no_server_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Ve
 fn terminal_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     if key.code == KeyCode::Tab && key.modifiers.is_empty() {
         app.focus = Focus::List;
+        app.layout.follow_cursor();
         if let Some(open) = &app.open {
             app.cursor = Some(open.id.clone());
         }
@@ -350,6 +358,10 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         KeyCode::Char('k') | KeyCode::Up => move_cursor(app, -1, now, effects),
         KeyCode::Char('g') | KeyCode::Home => select(app, 0, now, effects),
         KeyCode::Char('G') | KeyCode::End => select(app, app.threads.len().saturating_sub(1), now, effects),
+        KeyCode::PageUp | KeyCode::PageDown => {
+            let step = (app.layout.list.height / (super::layout::THREAD_LINES + 1)).max(1) as isize;
+            move_cursor(app, if key.code == KeyCode::PageUp { -step } else { step }, now, effects);
+        }
         KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char('l') | KeyCode::Right => {
             if let Some(id) = app.cursor.clone() {
                 focus_thread(app, &id, now, effects);
@@ -499,6 +511,7 @@ fn move_cursor(app: &mut App, delta: isize, now: SystemTime, effects: &mut Vec<E
 }
 
 fn select(app: &mut App, index: usize, now: SystemTime, effects: &mut Vec<Effect>) {
+    app.layout.follow_cursor();
     if let Some(id) = app.threads.get(index).map(|thread| thread.id.clone()) {
         app.cursor = Some(id.clone());
         if app.open.as_ref().is_none_or(|open| open.id != id) {
@@ -562,7 +575,7 @@ pub(super) fn clipboard(app: &mut App, result: Result<Clip, String>, now: System
 }
 
 pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: &mut Vec<Effect>) {
-    if app.updates.visible {
+    if app.updates.visible || app.menu.is_some() || app.dictation.is_some() || app.reply.is_some() {
         return;
     }
     let (x, y) = (mouse.column, mouse.row);
@@ -572,8 +585,17 @@ pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: 
     {
         return app.open_composer(now, effects);
     }
-    if app.focus == Focus::Composer && app.layout.in_terminal(x, y) {
+    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+        && super::composer::layout::contains(app.layout.search, x, y)
+        && !app.needs_server_screen()
+    {
+        app.focus = Focus::List;
+        app.confirm_archive = None;
+        app.filtering = true;
         return;
+    }
+    if app.focus == Focus::Composer && app.layout.in_terminal(x, y) {
+        return composer_mouse(app, mouse, now, effects);
     }
     if app.layout.in_list(x, y) {
         match mouse.kind {
@@ -621,6 +643,59 @@ pub(super) fn mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: 
     };
     if let Some(control) = control {
         effects.push(Effect::Send { generation, control });
+    }
+}
+
+fn composer_mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    use super::composer::layout::{ComposerLayout, contains};
+    let Some(layout) = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()) else {
+        return;
+    };
+    let (x, y) = (mouse.column, mouse.row);
+    if let Some(popup) = &layout.picker
+        && contains(popup.popup, x, y)
+    {
+        let Some(picker) = &app.composer.picker else { return };
+        let choices = app.composer.choices_with_actions(&app.composer_context(), picker.field, &picker.query);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) if contains(popup.rows, x, y) => {
+                let index = popup.start + (y - popup.rows.y) as usize;
+                if let Some(choice) = choices.get(index).filter(|c| c.enabled) {
+                    choose(app, choice.pick.clone(), effects);
+                }
+            }
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                let delta = if mouse.kind == MouseEventKind::ScrollDown {
+                    WHEEL_LINES as isize
+                } else {
+                    -(WHEEL_LINES as isize)
+                };
+                if let Some(picker) = &mut app.composer.picker {
+                    picker.selected = picker.selected.saturating_add_signed(delta).min(choices.len().saturating_sub(1));
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+        return;
+    }
+    app.composer.close_picker();
+    if contains(layout.task_box, x, y) {
+        app.composer.field = Field::Task;
+        app.composer.task.place_cursor(
+            layout.task_inner.width,
+            y.saturating_sub(layout.task_inner.y).min(layout.task_inner.height - 1) + layout.task_scroll,
+            x.saturating_sub(layout.task_inner.x),
+        );
+    } else if let Some(field) = layout.field_at(x, y) {
+        if app.composer.fields(&app.composer_context()).contains(&field) {
+            app.composer.field = field;
+            app.composer.open_picker(field, "");
+        }
+    } else if contains(layout.send, x, y) {
+        app.send(false, now, effects);
     }
 }
 

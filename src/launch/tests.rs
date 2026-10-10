@@ -143,6 +143,64 @@ fn model_and_thinking_replace_pinned_flags_in_harness_args() {
 }
 
 #[test]
+fn codex_effort_overrides_only_the_reasoning_config_and_validates_the_model() {
+    let catalog: Catalog = serde_json::from_value(serde_json::json!({
+        "selectable": true, "thinking_flag": "--config", "thinking": ["low", "high", "ultra"],
+        "default": "gpt-deep", "thinking_by_model": {"gpt-deep": ["low", "high", "ultra"], "gpt-lite": ["low"]}
+    }))
+    .unwrap();
+    let mut settings = settings();
+    settings.harness_args.insert(
+        "codex".into(),
+        [
+            "--no-daemon",
+            "-c",
+            "model_reasoning_effort=\"low\"",
+            "--config=model_reasoning_effort='high'",
+            "-cmodel_reasoning_effort=low",
+            "-c=model_reasoning_effort=low",
+            "--config",
+            "model_reasoning_effort = 'low'",
+            "-c",
+            "sandbox_mode=\"read-only\"",
+            "--config=features.foo=true",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    let mut request = request("x", WorkspaceChoice::Checkout { path: "/w/cockpit".into() });
+    request.harness = "codex".into();
+    request.thinking = Some("ultra".into());
+    let plan = plan_for(&request, &settings, Some(&catalog)).unwrap();
+    assert_eq!(
+        plan.agent_args,
+        [
+            "--no-daemon",
+            "-c",
+            "sandbox_mode=\"read-only\"",
+            "--config=features.foo=true",
+            "--config",
+            "model_reasoning_effort=\"ultra\""
+        ]
+    );
+    request.model = Some("gpt-lite".into());
+    assert!(plan_for(&request, &settings, Some(&catalog)).unwrap_err().contains("thinking level ultra"));
+    request.thinking = Some("low".into());
+    assert!(plan_for(&request, &settings, Some(&catalog)).is_ok());
+    request.thinking = None;
+    assert!(
+        plan_for(&request, &settings, Some(&catalog))
+            .unwrap()
+            .agent_args
+            .contains(&"model_reasoning_effort=\"low\"".to_string()),
+        "default leaves CLI configuration alone"
+    );
+    request.harness = "claude".into();
+    request.thinking = Some("low".into());
+    assert!(plan_for(&request, &settings, Some(&catalog)).is_err(), "config overrides are specific to Codex");
+}
+
+#[test]
 fn harness_args_pass_through_untouched_without_choices() {
     let mut settings = settings();
     settings.harness_args.insert("claude".into(), vec!["--model".into(), "sonnet".into()]);

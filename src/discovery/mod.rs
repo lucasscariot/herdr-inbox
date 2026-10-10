@@ -16,6 +16,8 @@ pub const PROBE: &str = include_str!("probe.py");
 /// Model catalogs change rarely and cost a few CLI calls each: re-read them
 /// at most this often.
 pub const MODELS_TTL: Duration = Duration::from_secs(15 * 60);
+/// Re-probe old caches once when model capability discovery changes.
+pub const MODELS_REVISION: u8 = 1;
 
 /// Herdr's supported agent kinds and the executable each one installs.
 pub const HARNESS_EXECUTABLES: &[(&str, &str)] = &[
@@ -98,11 +100,27 @@ pub struct Catalog {
     pub session_api: bool,
     #[serde(default)]
     pub default: String,
-    /// `--effort` or `--thinking`, when the CLI takes a thinking level.
+    /// `--effort`, `--thinking`, or Codex's `--config` override.
     #[serde(default)]
     pub thinking_flag: String,
     #[serde(default)]
     pub thinking: Vec<String>,
+    /// Per-model capabilities when a CLI reports them. An empty list means
+    /// the model has no reasoning control; absent on older cached inventories.
+    #[serde(default)]
+    pub thinking_by_model: BTreeMap<String, Vec<String>>,
+}
+
+impl Catalog {
+    pub fn thinking_levels(&self, model: Option<&str>) -> &[String] {
+        let model = model.or_else(|| (!self.default.is_empty()).then_some(self.default.as_str()));
+        match model {
+            Some(model) if !self.thinking_by_model.is_empty() => {
+                self.thinking_by_model.get(model).map(Vec::as_slice).unwrap_or(&[])
+            }
+            _ => &self.thinking,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,11 +134,15 @@ pub struct Inventory {
     /// Seconds since the epoch when the models were read.
     #[serde(default)]
     pub models_at: u64,
+    #[serde(default)]
+    pub models_revision: u8,
 }
 
 impl Inventory {
     pub fn models_fresh(&self, now: SystemTime) -> bool {
-        !self.models.is_empty() && seconds(now).saturating_sub(self.models_at) < MODELS_TTL.as_secs()
+        self.models_revision == MODELS_REVISION
+            && !self.models.is_empty()
+            && seconds(now).saturating_sub(self.models_at) < MODELS_TTL.as_secs()
     }
 
     pub fn project(&self, name: &str) -> Option<&Project> {
@@ -163,9 +185,11 @@ pub fn finish(
         serde_json::from_str(json).map_err(|err| format!("unreadable probe output: {err}"))?;
     if include_models {
         inventory.models_at = seconds(now);
+        inventory.models_revision = MODELS_REVISION;
     } else if let Some(cached) = cached {
         inventory.models = cached.models.clone();
         inventory.models_at = cached.models_at;
+        inventory.models_revision = cached.models_revision;
     }
     for (harness, extra) in configured_models {
         if let Some(catalog) = inventory.models.get_mut(harness) {
@@ -247,16 +271,77 @@ mod tests {
         assert!(!inventory.models.contains_key("gemini"), "no catalog for a CLI that is not installed");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn regression_codex_catalog_offers_the_cached_reasoning_levels() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("codex");
+        std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' '--model <MODEL>' '-c, --config <key=value>'\n")
+            .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home = dir.path().join("custom-codex");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(
+            home.join("models_cache.json"),
+            json!({"models": [
+                {"slug": "gpt-test", "display_name": "GPT test", "visibility": "list",
+                 "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}, {"effort": "ultra"}]},
+                {"slug": "gpt-lite", "visibility": "list", "supported_reasoning_levels": [{"effort": "low"}]},
+                {"slug": "no-reasoning", "visibility": "list", "supported_reasoning_levels": []},
+                {"slug": "hidden", "visibility": "hide", "supported_reasoning_levels": [{"effort": "extreme"}]},
+                {"slug": null, "visibility": "list"}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("config.toml"),
+            "features = []\nmodel = \"gpt-test\"\n[profiles.other]\nmodel = \"gpt-lite\"\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new("python3")
+            .arg("-c").arg(PROBE)
+            .arg(json!({"roots": [], "depth": 0, "projects": [], "executables": {"codex": executable}, "include_models": true}).to_string())
+            .env("HOME", dir.path()).env("CODEX_HOME", &home)
+            .output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let inventory = finish(&String::from_utf8_lossy(&output.stdout), None, true, &BTreeMap::new(), at(1)).unwrap();
+        let catalog = &inventory.models["codex"];
+        assert_eq!(
+            catalog.thinking,
+            ["low", "high", "ultra"],
+            "F8 must offer Codex's advertised levels, including new ones"
+        );
+        assert_eq!(catalog.thinking_flag, "--config");
+        assert_eq!(catalog.default, "gpt-test");
+        assert_eq!(catalog.thinking_levels(None), ["low", "high", "ultra"]);
+        assert_eq!(catalog.thinking_levels(Some("gpt-lite")), ["low"]);
+        assert!(catalog.thinking_levels(Some("no-reasoning")).is_empty());
+        assert!(catalog.thinking_levels(Some("unknown-custom-model")).is_empty());
+        assert_eq!(catalog.choices.len(), 3);
+    }
+
+    #[test]
+    fn older_catalogs_still_use_harness_wide_thinking_levels() {
+        let catalog: Catalog =
+            serde_json::from_str(r#"{"thinking_flag":"--effort","thinking":["high","max"]}"#).unwrap();
+        assert_eq!(catalog.thinking_levels(Some("custom-model")), ["high", "max"]);
+    }
+
     #[test]
     fn models_expire_after_fifteen_minutes() {
         let inventory = Inventory {
             models: BTreeMap::from([("pi".into(), Catalog::default())]),
             models_at: 1000,
+            models_revision: MODELS_REVISION,
             ..Inventory::default()
         };
         assert!(inventory.models_fresh(at(1000 + 899)));
         assert!(!inventory.models_fresh(at(1000 + 900)));
         assert!(!Inventory::default().models_fresh(at(0)), "no models is never fresh");
+        let old = Inventory { models_revision: 0, ..inventory };
+        assert!(!old.models_fresh(at(1000)), "old caches must gain Codex reasoning capabilities immediately");
     }
 
     #[test]
