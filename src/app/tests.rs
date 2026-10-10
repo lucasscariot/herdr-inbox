@@ -1753,9 +1753,45 @@ mod conveniences {
         app.with_composer(|c, ctx| c.apply(ctx, Pick::Thinking(Some("high".into()))));
         app.update(press(KeyCode::Esc), at(1));
         app.update(press(KeyCode::Char('n')), at(1));
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(2));
         assert_eq!(app.composer.model.as_deref(), Some("opus"));
         assert_eq!(app.composer.thinking.as_deref(), Some("high"));
-        assert!(!app.composer.start_preset, "nothing to start on, nothing pending");
+        assert!(!app.composer.start_preset, "discovery answered, nothing pending");
+    }
+
+    #[test]
+    fn a_cached_inventory_never_settles_the_first_preset_but_a_fresh_one_or_a_hand_pick_does() {
+        let (app, _) = loaded();
+        let presets = vec![
+            preset("Pi max", "pi", "x", "max"),
+            preset("Fast", "codex", "gpt-5", ""),
+            preset("Deep", "claude", "opus", "high"),
+        ];
+        let mut app = app.with_memory(presets, vec![]);
+        // Last run's inventory, restored at startup: only Claude was installed.
+        let mut cached = inventory();
+        cached.harnesses = vec!["claude".into()];
+        app.inventories.insert(LOCAL.into(), cached);
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"), "the first preset the cache allows");
+        assert!(app.composer.start_preset, "still pending until discovery answers");
+        // Codex has been installed since: the fresh inventory moves to the first preset it has.
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(2));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!(app.composer.model.as_deref(), Some("gpt-5"));
+        assert!(!app.composer.start_preset);
+        // A choice made by hand before discovery answers is kept.
+        app.update(press(KeyCode::Esc), at(3));
+        app.focus = Focus::List;
+        app.update(press(KeyCode::Char('n')), at(3));
+        assert!(app.composer.start_preset);
+        app.update(press(KeyCode::F(7)), at(3));
+        app.update(press(KeyCode::Char('3')), at(3));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert!(!app.composer.start_preset, "a hand pick outranks the default");
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(4));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert_eq!(app.composer.thinking.as_deref(), Some("high"));
     }
 
     #[test]
