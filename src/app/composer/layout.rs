@@ -53,36 +53,45 @@ impl ComposerLayout {
         let task_scroll = row.saturating_sub(rows - 1);
         let task_cursor = (task_inner.x + col.min(inner_width), task_inner.y + row - task_scroll);
         let limit = area.bottom().saturating_sub(2);
-        // The strip: chips flow after the label and wrap under it, the first
-        // row leaving room for the key hint on the right. It never grows
-        // into the rows the fields need: chips past that are left out.
-        let strip_end = limit.saturating_sub(Self::RESERVED_ROWS).max(task_box.bottom() + 1).min(limit);
-        let mut y = task_box.bottom();
+        // The strip: chips flow after the label and wrap under it, leaving
+        // room for the key hint on the right. It never grows into the rows
+        // the fields need: when the chips take more rows than that, the
+        // rows around the chip under the cursor show and the others wait.
+        let strip_top = task_box.bottom();
+        let strip_end = limit.saturating_sub(Self::RESERVED_ROWS).max(strip_top + 1).min(limit);
+        let allowed = strip_end.saturating_sub(strip_top);
         // A chip's own padding takes the place of the space before a value.
         let chips_x = content.x + 1 + Self::LABEL_WIDTH;
-        let mut chips = Vec::new();
-        let mut x = chips_x;
-        let mut strip_rows = 0;
-        for chip in composer.chips(ctx) {
-            let right =
-                if y == task_box.bottom() { content.right().saturating_sub(Self::KEY_WIDTH) } else { content.right() };
-            let room = right.saturating_sub(chips_x);
-            if room == 0 || y >= limit {
-                break;
-            }
-            let width = chip.width().min(room);
-            if x + width > right && x > chips_x {
-                y += 1;
-                x = chips_x;
-                if y >= strip_end {
-                    break;
+        let right = content.right().saturating_sub(Self::KEY_WIDTH);
+        let room = right.saturating_sub(chips_x);
+        let mut placed: Vec<(ChipView, u16, u16, u16)> = Vec::new();
+        let (mut row, mut x) = (0u16, chips_x);
+        if room > 0 && allowed > 0 {
+            for chip in composer.chips(ctx) {
+                let width = chip.width().min(room);
+                if x + width > right && x > chips_x {
+                    row += 1;
+                    x = chips_x;
                 }
+                placed.push((chip, row, x, width));
+                x += width + 1;
             }
-            chips.push((chip, Rect::new(x, y, width, 1)));
-            x += width + 1;
-            strip_rows = (y - task_box.bottom()) + 1;
         }
-        let strip = Rect::new(content.x, task_box.bottom(), content.width, strip_rows);
+        let rows = placed.last().map(|(_, row, _, _)| row + 1).unwrap_or(0);
+        let anchor = match composer.field {
+            Field::Preset => {
+                let cursor = composer.chip_at_cursor(ctx).chip;
+                placed.iter().find(|(c, _, _, _)| c.chip == cursor).map(|(_, row, _, _)| *row).unwrap_or(0)
+            }
+            _ => 0,
+        };
+        let first_row = (anchor + 1).saturating_sub(allowed);
+        let chips: Vec<(ChipView, Rect)> = placed
+            .into_iter()
+            .filter(|(_, row, _, _)| *row >= first_row && *row < first_row + allowed)
+            .map(|(chip, row, x, width)| (chip, Rect::new(x, strip_top + row - first_row, width, 1)))
+            .collect();
+        let strip = Rect::new(content.x, strip_top, content.width, rows.saturating_sub(first_row).min(allowed));
         let mut y = strip.bottom() + 1;
         let mut fields = Vec::new();
         // Show unsupported thinking explicitly rather than making a row vanish.
@@ -195,6 +204,19 @@ mod tests {
         assert!(layout.strip.height >= 1);
         assert!(layout.fields.iter().any(|(f, _)| *f == Field::Workspace), "{:?}", layout.fields);
         assert!(layout.send.height > 0, "send stays reachable");
+        assert_eq!(layout.fields[0].1.y, layout.strip.bottom() + 1);
+        let shown = |layout: &ComposerLayout| layout.chips.iter().map(|(c, _)| c.chip).collect::<Vec<_>>();
+        assert_eq!(shown(&layout)[0], Chip::Preset(0), "unfocused, the strip starts at the top");
+        // The rows follow the cursor, so the chip Enter would apply is always visible.
+        app.with_composer(|c, ctx| c.focus_presets(ctx));
+        app.composer.preset_cursor = 13;
+        let layout = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(shown(&layout).contains(&Chip::Preset(13)), "{:?}", shown(&layout));
+        assert!(!shown(&layout).contains(&Chip::Preset(0)));
+        assert!(layout.chips.iter().all(|(_, r)| r.y >= layout.strip.y && r.bottom() <= layout.strip.bottom()));
+        app.composer.preset_cursor = 14;
+        let layout = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(shown(&layout).contains(&Chip::Save), "{:?}", shown(&layout));
         assert_eq!(layout.fields[0].1.y, layout.strip.bottom() + 1);
     }
 }

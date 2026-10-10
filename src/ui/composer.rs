@@ -277,9 +277,9 @@ fn strip(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Palette
         (format!("{:<width$}", Field::Preset.label(), width = LABEL_WIDTH as usize), base.fg(palette.subtext0)),
     ];
     split_line(buf, area.x, area.y, area.width, &label, &[("F7  ›".into(), base.fg(palette.overlay0))]);
-    let cursor = composer.preset_cursor.min(layout.chips.len().saturating_sub(1));
-    for (index, (chip, rect)) in layout.chips.iter().enumerate() {
-        let under_cursor = focused && index == cursor;
+    let at_cursor = composer.chip_at_cursor(&ctx);
+    for (chip, rect) in &layout.chips {
+        let under_cursor = focused && chip.chip == at_cursor.chip;
         let mut style = if chip.active {
             base.fg(palette.accent).bg(palette.selection_bg).add_modifier(Modifier::BOLD)
         } else if !chip.enabled {
@@ -306,11 +306,10 @@ fn strip(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Palette
     // unless an error needs that line.
     if focused
         && composer.error.is_none()
-        && let Some((chip, _)) = layout.chips.get(cursor)
         && let Some((_, first)) = layout.chips.first()
         && area.bottom() < layout.fields.first().map(|(_, r)| r.y).unwrap_or(area.bottom() + 1)
     {
-        let detail = composer.chip_detail(&ctx, chip);
+        let detail = composer.chip_detail(&ctx, &at_cursor);
         let style = Style::new().fg(palette.overlay0).bg(palette.panel_bg);
         let x = first.x + 1;
         split_line(buf, x, area.bottom(), area.right().saturating_sub(x), &[(detail, style)], &[]);
