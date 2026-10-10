@@ -22,7 +22,8 @@ permissions:
 
 concurrency:
   group: release-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  # A newer PR head makes the queued builds obsolete. Never cancel a release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 defaults:
   run:
@@ -63,6 +64,8 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
       # GITHUB_TOKEN's PR events do not start CI. Explicit dispatches do.
+      # Every push to main updates the release PR, so run only the checks
+      # here: the binaries are built when the release is created.
       - name: Test the release PR
         if: steps.release.outputs.prs_created == 'true'
         env:
@@ -70,14 +73,16 @@ jobs:
           RELEASE_PR: ${{ steps.release.outputs.pr }}
         run: |
           branch=$(jq --exit-status --raw-output '.headBranchName' <<< "$RELEASE_PR")
-          gh workflow run release.yml --ref "$branch"
+          gh workflow run ci.yml --ref "$branch"
 
   checks:
     name: Release checks
     needs: release-please
+    # The CI workflow already tests every PR head; only releases and manual
+    # dispatches need their own run.
     if: >-
       always() && !cancelled() &&
-      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.event_name != 'pull_request_target' &&
       (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
     uses: ./.github/workflows/ci.yml
     permissions:
@@ -91,7 +96,7 @@ jobs:
     needs: [release-please, checks]
     if: >-
       always() && !cancelled() &&
-      needs.checks.result == 'success' &&
+      (github.event_name == 'pull_request_target' || needs.checks.result == 'success') &&
       (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
       (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
     runs-on: ${{ matrix.runner }}
@@ -190,7 +195,7 @@ jobs:
       - name: Report the actual build result
         run: |
           state=failure
-          if [[ "$CHECKS_RESULT" == success && "$BUILD_RESULT" == success ]]; then
+          if [[ ("$CHECKS_RESULT" == success || "$CHECKS_RESULT" == skipped) && "$BUILD_RESULT" == success ]]; then
             state=success
           fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \

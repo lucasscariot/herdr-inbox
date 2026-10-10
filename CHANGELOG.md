@@ -25,6 +25,9 @@ All notable changes to Herdr Inbox. The format follows
   its displayed compiled version is still asserted separately.
 - Description-only PR edits no longer use CI runners, cancel running code
   checks or replace a pending run.
+- Each check runs once per push: the release workflow no longer repeats the CI
+  suite on PR heads, the release PR is tested by CI alone rather than by a full
+  build, and a newer PR head cancels obsolete release builds.
 - Sidebar wheel scrolling no longer snaps back to the selection on every tick.
 - Model ids remain selectable when their display name differs from the id.
 - Composer backgrounds, popup titles and dialog frames now use explicit theme

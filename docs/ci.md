@@ -98,8 +98,10 @@ history stays in the file.
 
 Release Please uses `GITHUB_TOKEN`, not a personal access token. Its PR and tag
 events do not trigger other workflows, so the release job explicitly dispatches
-a build-only run for its release PR. After that PR is merged, the same workflow
-creates the tagged draft and runs checks and builds from the release SHA.
+the CI workflow for its release PR, which reports `Self-hosted CI` on that PR's
+head. Every push to `main` updates the release PR, so that run does not build
+binaries. After the PR is merged, the same workflow creates the tagged draft
+and runs checks and the four builds from the release SHA before publishing.
 
 Nothing releases merely because an ordinary feature PR merges. The maintainer
 must merge the separate `chore(main): release ...` PR. Do not manually push a
@@ -117,6 +119,19 @@ TUIs do not distort their input timing. Their 250 ms latency limit is unchanged.
 Herdr is pinned in `ci.yml`. Subprocess
 fixtures wait for readiness before release or SIGINT rather than assuming a
 short startup time on a busy self-hosted Mac.
+
+Each check runs once per event. The release workflow does not repeat the CI
+suite on PR heads; it only builds the binaries, and only when a PR changes how
+they are built. A newer head cancels a PR's obsolete release builds, while
+release and manual runs are never cancelled.
+
+| Event | CI workflow | Release workflow |
+| --- | --- | --- |
+| PR push | checks | four builds, only when a release path changed |
+| PR description edit | nothing | nothing |
+| Push to `main` | checks | Release Please; checks and builds only when a release was created |
+| Release PR updated | checks, dispatched by Release Please | nothing |
+| `gh workflow run release.yml` | nothing | checks and builds |
 
 Description-only PR edits run no jobs and use a separate concurrency group,
 so editing the PR body neither cancels code checks nor replaces a pending run.

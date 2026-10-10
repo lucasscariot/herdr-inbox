@@ -70,7 +70,9 @@ Rosetta to check the x86_64 binary. Both platforms use
 PR workflows use `pull_request_target` and reject fork heads before checkout.
 Only branches in this repository can run source on the personal runners.
 Description-only edits use a separate concurrency group and skip all jobs,
-leaving running or pending code checks alone. E2E sandboxes wait for an API ping
+leaving running or pending code checks alone. The release workflow never
+repeats CI on a PR head: it builds binaries when a release path changes and
+tests the release PR through the CI workflow alone. E2E sandboxes wait for an API ping
 before use and retain startup stderr for failure diagnostics. Update snapshots
 assert the compiled version separately from the version-independent layout.
 [CI and releases](docs/ci.md) records the setup and recovery commands.

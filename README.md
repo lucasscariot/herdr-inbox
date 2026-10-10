@@ -334,7 +334,8 @@ The end-to-end tests start their own Herdr server with every directory in a
 temporary folder, so they never touch your sessions. They wait for a successful
 API ping before creating workspaces. CI runs them against the Herdr release
 pinned in `.github/workflows/ci.yml`; description-only PR edits do not consume
-runners or cancel those checks.
+runners or cancel those checks. Each check runs once per push: the release
+workflow builds binaries only on PRs that change how they are built.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
 
