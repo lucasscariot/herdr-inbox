@@ -4,6 +4,18 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.0.0...v1.1.0) (2026-10-10)
+
+
+### Features
+
+* **ui:** add clickable composer controls and harness marks ([#21](https://github.com/lucasscariot/herdr-inbox/issues/21)) ([7b159a4](https://github.com/lucasscariot/herdr-inbox/commit/7b159a4572a80f7fe574899fdb678c6f0e0f2bc0))
+
+
+### Bug Fixes
+
+* **ci:** stabilize checks and run each one once ([#23](https://github.com/lucasscariot/herdr-inbox/issues/23)) ([e65500f](https://github.com/lucasscariot/herdr-inbox/commit/e65500fb90d949f6406f9155793dcd3f5dabda4b))
+
 ## [Unreleased]
 
 ### Added

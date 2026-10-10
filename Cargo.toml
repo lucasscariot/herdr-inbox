@@ -1,6 +1,6 @@
 [package]
 name = "herdr-inbox"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "One keyboard-first inbox for every coding agent on every machine, on top of Herdr."
