@@ -254,8 +254,9 @@ fn content_words(words: &[String]) -> Vec<&str> {
     let mut after_verb = Verb::No;
     for (i, word) in words.iter().enumerate() {
         let is_particle = PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
-        // Trailing filler ("sign out please") does not keep a sentence open.
-        let closes = words[i + 1..].iter().all(|w| is_filler(w));
+        // A trailing hedge ("sign out please") does not keep a sentence open;
+        // a pronoun does ("settings in it"), so that "in" stays a preposition.
+        let closes = words[i + 1..].iter().all(|w| HEDGES.split_whitespace().any(|h| h == w));
         let phrasal = is_particle && (after_verb == Verb::Yes || (after_verb == Verb::Maybe && closes));
         if !phrasal && is_filler(word) {
             after_verb = Verb::No;
