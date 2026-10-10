@@ -165,6 +165,7 @@ fn branch_names_skip_sentences_that_say_nothing() {
     assert_eq!(branch_name("On 2026-10-11: ship it", &[], ""), "ship", "even behind a filler word");
     assert_eq!(branch_name("!!!", &[], ""), "thread");
     assert_eq!(branch_name("404", &[], ""), "thread", "digits alone never name a branch");
+    assert_eq!(branch_name("X. Fix the login loop", &[], ""), "fix-login-loop", "nor does a lone letter");
     assert_eq!(branch_name("Übersetze die Seite", &[], ""), "bersetze-die-seite");
 }
 
@@ -185,6 +186,7 @@ fn branch_names_stay_short() {
         "abbreviations do not end one"
     );
     assert_eq!(branch_name("Support PNG, JPEG, etc. in the composer", &[], ""), "support-png-jpeg-composer");
+    assert_eq!(branch_name("Use plan A. Delete option B", &[], ""), "use-plan", "but a lone letter ends its sentence");
     assert_eq!(branch_name("Ship. Then fix the login loop", &[], ""), "ship", "a real one-word sentence still does");
 }
 

@@ -178,13 +178,14 @@ pub fn branch_slug(task: &str) -> String {
     for sentence in sentences {
         let words = slug_words(sentence);
         let content = content_words(&words);
-        let has_letters = |words: &[&str]| words.iter().any(|w| w.chars().any(|c| c.is_ascii_alphabetic()));
+        // A word of two or more letters: "1." and a lone "X" are not sentences.
+        let has_letters =
+            |words: &[&str]| words.iter().any(|w| w.chars().filter(char::is_ascii_alphabetic).count() > 1);
         if has_letters(&content) {
             return join_slug(content.into_iter());
         }
-        // A list marker ("1.") or a date is not a sentence. A sentence of
-        // pure filler ("Hi there!") names the task only when nothing better
-        // follows.
+        // A sentence of pure filler ("Hi there!") names the task only when
+        // nothing better follows.
         let all: Vec<&str> = words.iter().map(String::as_str).collect();
         if has_letters(&all) {
             fallback.get_or_insert_with(|| join_slug(all.into_iter()));
@@ -228,13 +229,15 @@ fn sentences(line: &str) -> Vec<&str> {
 }
 
 /// Whether the text ends in an abbreviation whose period does not end a
-/// sentence: a single letter ("e.g.", "i.e.", "J. Doe") or a common short
-/// form ("etc.", "vs.", "approx.").
+/// sentence: a dotted one ("e.g.", "i.e.", "a.m.") or a common short form
+/// ("etc.", "vs.", "approx."). A lone letter ends its sentence as usual:
+/// "Use plan A. Delete option B" is two sentences.
 fn is_abbreviation(before: &str) -> bool {
     const ABBREVIATIONS: &str = "etc vs cf approx incl excl resp fig eq ref no nr vol dr mr mrs ms prof st";
     let letters = before.trim_end_matches(|c: char| !c.is_ascii_alphabetic());
     let last = letters.rsplit(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("").to_lowercase();
-    last.len() == 1 || ABBREVIATIONS.split_whitespace().any(|a| a == last)
+    let dotted = last.len() == 1 && letters[..letters.len() - 1].ends_with('.');
+    dotted || ABBREVIATIONS.split_whitespace().any(|a| a == last)
 }
 
 fn is_filler(word: &str) -> bool {
