@@ -331,8 +331,10 @@ No hand-written version bump or tag push is needed.
 macOS runner, fork safety and retrying a failed release.
 
 The end-to-end tests start their own Herdr server with every directory in a
-temporary folder, so they never touch your sessions. CI runs them against the
-Herdr release pinned in `.github/workflows/ci.yml`.
+temporary folder, so they never touch your sessions. They wait for a successful
+API ping before creating workspaces. CI runs them against the Herdr release
+pinned in `.github/workflows/ci.yml`; description-only PR edits do not consume
+runners or cancel those checks.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
 

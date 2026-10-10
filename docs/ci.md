@@ -109,11 +109,20 @@ tag or bump versions alongside Release Please.
 
 CI runs formatting, Clippy, unit and integration tests, ShellCheck, and the real
 Herdr end-to-end tests on Linux and macOS. Each test starts isolated Herdr state;
-no job connects to personal sessions. The PTY tests run serially so concurrent
+no job connects to personal sessions. Server startup waits for an API ping,
+not the appearance of a socket file; early exits include the status and stderr.
+The update dialog checks its real compiled version before normalizing that
+field for snapshots, so Release Please's version bumps do not break layout tests. The PTY tests run serially so concurrent
 TUIs do not distort their input timing. Their 250 ms latency limit is unchanged.
 Herdr is pinned in `ci.yml`. Subprocess
 fixtures wait for readiness before release or SIGINT rather than assuming a
 short startup time on a busy self-hosted Mac.
+
+Description-only PR edits run no jobs and use a separate concurrency group,
+so editing the PR body neither cancels code checks nor replaces a pending run.
+GitHub still records the skipped workflow event. Code updates, title edits and
+base changes still run the checks; obsolete code runs cancel as before.
+`tests/workflows.rs` locks down these guards and the existing fork restrictions.
 
 The release workflow builds these unchanged installer asset names:
 
