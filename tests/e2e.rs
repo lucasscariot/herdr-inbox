@@ -60,6 +60,11 @@ impl Sandbox {
         let mut command = Command::new(herdr_bin());
         command.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         let sandbox_env = Self::env_for(root.path());
+        // macOS's login /bin/sh runs path_helper, which otherwise drops our
+        // fixture directory and can launch an installed agent instead. Restore
+        // the isolated PATH after /etc/profile, only in this scratch HOME.
+        let path = sandbox_env.iter().find(|(key, _)| key == "PATH").expect("sandbox PATH").1.as_str();
+        std::fs::write(root.path().join("home/.profile"), format!("export PATH='{path}'\n")).expect("shell profile");
         apply_env(&mut command, &sandbox_env);
         let server = command.spawn().expect("start herdr server");
         let sandbox = Self { root, server };
@@ -664,11 +669,11 @@ fn composer_mouse_input_and_codex_thinking_work_in_the_real_terminal() {
     inbox.press("the ");
     inbox.wait_for_text("Fix the login");
     inbox.click_text("↵ send", 2);
-    sandbox.wait_for(|| root.join("codex-start.args").exists(), "Codex's launch arguments");
-    let args = std::fs::read_to_string(root.join("codex-start.args")).unwrap();
+    inbox.wait_for_text("✗ cockpit · Codex");
+    let args = std::fs::read_to_string(root.join("codex-start.args"))
+        .unwrap_or_else(|err| panic!("the sandbox Codex was not launched: {err}; screen:\n{}", inbox.text()));
     assert!(args.contains("--model\ngpt-test\n"), "{args}");
     assert!(args.contains("--config\nmodel_reasoning_effort=\"ultra\"\n"), "{args}");
-    inbox.wait_for_text("✗ cockpit · Codex");
 }
 
 #[test]
