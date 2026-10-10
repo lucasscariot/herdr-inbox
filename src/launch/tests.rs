@@ -159,6 +159,7 @@ fn branch_names_keep_the_direction_of_a_request() {
         "unless the particle closes the sentence"
     );
     assert_eq!(branch_name("Add a button to sign in", &[], ""), "add-button-sign-in");
+    assert_eq!(branch_name("To clean up the tests", &[], ""), "clean-up-tests", "a leading infinitive is a verb");
     assert_eq!(branch_name("Give users a way to clean up", &[], ""), "give-users-way-clean", "four words come first");
     assert_eq!(
         branch_name("Fix the login loop on mobile", &[], ""),

@@ -263,7 +263,8 @@ fn content_words(words: &[String]) -> Vec<&str> {
         let leads = content.iter().all(|w| *w == "not");
         after_verb = match verb_position(words, i) {
             _ if phrasal || word == "not" => Verb::No,
-            Verb::No if leads => Verb::Yes,
+            // The leading word is a verb whatever precedes it: "To clean up".
+            _ if leads => Verb::Yes,
             position => position,
         };
         content.push(word);
