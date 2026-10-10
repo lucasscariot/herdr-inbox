@@ -181,6 +181,14 @@ pub fn load(herdr_config: &Path) -> Palette {
 }
 
 impl Palette {
+    /// The fill of a surface that sits a little above the panel, such as the
+    /// task box. Herdr's `surface_dim` is that step up when the theme gives it
+    /// a real colour; a plain ANSI colour (the terminal theme's `DarkGray`)
+    /// would paint a block instead of a card, so those themes get no fill.
+    pub fn raised(&self) -> Option<Color> {
+        matches!(self.surface_dim, Color::Rgb(..)).then_some(self.surface_dim)
+    }
+
     fn apply(&mut self, custom: &toml::Table) {
         let tokens: [(&str, &mut Color); 19] = [
             ("accent", &mut self.accent),
@@ -278,6 +286,14 @@ unknown_token = "#ffffff"
         assert_eq!(palette.sidebar_bg, Color::Rgb(13, 13, 15));
         assert_eq!(palette.red, terminal.red, "an invalid override keeps the theme's color");
         assert_eq!(palette.text, terminal.text);
+    }
+
+    #[test]
+    fn only_a_true_colour_surface_makes_a_raised_card() {
+        assert_eq!(Palette::default().raised(), Some(Palette::default().surface_dim));
+        assert_eq!(builtin::builtin("terminal").unwrap().raised(), None, "ANSI DarkGray would be a block");
+        let custom = from_herdr_config("[theme]\nname = \"terminal\"\n[theme.custom]\nsurface_dim = \"#232328\"");
+        assert_eq!(custom.raised(), Some(Color::Rgb(35, 35, 40)));
     }
 
     #[test]

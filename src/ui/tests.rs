@@ -551,6 +551,20 @@ mod composer {
     }
 
     #[test]
+    fn the_task_box_is_a_raised_card_when_the_theme_has_a_tone_for_it() {
+        let app = composing(110, 30);
+        let palette = Palette::default();
+        let terminal = render(&app, at(1));
+        let buffer = terminal.backend().buffer();
+        let (x, y) = find(&terminal, "╭");
+        let (tx, ty) = find(&terminal, "Fix the login redirect loop");
+        for cell in [&buffer[(x, y)], &buffer[(tx, ty)], &buffer[(tx + 60, ty)], &buffer[(x + 1, y + 1)]] {
+            assert_eq!(cell.bg, palette.surface_dim, "frame, text, blank and padding all sit on the card");
+        }
+        assert_ne!(buffer[(x, y - 1)].bg, palette.surface_dim, "the card stops at the frame");
+    }
+
+    #[test]
     fn the_new_thread_button_sits_in_the_sidebar_and_opens_the_composer() {
         let mut app = loaded(100, 24);
         let screen = text(&render(&app, at(0)));

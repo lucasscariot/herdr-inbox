@@ -100,12 +100,25 @@ fn body(buf: &mut Buffer, app: &App, area: Rect, mut y: u16, palette: &Palette) 
     let dictating = app.dictation.as_ref().is_some_and(|d| d.target == crate::app::Target::Composer);
     // Recording is the one state loud enough for a full-strength frame.
     let border = if dictating { Style::new().fg(palette.red) } else { frame(palette, focused) };
+    // The box is a card, a step up from the panel, when the theme has a tone for it.
+    let card = palette.raised().map(|bg| Style::new().bg(bg)).unwrap_or_default();
     let task_box = Rect::new(x, y, width, rows + 2);
-    Block::new().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(border).render(task_box, buf);
+    fill(buf, task_box, card);
+    Block::new()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(border.patch(card))
+        .render(task_box, buf);
     // Keep the cursor's row visible when the task is longer than the box.
     let scroll = cursor_row.saturating_sub(rows - 1);
     for (index, line) in lines.iter().skip(scroll as usize).take(rows as usize).enumerate() {
-        buf.set_stringn(x + 2, y + 1 + index as u16, line, inner_width as usize, Style::new().fg(palette.text));
+        buf.set_stringn(
+            x + 2,
+            y + 1 + index as u16,
+            line,
+            inner_width as usize,
+            Style::new().fg(palette.text).patch(card),
+        );
     }
     if composer.task.text().is_empty() {
         buf.set_stringn(
@@ -113,7 +126,7 @@ fn body(buf: &mut Buffer, app: &App, area: Rect, mut y: u16, palette: &Palette) 
             y + 1,
             "Describe the task. Enter sends, Shift+Enter adds a line.",
             inner_width as usize,
-            dim,
+            dim.patch(card),
         );
     }
     let mut cursor =
