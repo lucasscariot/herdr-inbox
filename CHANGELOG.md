@@ -4,6 +4,13 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.1](https://github.com/lucasscariot/herdr-inbox/compare/v1.1.0...v1.1.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **ui:** replace the pixel harness marks with one glyph per harness ([#24](https://github.com/lucasscariot/herdr-inbox/issues/24)) ([6d2986d](https://github.com/lucasscariot/herdr-inbox/commit/6d2986d8c6df6f7ae3e2d288094ff7f391c47870))
+
 ## [1.1.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.0.0...v1.1.0) (2026-10-10)
 
 
