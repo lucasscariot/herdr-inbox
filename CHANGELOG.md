@@ -4,6 +4,13 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.1.1...v1.2.0) (2026-10-10)
+
+
+### Features
+
+* **composer:** compare a task across two or three agents ([#26](https://github.com/lucasscariot/herdr-inbox/issues/26)) ([213c291](https://github.com/lucasscariot/herdr-inbox/commit/213c291006aca627744240aee8ae406b61f3b2b9))
+
 ## [1.1.1](https://github.com/lucasscariot/herdr-inbox/compare/v1.1.0...v1.1.1) (2026-10-10)
 
 
