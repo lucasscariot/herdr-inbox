@@ -303,6 +303,8 @@ Release Please maintains a release PR from Conventional Commits on `main`,
 updating `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`. The maintainer merges
 that PR to release. The workflow builds and tests all four binaries on
 self-hosted runners, uploads their checksums, then publishes the draft release.
+Linux releases cross-compile with native Rust and LLVM, then check the target
+architecture and version without running the compiler under emulation.
 No hand-written version bump or tag push is needed.
 
 [CI and releases](docs/ci.md) covers the Blueprint Linux runners, the native

@@ -17,10 +17,14 @@ Verified on 2026-10-09:
 The keeper enrolls repositories with the `blueprint` topic within five minutes.
 Linux release builds use BuildKit and the official Rust Alpine image. The
 source travels through the build context, not a bind mount into the daemon,
-since the Actions runner itself is a Docker container. The x86_64 build uses
-the existing VM's emulation; ARM64 builds natively. Both binaries use musl and
-run their version check inside the build container. The shared VM has two CPUs
-and 4 GiB RAM, so CI disables test debug info and uses two compiler workers.
+since the Actions runner itself is a Docker container. The compiler runs on
+`BUILDPLATFORM`, installs the requested musl target, and cross-links the final
+binary with Rust's native `rust-lld`. Host proc macros keep their native `cc`.
+This avoids the emulated x86 GCC `collect2` that segfaulted during the 1.0.0
+release build. A separate target-platform stage checks the ELF architecture
+and runs the version check. Only that brief x86_64 check needs emulation.
+The shared VM has two CPUs and 4 GiB RAM, so CI disables test debug info and
+uses two compiler workers.
 Release builds wait for checks and run one at a time to avoid overlapping LLVM
 linking. The VM's settings and other projects are unchanged.
 
@@ -145,7 +149,9 @@ If a real release fails, leave its draft alone and rerun only the failed jobs:
 gh run rerun <run-id> --failed
 ```
 
-This preserves the successful Release Please job's outputs and release SHA.
+This can publish the existing draft. It preserves the successful Release
+Please job's outputs and release SHA, using the original workflow and source.
+A later CI fix does not change that old run's build instructions.
 Rerunning the entire workflow may no longer report `release_created`, so it is
 not the publication retry path. Uploaded draft assets can be replaced by the
 retry; the public previous release stays usable until publication succeeds.
