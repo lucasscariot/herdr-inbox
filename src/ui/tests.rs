@@ -523,7 +523,20 @@ mod composer {
     }
 
     fn composing(width: u16, height: u16) -> App {
-        let mut app = loaded(width, height);
+        composing_with(width, height, vec![])
+    }
+
+    fn preset(name: &str, harness: &str, model: &str, thinking: &str) -> crate::presets::Preset {
+        crate::presets::Preset {
+            name: name.into(),
+            harness: harness.into(),
+            model: model.into(),
+            thinking: thinking.into(),
+        }
+    }
+
+    fn composing_with(width: u16, height: u16, presets: Vec<crate::presets::Preset>) -> App {
+        let mut app = loaded(width, height).with_memory(presets, vec![]);
         key(&mut app, KeyCode::Char('n'));
         let inventory = Inventory {
             projects: vec![Project {
@@ -726,6 +739,85 @@ mod composer {
             at(1),
         );
         assert_eq!(app.focus, crate::app::Focus::Composer);
+    }
+
+    #[test]
+    fn the_preset_strip_sits_under_the_task_and_marks_the_preset_in_use() {
+        let mut app = composing_with(
+            110,
+            30,
+            vec![preset("Deep", "claude", "opus", "high"), preset("Fast", "codex", "gpt-5", "")],
+        );
+        let palette = Palette::default();
+        let terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        let bottom = screen.lines().position(|l| l.contains("╰")).unwrap();
+        let strip = screen.lines().nth(bottom + 1).unwrap();
+        assert!(strip.contains("Presets"), "{screen}");
+        assert!(
+            strip.contains("✻ Deep") && strip.contains("◆ Fast") && strip.contains("+ Save as preset…"),
+            "{screen}"
+        );
+        assert!(strip.contains("F7  ›"), "{screen}");
+        assert!(screen.lines().nth(bottom + 3).unwrap().contains("Project"), "a blank line, then the fields: {screen}");
+        assert!(!screen.contains("Preset     "), "no preset row among the fields: {screen}");
+        let buffer = terminal.backend().buffer();
+        let (x, y) = find(&terminal, "Deep");
+        let deep = &buffer[(x, y)];
+        assert_eq!((deep.fg, deep.bg), (palette.accent, palette.selection_bg), "the preset in use");
+        assert!(deep.modifier.contains(Modifier::BOLD));
+        let (x, y) = find(&terminal, "Fast");
+        let fast = &buffer[(x, y)];
+        assert_eq!(fast.fg, palette.overlay0, "Codex is not installed here");
+        assert!(fast.modifier.contains(Modifier::DIM));
+        assert!(!fast.modifier.contains(Modifier::REVERSED));
+        assert!(screen.contains("⌃S send & keep"), "{screen}");
+
+        key(&mut app, KeyCode::F(7));
+        let terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        let (x, y) = find(&terminal, "Deep");
+        assert!(terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::REVERSED), "the cursor chip");
+        let strip = screen.lines().nth(bottom + 1).unwrap();
+        assert!(strip.contains("▸ Presets"), "{screen}");
+        let under = screen.lines().nth(bottom + 2).unwrap();
+        assert!(under.contains("Claude · opus · high"), "the cursor chip is described under the strip: {screen}");
+        let (dx, _) = find(&terminal, "Claude · opus · high");
+        let (cx, _) = find(&terminal, "✻ Deep");
+        assert_eq!(dx, cx, "aligned with the chips");
+        assert!(screen.contains("1-9 quick pick") && !screen.contains("send & keep"), "strip hints: {screen}");
+        key(&mut app, KeyCode::Right);
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("not installed on this machine"), "{screen}");
+    }
+
+    #[test]
+    fn a_long_strip_wraps_and_pushes_the_fields_down() {
+        let presets = (0..8).map(|i| preset(&format!("Preset number {i}"), "claude", "opus", "")).collect();
+        let app = composing_with(90, 30, presets);
+        let layout =
+            crate::app::ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(layout.strip.height >= 2, "{:?}", layout.strip);
+        assert_eq!(layout.chips.len(), 9, "every chip fits");
+        let rows: std::collections::BTreeSet<u16> = layout.chips.iter().map(|(_, r)| r.y).collect();
+        assert_eq!(rows.len() as u16, layout.strip.height);
+        for (_, rect) in &layout.chips {
+            assert!(rect.right() <= layout.content.right());
+        }
+        assert_eq!(layout.fields[0].1.y, layout.strip.bottom() + 1);
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("Preset number 7"), "{screen}");
+        assert!(screen.contains("Project"), "{screen}");
+    }
+
+    #[test]
+    fn a_send_error_goes_under_the_strip_not_over_it() {
+        let mut app = composing_with(110, 30, vec![preset("Deep", "claude", "opus", "high")]);
+        app.composer.task.clear();
+        key(&mut app, KeyCode::Enter);
+        let screen = text(&render(&app, at(1)));
+        let strip = screen.lines().position(|l| l.contains("✻ Deep")).unwrap();
+        assert!(screen.lines().nth(strip + 1).unwrap().contains("Write a task first."), "{screen}");
     }
 
     #[test]

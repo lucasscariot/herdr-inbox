@@ -10,6 +10,7 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
+use super::composer::Chip;
 use super::{App, Connection, Effect, Field, Focus, NoticeKind, Pick, StreamState};
 use crate::clipboard::Clip;
 use crate::herdr::terminal::{Control, MouseAction, MouseButton as PaneButton, ScrollDirection};
@@ -118,19 +119,7 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
             return;
         }
         KeyCode::Char('s') if ctrl => return app.send(true, now, effects),
-        KeyCode::Char('d') if ctrl => {
-            let suggested = app.composer.suggested_preset_name(&app.composer_context());
-            match suggested {
-                Some(name) => {
-                    app.composer.open_picker(Field::Preset, &name);
-                    if let Some(picker) = app.composer.picker.as_mut() {
-                        picker.saving = true;
-                    }
-                }
-                None => app.composer.error = Some("Pick a model first to save a preset.".into()),
-            }
-            return;
-        }
+        KeyCode::Char('d') if ctrl => return open_save_prompt(app),
         KeyCode::Char('p') if ctrl && app.composer.field == Field::Task => {
             let history = app.history.clone();
             return app.composer.browse_history(&history, true);
@@ -147,11 +136,17 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
             if let Some(field) = Field::from_key(n)
                 && app.composer.fields(&app.composer_context()).contains(&field)
             {
-                app.composer.open_picker(field, "");
+                match field {
+                    Field::Preset => app.with_composer(|c, ctx| c.focus_presets(ctx)),
+                    field => app.composer.open_picker(field, ""),
+                }
             }
             return;
         }
         _ => {}
+    }
+    if app.composer.field == Field::Preset {
+        return strip_key(app, key, effects);
     }
     if app.composer.field != Field::Task {
         return field_key(app, key);
@@ -192,6 +187,92 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
     }
 }
 
+/// Asks for a name to save the current harness, model and thinking under.
+fn open_save_prompt(app: &mut App) {
+    match app.composer.suggested_preset_name(&app.composer_context()) {
+        Some(name) => {
+            app.composer.open_picker(Field::Preset, &name);
+            if let Some(picker) = app.composer.picker.as_mut() {
+                picker.saving = true;
+            }
+        }
+        None => app.composer.error = Some("Pick a model first to save a preset.".into()),
+    }
+}
+
+/// Keys on the preset strip: move along the chips, apply one, or manage
+/// the presets in place. Up and Down leave the strip like any field.
+fn strip_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let chip = app.composer.chip_at_cursor(&app.composer_context());
+    let preset = match chip.chip {
+        Chip::Preset(index) => app.presets.get(index).cloned(),
+        Chip::Save => None,
+    };
+    match key.code {
+        KeyCode::Up => app.with_composer(|c, ctx| c.next_field(ctx, false)),
+        KeyCode::Down => app.with_composer(|c, ctx| c.next_field(ctx, true)),
+        KeyCode::Left | KeyCode::Right if ctrl => {
+            if let Some(preset) = preset {
+                let forward = key.code == KeyCode::Right;
+                let next = crate::presets::shift(&app.presets, &preset.name, forward);
+                if next != app.presets {
+                    app.composer.preset_cursor = if forward { chip_index(&chip) + 1 } else { chip_index(&chip) - 1 };
+                    app.change_presets(Ok(next), effects);
+                }
+            }
+        }
+        KeyCode::Left => app.with_composer(|c, ctx| c.move_preset_cursor(ctx, false)),
+        KeyCode::Right => app.with_composer(|c, ctx| c.move_preset_cursor(ctx, true)),
+        KeyCode::Enter | KeyCode::Char(' ') => pick_chip(app, chip.chip, effects),
+        KeyCode::Char(c @ '1'..='9') if !ctrl => {
+            let index = c as usize - '1' as usize;
+            if index < app.presets.len() {
+                app.composer.preset_cursor = index;
+                pick_chip(app, Chip::Preset(index), effects);
+            }
+        }
+        KeyCode::Delete => {
+            if let Some(preset) = preset {
+                let next = crate::presets::remove(&app.presets, &preset.name);
+                app.change_presets(Ok(next), effects);
+            }
+        }
+        KeyCode::Char('r') if ctrl => {
+            if let Some(preset) = preset {
+                app.composer.open_picker(Field::Preset, &preset.name);
+                if let Some(picker) = app.composer.picker.as_mut() {
+                    picker.renaming = Some(preset.name);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn chip_index(chip: &crate::app::composer::ChipView) -> usize {
+    match chip.chip {
+        Chip::Preset(index) => index,
+        Chip::Save => usize::MAX,
+    }
+}
+
+/// Applies a preset chip, going back to where the strip was reached from,
+/// or opens the prompt to save a new one.
+fn pick_chip(app: &mut App, chip: Chip, effects: &mut Vec<Effect>) {
+    match chip {
+        Chip::Preset(index) => {
+            if let Some(name) = app.presets.get(index).map(|p| p.name.clone()) {
+                choose(app, Pick::Preset(name), effects);
+                if app.composer.error.is_none() {
+                    app.composer.leave_presets();
+                }
+            }
+        }
+        Chip::Save => open_save_prompt(app),
+    }
+}
+
 /// Keys on a field row: move between fields, or open its picker.
 fn field_key(app: &mut App, key: KeyEvent) {
     let field = app.composer.field;
@@ -225,19 +306,6 @@ fn picker_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
                 choose(app, pick, effects);
             }
             return;
-        }
-        KeyCode::Delete if picker.field == Field::Preset => {
-            if let Some(Pick::Preset(name)) = choices.get(picker.selected).map(|c| c.pick.clone()) {
-                let next = crate::presets::remove(&app.presets, &name);
-                app.change_presets(Ok(next), effects);
-            }
-        }
-        KeyCode::Char('r') if ctrl && picker.field == Field::Preset => {
-            if let Some(Pick::Preset(name)) = choices.get(picker.selected).map(|c| c.pick.clone()) {
-                picker.query = name.clone();
-                picker.renaming = Some(name);
-                picker.selected = 0;
-            }
         }
         KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
         KeyCode::Char('p') if ctrl => picker.selected = picker.selected.saturating_sub(1),
@@ -696,6 +764,16 @@ fn composer_mouse(app: &mut App, mouse: MouseEvent, now: SystemTime, effects: &m
             y.saturating_sub(layout.task_inner.y).min(layout.task_inner.height - 1) + layout.task_scroll,
             x.saturating_sub(layout.task_inner.x),
         );
+    } else if contains(layout.strip, x, y) {
+        // A click comes from nowhere in particular: the strip keeps focus.
+        app.composer.field = Field::Preset;
+        app.with_composer(|c, ctx| c.focus_presets(ctx));
+        if let Some(chip) = layout.chip_at(x, y) {
+            if let Chip::Preset(index) = chip {
+                app.composer.preset_cursor = index;
+            }
+            pick_chip(app, chip, effects);
+        }
     } else if let Some(field) = layout.field_at(x, y) {
         if app.composer.fields(&app.composer_context()).contains(&field) {
             app.composer.field = field;

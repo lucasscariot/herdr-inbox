@@ -1,9 +1,10 @@
 //! Composer geometry shared by drawing and mouse hit testing. The task stays
-//! near the top; decorative content never moves the input or its choices.
+//! near the top, the preset strip right under it; decorative content never
+//! moves the input or its choices.
 
 use ratatui::layout::Rect;
 
-use super::{Composer, Context, Field};
+use super::{Chip, ChipView, Composer, Context, Field};
 
 pub struct ComposerLayout {
     pub content: Rect,
@@ -12,6 +13,10 @@ pub struct ComposerLayout {
     pub task_lines: Vec<String>,
     pub task_scroll: u16,
     pub task_cursor: (u16, u16),
+    /// The preset strip's rows, label included.
+    pub strip: Rect,
+    /// Every chip that fits, flowing left to right and wrapping.
+    pub chips: Vec<(ChipView, Rect)>,
     pub fields: Vec<(Field, Rect)>,
     pub send: Rect,
     pub details_y: u16,
@@ -27,6 +32,8 @@ pub struct PickerLayout {
 
 impl ComposerLayout {
     pub const LABEL_WIDTH: u16 = 11;
+    /// Room kept for a row's key hint, `F7  ›`.
+    const KEY_WIDTH: u16 = 7;
 
     pub fn new(area: Rect, composer: &Composer, ctx: &Context) -> Option<Self> {
         if area.width < 20 || area.height < 8 {
@@ -42,11 +49,40 @@ impl ComposerLayout {
         let task_inner = Rect::new(task_box.x + 2, task_box.y + 1, inner_width, rows);
         let task_scroll = row.saturating_sub(rows - 1);
         let task_cursor = (task_inner.x + col.min(inner_width), task_inner.y + row - task_scroll);
-        let mut y = task_box.bottom() + 1;
+        let limit = area.bottom().saturating_sub(2);
+        // The strip: chips flow after the label and wrap under it, the first
+        // row leaving room for the key hint on the right.
+        let mut y = task_box.bottom();
+        // A chip's own padding takes the place of the space before a value.
+        let chips_x = content.x + 1 + Self::LABEL_WIDTH;
+        let mut chips = Vec::new();
+        let mut x = chips_x;
+        let mut strip_rows = 0;
+        for chip in composer.chips(ctx) {
+            let right =
+                if y == task_box.bottom() { content.right().saturating_sub(Self::KEY_WIDTH) } else { content.right() };
+            let room = right.saturating_sub(chips_x);
+            if room == 0 || y >= limit {
+                break;
+            }
+            let width = chip.width().min(room);
+            if x + width > right && x > chips_x {
+                y += 1;
+                x = chips_x;
+                if y >= limit {
+                    break;
+                }
+            }
+            chips.push((chip, Rect::new(x, y, width, 1)));
+            x += width + 1;
+            strip_rows = (y - task_box.bottom()) + 1;
+        }
+        let strip = Rect::new(content.x, task_box.bottom(), content.width, strip_rows);
+        let mut y = strip.bottom() + 1;
         let mut fields = Vec::new();
         // Show unsupported thinking explicitly rather than making a row vanish.
-        for field in Field::ORDER.into_iter().filter(|f| *f != Field::Task) {
-            if y >= area.bottom().saturating_sub(2) {
+        for field in Field::ORDER.into_iter().filter(|f| !matches!(f, Field::Task | Field::Preset)) {
+            if y >= limit {
                 break;
             }
             fields.push((field, Rect::new(content.x, y, content.width, 1)));
@@ -54,8 +90,10 @@ impl ComposerLayout {
         }
         let send = if y + 1 < area.bottom() { Rect::new(content.x, y + 1, 8, 1) } else { Rect::default() };
         let picker = composer.picker.as_ref().map(|picker| {
-            let anchor =
-                fields.iter().find(|(f, _)| *f == picker.field).map(|(_, r)| r.bottom()).unwrap_or(content.y + 1);
+            let anchor = match picker.field {
+                Field::Preset => strip.bottom(),
+                field => fields.iter().find(|(f, _)| *f == field).map(|(_, r)| r.bottom()).unwrap_or(content.y + 1),
+            };
             let choices = composer.choices_with_actions(ctx, picker.field, &picker.query);
             let height = (choices.len().clamp(1, 10) as u16 + 3).min(area.height - 2);
             let width = content.width.saturating_sub(Self::LABEL_WIDTH).max(20).min(content.width);
@@ -72,6 +110,8 @@ impl ComposerLayout {
             task_lines,
             task_scroll,
             task_cursor,
+            strip,
+            chips,
             fields,
             send,
             details_y: y + 3,
@@ -80,7 +120,15 @@ impl ComposerLayout {
     }
 
     pub fn field_at(&self, x: u16, y: u16) -> Option<Field> {
+        if contains(self.strip, x, y) {
+            return Some(Field::Preset);
+        }
         self.fields.iter().find(|(_, rect)| contains(*rect, x, y)).map(|(field, _)| *field)
+    }
+
+    /// The chip under a point in the strip.
+    pub fn chip_at(&self, x: u16, y: u16) -> Option<Chip> {
+        self.chips.iter().find(|(_, rect)| contains(*rect, x, y)).map(|(chip, _)| chip.chip)
     }
 }
 
@@ -107,6 +155,8 @@ mod tests {
                     };
                     let mut rects = vec![layout.content, layout.task_box, layout.task_inner, layout.send];
                     rects.extend(layout.fields.iter().map(|(_, rect)| *rect));
+                    rects.push(layout.strip);
+                    rects.extend(layout.chips.iter().map(|(_, rect)| *rect));
                     if let Some(picker) = layout.picker {
                         rects.extend([picker.popup, picker.query, picker.rows]);
                     }

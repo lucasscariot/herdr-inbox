@@ -1307,7 +1307,7 @@ mod composer_flow {
         for _ in 0..4 {
             app.update(press(KeyCode::Tab), at(1));
         }
-        assert_eq!(app.composer.field, Field::Harness, "task, project, machine, preset, harness");
+        assert_eq!(app.composer.field, Field::Harness, "task, presets, project, machine, harness");
         app.update(press(KeyCode::Enter), at(1));
         app.update(press(KeyCode::Enter), at(1));
         assert_eq!(app.composer.field, Field::Harness);
@@ -1316,6 +1316,8 @@ mod composer_flow {
     #[test]
     fn typing_on_a_field_row_opens_its_picker_with_that_letter() {
         let mut app = composing();
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.field, Field::Preset, "the strip comes first");
         app.update(press(KeyCode::Tab), at(1));
         assert_eq!(app.composer.field, Field::Project);
         app.update(press(KeyCode::Char('c')), at(1));
@@ -1328,7 +1330,10 @@ mod composer_flow {
         let mut app = composing();
         type_text(&mut app, "x");
         app.update(press(KeyCode::Down), at(1));
+        assert_eq!(app.composer.field, Field::Preset);
+        app.update(press(KeyCode::Down), at(1));
         assert_eq!(app.composer.field, Field::Project);
+        app.update(press(KeyCode::Up), at(1));
         app.update(press(KeyCode::Up), at(1));
         assert_eq!(app.composer.field, Field::Task);
     }
@@ -1467,6 +1472,7 @@ mod composer_flow {
 
 mod conveniences {
     use super::*;
+    use crate::app::Chip;
     use crate::discovery::{Catalog, CheckoutEntry, Choice as ModelChoice, Inventory, Project};
     use crate::launch::{Outcome, Record, Stage};
     use crate::presets::Preset;
@@ -1597,11 +1603,10 @@ mod conveniences {
     #[test]
     fn disabled_choices_and_unsupported_thinking_ignore_clicks() {
         let mut app = composing(vec![preset("Pi", "pi", "x", "")], vec![]);
-        app.update(press(KeyCode::F(7)), at(1));
-        let popup = geometry(&app).picker.unwrap();
-        assert!(click(&mut app, popup.rows.x + 1, popup.rows.y).is_empty());
-        assert!(app.composer.picker.is_some());
-        app.composer.close_picker();
+        let chip = geometry(&app).chips[0].1;
+        assert!(click(&mut app, chip.x + 1, chip.y).is_empty());
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"), "a preset for a missing CLI stays unapplied");
+        assert_eq!(app.composer.field, Field::Preset, "the click still focuses the strip");
         app.with_composer(|c, ctx| c.apply(ctx, Pick::Harness("codex".into())));
         let row = geometry(&app).fields.into_iter().find(|(field, _)| *field == Field::Thinking).unwrap().1;
         click(&mut app, row.x, row.y);
@@ -1681,60 +1686,233 @@ mod conveniences {
         assert_eq!(app.composer.value(&app.composer_context(), Field::Preset), "Claude · Opus");
     }
 
+    fn two_presets() -> Vec<Preset> {
+        vec![preset("Deep", "claude", "opus", "high"), preset("Fast", "codex", "gpt-5", "")]
+    }
+
+    /// Lets Codex take a model, so the second preset can launch.
+    fn with_codex_models(app: &mut App) {
+        let catalog = Catalog {
+            choices: vec![ModelChoice { id: "gpt-5".into(), label: "GPT-5".into() }],
+            selectable: true,
+            ..Catalog::default()
+        };
+        app.inventories.get_mut(LOCAL).unwrap().models.insert("codex".into(), catalog);
+    }
+
     #[test]
-    fn picking_a_preset_sets_harness_model_and_thinking() {
-        let mut app =
-            composing(vec![preset("Deep", "claude", "opus", "high"), preset("Fast", "codex", "gpt-5", "")], vec![]);
-        app.update(press(KeyCode::F(3)), at(1));
-        type_text(&mut app, "codex");
-        app.update(press(KeyCode::Enter), at(1));
-        app.update(press(KeyCode::F(7)), at(1));
-        type_text(&mut app, "deep");
-        app.update(press(KeyCode::Enter), at(1));
+    fn a_new_thread_starts_on_the_first_preset_and_goes_back_to_it_after_a_send() {
+        let mut app = composing(two_presets(), vec![]);
+        with_codex_models(&mut app);
         assert_eq!(app.composer.harness.as_deref(), Some("claude"));
         assert_eq!(app.composer.model.as_deref(), Some("opus"));
         assert_eq!(app.composer.thinking.as_deref(), Some("high"));
-        assert_eq!(app.composer.matching_preset(&app.presets).map(|p| p.name.as_str()), Some("Deep"));
+        assert!(!app.composer.start_preset, "applied once");
+        app.update(press(KeyCode::F(7)), at(1));
+        app.update(press(KeyCode::Char('2')), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!(app.composer.field, Field::Task, "F7 then a digit goes back to writing");
+        type_text(&mut app, "Fix it");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        let plan =
+            effects.iter().find_map(|e| if let Effect::Launch { plan, .. } = e { Some(plan) } else { None }).unwrap();
+        assert_eq!(plan.record.harness, "codex", "the thread launched on the chosen preset");
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"), "the next thread starts on the first again");
+        assert_eq!(app.composer.model.as_deref(), Some("opus"));
     }
 
     #[test]
-    fn typing_finds_presets_before_offering_to_save_one() {
-        let mut app = composing(vec![preset("Deep", "claude", "opus", "high")], vec![]);
-        app.composer.model = Some("opus".into());
+    fn send_and_keep_stays_on_the_chosen_preset() {
+        let mut app = composing(two_presets(), vec![]);
         app.update(press(KeyCode::F(7)), at(1));
-        type_text(&mut app, "dee");
-        let labels: Vec<String> = app
-            .composer
-            .choices_with_actions(&app.composer_context(), Field::Preset, "dee")
-            .into_iter()
-            .map(|c| c.label)
-            .collect();
-        assert_eq!(labels, ["Deep", "Save as dee"]);
+        app.update(press(KeyCode::Char('2')), at(1));
+        type_text(&mut app, "Fix it");
+        ctrl(&mut app, 's');
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!(app.composer.task.text(), "Fix it");
     }
 
     #[test]
-    fn a_preset_for_a_cli_missing_here_is_shown_but_not_pickable() {
-        let mut app = composing(vec![preset("Pi", "pi", "x", "")], vec![]);
+    fn the_first_preset_waits_for_the_inventory_and_skips_a_cli_missing_here() {
+        let (app, _) = loaded();
+        let mut app =
+            app.with_memory(vec![preset("Pi", "pi", "x", "max"), preset("Fast", "codex", "gpt-5", "")], vec![]);
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert!(app.composer.start_preset, "nothing is known about the machine yet");
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"), "Pi is not installed here");
+        assert_eq!(app.composer.model.as_deref(), Some("gpt-5"));
+        assert_eq!(app.composer.thinking, None);
+        assert!(!app.composer.start_preset);
+    }
+
+    #[test]
+    fn without_presets_a_new_thread_keeps_the_choices_it_had() {
+        let mut app = composing(vec![], vec![]);
+        app.with_composer(|c, ctx| c.apply(ctx, Pick::Model(Some("opus".into()))));
+        app.with_composer(|c, ctx| c.apply(ctx, Pick::Thinking(Some("high".into()))));
+        app.update(press(KeyCode::Esc), at(1));
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert_eq!(app.composer.model.as_deref(), Some("opus"));
+        assert_eq!(app.composer.thinking.as_deref(), Some("high"));
+        assert!(!app.composer.start_preset, "nothing to start on, nothing pending");
+    }
+
+    #[test]
+    fn resending_a_thread_keeps_its_own_choices_over_the_first_preset() {
+        let (mut app, _) = loaded();
+        app = app.with_memory(two_presets(), vec![]);
+        let mut codex = record("a1", Some("w2:p1"), Stage::Submitted);
+        codex.harness = "codex".into();
+        codex.model = "gpt-5".into();
+        codex.thinking = String::new();
+        app.update(Input::Journals(vec![codex]), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.task.text(), "Task a1\nwith details");
+        assert!(!app.composer.start_preset, "the thread's own choices, not the first preset");
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(2));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!(app.composer.model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn the_strip_lists_presets_in_order_then_the_save_chip() {
+        let mut app = composing(vec![preset("Deep", "claude", "opus", "high"), preset("Pi", "pi", "x", "")], vec![]);
+        {
+            let ctx = app.composer_context();
+            let chips = app.composer.chips(&ctx);
+            assert_eq!(chips.len(), 3);
+            assert_eq!((chips[0].label.as_str(), chips[0].enabled, chips[0].active), ("Deep", true, true));
+            assert_eq!((chips[1].label.as_str(), chips[1].enabled, chips[1].active), ("Pi", false, false));
+            assert_eq!(app.composer.chip_detail(&ctx, &chips[0]), "Claude · opus · high");
+            assert_eq!(app.composer.chip_detail(&ctx, &chips[1]), "not installed on this machine");
+            assert_eq!((chips[2].chip, chips[2].harness.is_none()), (Chip::Save, true));
+        }
         app.update(press(KeyCode::F(7)), at(1));
-        let choices = app.composer.choices_with_actions(&app.composer_context(), Field::Preset, "");
-        assert_eq!(choices[0].detail, "not installed here");
-        assert!(!choices[0].enabled);
+        app.update(press(KeyCode::Right), at(1));
         app.update(press(KeyCode::Enter), at(1));
-        assert!(app.composer.picker.is_some(), "a disabled choice does nothing");
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"), "a disabled chip does nothing");
+        assert!(app.composer.picker.is_none());
     }
 
     #[test]
-    fn presets_are_deleted_and_renamed_inside_the_picker() {
+    fn the_strip_moves_with_arrows_and_digits_and_applies_with_enter() {
+        let mut app = composing(two_presets(), vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        assert_eq!(
+            (app.composer.field, app.composer.preset_cursor),
+            (Field::Preset, 0),
+            "the cursor on the preset in use"
+        );
+        app.update(press(KeyCode::Right), at(1));
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!(app.composer.model.as_deref(), Some("gpt-5"));
+        assert_eq!(app.composer.thinking, None);
+        assert_eq!(app.composer.matching_preset(&app.presets).map(|p| p.name.as_str()), Some("Fast"));
+        assert_eq!(app.composer.field, Field::Task, "F7 came from the task, so applying goes back to it");
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!((app.composer.field, app.composer.preset_cursor), (Field::Preset, 1));
+        app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(app.composer.field, Field::Preset, "reached with Tab, the strip keeps focus");
+        app.update(press(KeyCode::Left), at(1));
+        app.update(press(KeyCode::Left), at(1));
+        assert_eq!(app.composer.preset_cursor, 2, "wraps onto the save chip");
+        app.update(press(KeyCode::Right), at(1));
+        assert_eq!(app.composer.preset_cursor, 0, "and back around");
+        app.update(press(KeyCode::Char('1')), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        assert_eq!(app.composer.thinking.as_deref(), Some("high"));
+        assert_eq!(app.composer.field, Field::Preset);
+        app.update(press(KeyCode::Char('9')), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"), "no ninth preset");
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.field, Field::Project);
+        app.update(press(KeyCode::Char('1')), at(1));
+        assert_eq!(app.composer.picker.as_ref().map(|p| p.field), Some(Field::Project), "digits filter other fields");
+    }
+
+    #[test]
+    fn the_save_chip_and_ctrl_d_ask_for_a_name_and_the_prompt_names_a_replacement() {
+        let mut app = composing(vec![preset("Deep", "claude", "opus", "high")], vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        app.update(press(KeyCode::Left), at(1));
+        assert_eq!(app.composer.chip_at_cursor(&app.composer_context()).chip, Chip::Save);
+        app.update(press(KeyCode::Enter), at(1));
+        let picker = app.composer.picker.as_ref().unwrap();
+        assert_eq!((picker.field, picker.saving, picker.title().as_str()), (Field::Preset, true, "Save preset"));
+        assert_eq!(picker.query, "Claude · Opus · High");
+        let choices = app.composer.choices_with_actions(&app.composer_context(), Field::Preset, &picker.query);
+        assert_eq!(choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["Save as Claude · Opus · High"]);
+        for _ in 0..picker.query.chars().count() {
+            app.update(press(KeyCode::Backspace), at(1));
+        }
+        let choices = app.composer.choices_with_actions(&app.composer_context(), Field::Preset, "");
+        assert!(!choices[0].enabled, "a preset needs a name");
+        type_text(&mut app, "Deep");
+        let choices = app.composer.choices_with_actions(&app.composer_context(), Field::Preset, "Deep");
+        assert_eq!(choices[0].detail, "replaces the existing preset");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(effects, vec![Effect::SavePresets(vec![preset("Deep", "claude", "opus", "high")])]);
+        assert_eq!(app.composer.field, Field::Preset, "focus goes back to the strip");
+    }
+
+    #[test]
+    fn presets_are_deleted_and_renamed_on_the_strip() {
         let mut app = composing(vec![preset("A", "claude", "opus", ""), preset("B", "codex", "gpt-5", "")], vec![]);
         app.update(press(KeyCode::F(7)), at(1));
         let effects = app.update(press(KeyCode::Delete), at(1));
         assert_eq!(effects, vec![Effect::SavePresets(vec![preset("B", "codex", "gpt-5", "")])]);
         ctrl(&mut app, 'r');
-        assert_eq!(app.composer.picker.as_ref().unwrap().renaming.as_deref(), Some("B"));
+        let picker = app.composer.picker.as_ref().unwrap();
+        assert_eq!((picker.renaming.as_deref(), picker.title().as_str()), (Some("B"), "Rename preset"));
         app.update(press(KeyCode::Backspace), at(1));
         type_text(&mut app, "Quick");
         let effects = app.update(press(KeyCode::Enter), at(1));
         assert_eq!(effects, vec![Effect::SavePresets(vec![preset("Quick", "codex", "gpt-5", "")])]);
+        assert!(app.update(press(KeyCode::Left), at(1)).is_empty());
+        assert!(app.update(press(KeyCode::Delete), at(1)).is_empty(), "the save chip cannot be deleted");
+    }
+
+    #[test]
+    fn ctrl_arrows_reorder_presets_and_persist_the_preference() {
+        let mut app = composing(two_presets(), vec![]);
+        app.update(press(KeyCode::F(7)), at(1));
+        let effects = app.update(press_with(KeyCode::Right, KeyModifiers::CONTROL), at(1));
+        assert_eq!(
+            effects,
+            vec![Effect::SavePresets(vec![
+                preset("Fast", "codex", "gpt-5", ""),
+                preset("Deep", "claude", "opus", "high")
+            ])]
+        );
+        assert_eq!(app.composer.preset_cursor, 1, "the cursor follows the preset");
+        assert!(app.update(press_with(KeyCode::Right, KeyModifiers::CONTROL), at(1)).is_empty(), "already last");
+        let effects = app.update(press_with(KeyCode::Left, KeyModifiers::CONTROL), at(1));
+        assert_eq!(effects, vec![Effect::SavePresets(two_presets())]);
+        assert_eq!(app.composer.preset_cursor, 0);
+        app.update(press(KeyCode::Esc), at(1));
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"), "the new first preset opens the next thread");
+    }
+
+    #[test]
+    fn clicking_a_chip_applies_it_and_the_save_chip_opens_the_prompt() {
+        let mut app = composing(two_presets(), vec![]);
+        let chips = geometry(&app).chips;
+        assert_eq!(chips.len(), 3);
+        assert!(click(&mut app, chips[1].1.x + 2, chips[1].1.y).is_empty());
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!((app.composer.field, app.composer.preset_cursor), (Field::Preset, 1));
+        let save = geometry(&app).chips[2].1;
+        click(&mut app, save.x + 1, save.y);
+        assert!(app.composer.picker.as_ref().is_some_and(|p| p.saving));
+        app.update(press(KeyCode::Esc), at(1));
+        let strip = geometry(&app).strip;
+        app.composer.field = Field::Task;
+        click(&mut app, strip.x + 1, strip.y);
+        assert_eq!(app.composer.field, Field::Preset, "the label focuses the strip");
     }
 
     #[test]
@@ -2513,7 +2691,8 @@ mod space_bar {
         // On a composer field, space opens its picker.
         app.update(press(KeyCode::Char('n')), ms(40));
         app.update(press(KeyCode::Tab), ms(50));
-        assert_ne!(app.composer.field, crate::app::Field::Task);
+        app.update(press(KeyCode::Tab), ms(55));
+        assert_eq!(app.composer.field, crate::app::Field::Project);
         space(&mut app, 60);
         assert!(app.composer.picker.is_some(), "the picker opened at once");
         assert!(!app.hold.busy());

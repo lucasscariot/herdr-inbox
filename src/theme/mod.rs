@@ -181,6 +181,17 @@ pub fn load(herdr_config: &Path) -> Palette {
 }
 
 impl Palette {
+    /// The background of a card that stands a little off the panel: the
+    /// dim surface when the theme defines it in RGB, else the panel's own
+    /// surface, since an ANSI grey fill reads as a bright block in many
+    /// terminal palettes.
+    pub fn raised(&self) -> Color {
+        match self.surface_dim {
+            Color::Rgb(..) => self.surface_dim,
+            _ => self.surface0,
+        }
+    }
+
     fn apply(&mut self, custom: &toml::Table) {
         let tokens: [(&str, &mut Color); 19] = [
             ("accent", &mut self.accent),

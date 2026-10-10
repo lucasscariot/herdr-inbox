@@ -149,6 +149,12 @@ it, press `Enter` or click **send**. Click in the task to place the cursor,
 click a field to open its choices, then click a choice. The mouse wheel moves
 through a choice list. The task stays near the top even in a tall window.
 
+Right under the task, the **Presets** strip lists your saved harness, model
+and thinking combinations as chips, in your order of preference. A new thread
+starts on the first preset. Click a chip, or press `F7` and a digit, to switch
+in one move; the chip in use is highlighted. **+ Save as preset…** (or
+`Ctrl+D`) saves the current choices under a name.
+
 The composer clears at once and stays open for the next task; the launch runs
 in the background and its progress shows under **Launches**.
 
@@ -158,6 +164,7 @@ in the background and its progress shows under **Launches**.
 | `Ctrl+S`, `Ctrl+Enter` | Send and keep the task, to send it again elsewhere |
 | `Shift+Enter`, `Alt+Enter` | New line |
 | `Tab`, `Shift+Tab` | Move between the task and the choices |
+| `F7`, then `1`-`9` | Presets: focus the strip, apply the nth preset |
 | `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
 | `F12` | Compare: send the task to two or three agents at once |
 | `Ctrl+T` | Dictate the task |
@@ -168,8 +175,13 @@ in the background and its progress shows under **Launches**.
 | `Ctrl+G` | Check GitHub releases and update Inbox |
 | `Esc` | Close a list, then the composer (the draft stays) |
 
-**Presets** (`F7`) apply a saved harness, model and thinking level in one
-move. In the preset list, `Ctrl+R` renames and `Delete` removes.
+**Presets.** On the strip (`F7`, or `Tab` from the task), `←` and `→` move
+between chips, `Enter` applies one, `1`-`9` applies the nth preset directly,
+`Ctrl+←` and `Ctrl+→` reorder them (the first preset is the one every new
+thread starts on), `Ctrl+R` renames and `Delete` removes. A preset whose CLI
+is not installed on the chosen machine is shown dimmed and skipped as the
+starting preset. After a send, the composer goes back to the first preset;
+`Ctrl+S` keeps the task and the chosen preset.
 
 Every list filters as you type: `bgpk` finds `opencode/big-pickle`. A model
 the list does not know can still be used: type its id and pick **Use …**.

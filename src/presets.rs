@@ -1,6 +1,7 @@
 //! Presets: named combinations of harness, model and thinking level, picked
 //! in one move in the composer. Stored as `presets.json` in the legacy
-//! plugin's format.
+//! plugin's format, in the user's order of preference: the first preset is
+//! the one every new thread starts on.
 
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +82,19 @@ pub fn remove(presets: &[Preset], name: &str) -> Vec<Preset> {
     presets.iter().filter(|p| p.name != name).cloned().collect()
 }
 
+/// Moves a preset one place later (`forward`) or earlier in the order of
+/// preference. At either end, or for an unknown name, nothing changes.
+pub fn shift(presets: &[Preset], name: &str, forward: bool) -> Vec<Preset> {
+    let mut next = presets.to_vec();
+    if let Some(index) = next.iter().position(|p| p.name == name) {
+        let target = if forward { index + 1 } else { index.wrapping_sub(1) };
+        if target < next.len() {
+            next.swap(index, target);
+        }
+    }
+    next
+}
+
 /// A readable default name: "Claude · Opus · High".
 pub fn suggested_name(harness_label: &str, model_label: &str, thinking: Option<&str>) -> String {
     let mut parts = vec![harness_label.to_string(), model_label.to_string()];
@@ -152,6 +166,18 @@ mod tests {
         assert!(presets[1].matches("pi", Some("x"), None));
         assert!(presets[1].matches("pi", Some("x"), Some("")));
         assert!(!presets[1].matches("pi", None, None), "a preset always names a model");
+    }
+
+    #[test]
+    fn shifting_moves_a_preset_one_place_and_stops_at_the_ends() {
+        let presets =
+            vec![preset("a", "claude", "opus", ""), preset("b", "pi", "x", ""), preset("c", "codex", "g", "")];
+        let names = |p: &[Preset]| p.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&shift(&presets, "b", false)), ["b", "a", "c"]);
+        assert_eq!(names(&shift(&presets, "b", true)), ["a", "c", "b"]);
+        assert_eq!(names(&shift(&presets, "a", false)), ["a", "b", "c"], "already first");
+        assert_eq!(names(&shift(&presets, "c", true)), ["a", "b", "c"], "already last");
+        assert_eq!(shift(&presets, "missing", true), presets);
     }
 
     #[test]
