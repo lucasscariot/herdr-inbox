@@ -114,10 +114,13 @@ assert the compiled version separately from the version-independent layout.
 - **Presets lead the composer.** The strip under the task shows every preset
   as a chip, in the order kept in `presets.json`, which is the user's order
   of preference: `Ctrl+←`/`Ctrl+→` reorder it. Opening the composer for a new
-  thread, and sending a task, set `start_preset`; the next `settle` that knows
+  thread, and sending a task, set `start_preset`; every `settle` that knows
   what the machine has installed applies the first preset whose CLI is there,
-  so a preset is never applied before discovery can validate it. Resending a
-  thread keeps the thread's own choices instead.
+  and the flag stays until a fresh inventory arrives from that machine or the
+  user picks a harness, model, thinking level or preset by hand. So a preset
+  is never applied before discovery can validate it, and a cached inventory
+  from the last run never fixes the choice. Resending a thread keeps the
+  thread's own choices instead.
 - **Thinking belongs to the selected model.** Catalogs with per-model levels
   constrain both the picker and launch validation; changing models clears an
   incompatible level. Older catalogs keep their harness-wide levels. Codex

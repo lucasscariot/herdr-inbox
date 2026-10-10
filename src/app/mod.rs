@@ -606,6 +606,7 @@ impl App {
 
     fn on_inventory(&mut self, machine: &str, result: Result<Inventory, String>) {
         self.discovering.remove(machine);
+        let fresh = result.is_ok();
         match result {
             Ok(inventory) => {
                 self.discovery_errors.remove(machine);
@@ -616,6 +617,12 @@ impl App {
             }
         }
         self.with_composer(|composer, ctx| composer.settle(ctx));
+        if fresh && self.composer.machine.as_deref() == Some(machine) {
+            // Fresh word from the thread's machine: the first preset it has
+            // is now the one applied, and stays until chosen otherwise. A
+            // failed discovery leaves the default pending for the next one.
+            self.composer.start_preset = false;
+        }
     }
 
     /// Validates the composer and starts a launch, or one per compared agent.
