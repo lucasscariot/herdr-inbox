@@ -330,6 +330,10 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
     if app.filtering {
         return filter_key(app, key);
     }
+    if app.confirm_archive.is_some() && key.kind == KeyEventKind::Repeat {
+        // Holding the archive key must not confirm it: only a fresh press does.
+        return;
+    }
     if let Some(id) = app.confirm_archive.take() {
         // Pressing the archive key again confirms, so archiving is a double tap.
         if matches!(

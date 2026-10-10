@@ -513,6 +513,17 @@ fn pressing_the_archive_key_twice_archives_and_esc_cancels() {
 }
 
 #[test]
+fn holding_the_archive_key_does_not_confirm() {
+    let (mut app, _) = loaded();
+    app.update(press(KeyCode::Backspace), at(1));
+    let repeat =
+        Input::Key(KeyEvent { kind: KeyEventKind::Repeat, ..KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE) });
+    assert!(app.update(repeat, at(1)).is_empty());
+    assert!(app.confirm_archive.is_some(), "the prompt stays open");
+    assert_eq!(app.update(press(KeyCode::Backspace), at(1)).len(), 1);
+}
+
+#[test]
 fn archiving_the_open_thread_reports_the_archive_whichever_message_comes_first() {
     for archived_first in [true, false] {
         let (mut app, _) = loaded();
