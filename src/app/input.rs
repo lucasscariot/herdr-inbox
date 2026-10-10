@@ -331,8 +331,11 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         return filter_key(app, key);
     }
     if let Some(id) = app.confirm_archive.take() {
-        if matches!(key.code, KeyCode::Enter | KeyCode::Char('y'))
-            && let Some(thread) = app.thread(&id)
+        // Pressing the archive key again confirms, so archiving is a double tap.
+        if matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace
+        ) && let Some(thread) = app.thread(&id)
         {
             let failed_launch = thread.id.starts_with(super::LAUNCH_PREFIX);
             let effect = (!thread.workspace_id.is_empty()).then(|| Effect::Archive {

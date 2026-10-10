@@ -537,12 +537,17 @@ fn the_inbox_shows_threads_drives_an_agent_and_archives() {
     inbox.wait_for_text("WORKING");
     inbox.wait_until_gone("NEEDS INPUT");
 
-    // Back to the list, archive, confirm: the workspace closes in Herdr.
+    // Back to the list. Esc cancels the archive prompt; a double Backspace
+    // archives, and the workspace closes in Herdr.
     inbox.keys("\t");
     inbox.wait_for_text("THREADS");
-    inbox.keys("x");
+    inbox.keys("\x7f");
     inbox.wait_for_text("Archive this thread?");
-    inbox.keys("y");
+    inbox.keys("\x1b");
+    inbox.wait_until_gone("Archive this thread?");
+    inbox.keys("\x7f");
+    inbox.wait_for_text("Archive this thread?");
+    inbox.keys("\x7f");
     inbox.wait_for_text("Archived “Fix the login loop”");
     inbox.wait_for_text("No agent threads yet.");
     let workspaces = sandbox.herdr(&["workspace", "list"]);

@@ -59,6 +59,8 @@ All notable changes to Herdr Inbox. The format follows
 
 - The sidebar's five-column pixel marks are replaced by one small glyph per
   harness on the metadata line, so thread rows get their full width back.
+- Archiving is a double tap: pressing `Backspace`, `Delete` or `x` again
+  confirms, alongside `Enter` and `y`, and `Esc` cancels the prompt.
 
 ### Fixed
 

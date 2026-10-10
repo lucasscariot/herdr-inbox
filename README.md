@@ -85,7 +85,7 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | | `r` | Reply to the agent without opening it |
 | | `e` | Send the thread's task again, from the composer |
 | | `/`, click **Filter threads** | Filter by title, project, branch, harness or machine; `Esc` clears |
-| | `x`, `Delete`, `Backspace` | Archive: closes the thread's workspace, keeps its worktree on disk |
+| | `x`, `Delete`, `Backspace` twice | Archive: closes the thread's workspace, keeps its worktree on disk. The second press (or `Enter`, `y`) confirms; `Esc` cancels |
 | | `d` | Dismiss a failed launch |
 | | `Ctrl+T` | Dictate to the thread under the cursor |
 | | `F10` | Dictation settings |
