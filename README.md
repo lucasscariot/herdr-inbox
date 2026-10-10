@@ -157,6 +157,7 @@ in the background and its progress shows under **Launches**.
 | `Shift+Enter`, `Alt+Enter` | New line |
 | `Tab`, `Shift+Tab` | Move between the task and the choices |
 | `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
+| `F12` | Compare: send the task to two or three agents at once |
 | `Ctrl+T` | Dictate the task |
 | `Ctrl+V`, the desktop's paste | Paste a screenshot as `[Image #1]` |
 | `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
@@ -185,6 +186,19 @@ the list does not know can still be used: type its id and pick **Use …**.
 - **Workspace** is a new git worktree by default, its branch named after the
   task (shown as `⎇ branch`), or one you name, or an existing checkout.
   Herdr creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.
+
+**Comparing agents.** Off by default, the **Compare** row (`F12`) sends the
+same task to two or three agents at once, to compare their results. Add a
+preset or an installed harness with its default model; pick it again to drop
+it; **Off** goes back to one agent. The composer's own harness, model and
+thinking level is the first agent. Every compared agent gets its own new
+worktree so they never touch each other's files: the branches share the
+task's name and end with the agent's harness and model, shown as
+`⎇ fix-login-{claude,codex-gpt-5}`, and a checkout cannot be chosen while
+comparing. Each agent appears under **Launches** and in the thread list with
+its branch. A comparison is an experiment on one task: the next task goes to
+one agent again, and only the first agent's choices are remembered for the
+project.
 
 **Screenshots.** Paste an image into the task or a reply (`r`) and it shows
 as `[Image #1]`. It is saved under `~/.cache/herdr-inbox/images` (kept 30

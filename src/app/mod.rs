@@ -26,7 +26,7 @@ use crate::state::{Preferences, Remembered};
 use crate::threads::{self, Activity, Source, Thread, ThreadId};
 
 pub use composer::layout::ComposerLayout;
-pub use composer::{Choice, Composer, Field, Pick, Picker, WorkspaceSel};
+pub use composer::{COMPARE_LIMIT, Choice, Composer, Contender, Field, Pick, Picker, WorkspaceSel};
 pub use dictation::{Dictation, Entry, Menu, MenuItem, Phase, SpeechStatus, Target, Then, menu_items};
 pub use layout::{Layout, Row, RowKind};
 pub use updates::{UpdatePhase, Updates, dialog as update_dialog};
@@ -606,46 +606,60 @@ impl App {
         self.with_composer(|composer, ctx| composer.settle(ctx));
     }
 
-    /// Validates the composer and starts a launch. `keep` leaves the task in
-    /// place to send it again elsewhere.
+    /// Validates the composer and starts a launch, or one per compared agent.
+    /// `keep` leaves the task in place to send it again elsewhere.
     pub(crate) fn send(&mut self, keep: bool, now: SystemTime, effects: &mut Vec<Effect>) {
         let ctx = self.composer_context();
-        let request = match self.composer.request(&ctx) {
-            Ok(request) => request,
+        let requests = match self.composer.requests(&ctx) {
+            Ok(requests) => requests,
             Err(error) => {
                 self.composer.error = Some(error);
                 return;
             }
         };
-        let machine = self.machines.iter().find(|m| m.id == request.machine_id);
-        let settings = machine
-            .map(|m| self.config.for_machine(&m.id, &m.label, m.is_local()))
-            .unwrap_or_else(|| self.config.for_machine(&request.machine_id, &request.machine_label, false));
-        let catalog = self.inventories.get(&request.machine_id).and_then(|i| i.models.get(&request.harness));
-        self.launch_counter += 1;
-        let id = format!("{:08x}{:08x}", crate::discovery::seconds(now) as u32, self.launch_counter);
-        let plan = match launch::plan(&request, &settings, catalog, id, now) {
-            Ok(plan) => plan,
-            Err(error) => {
-                self.composer.error = Some(error);
-                return;
+        // Every plan is made before anything starts: a comparison with one
+        // bad choice launches nothing.
+        let mut plans = Vec::new();
+        for request in &requests {
+            let machine = self.machines.iter().find(|m| m.id == request.machine_id);
+            let settings = machine
+                .map(|m| self.config.for_machine(&m.id, &m.label, m.is_local()))
+                .unwrap_or_else(|| self.config.for_machine(&request.machine_id, &request.machine_label, false));
+            let catalog = self.inventories.get(&request.machine_id).and_then(|i| i.models.get(&request.harness));
+            self.launch_counter += 1;
+            let id = format!("{:08x}{:08x}", crate::discovery::seconds(now) as u32, self.launch_counter);
+            match launch::plan(request, &settings, catalog, id, now) {
+                Ok(plan) => plans.push(plan),
+                Err(error) => {
+                    self.composer.error = Some(error);
+                    return;
+                }
             }
+        }
+        let Some(first) = requests.first() else {
+            return;
         };
-        let record = &plan.record;
-        self.launches.push(LaunchView {
-            id: record.id.clone(),
-            title: record.title.clone(),
-            project: record.project.clone(),
-            harness: crate::threads::harness_label_for(&record.harness),
-            machine_label: record.machine_label.clone(),
-            state: LaunchState::Running("starting".into()),
-        });
-        if self.launches.len() > LAUNCH_HISTORY {
+        for plan in &plans {
+            let record = &plan.record;
+            let mut harness = crate::threads::harness_label_for(&record.harness);
+            if record.comparison.is_some() && !record.model.is_empty() {
+                harness = format!("{harness} · {}", record.model);
+            }
+            self.launches.push(LaunchView {
+                id: record.id.clone(),
+                title: record.title.clone(),
+                project: record.project.clone(),
+                harness,
+                machine_label: record.machine_label.clone(),
+                state: LaunchState::Running("starting".into()),
+            });
+        }
+        while self.launches.len() > LAUNCH_HISTORY {
             self.launches.remove(0);
         }
         self.composer.error = None;
         let task = self.composer.task_text().trim().to_string();
-        self.warn_if_images_stay_here(&request.machine_id, &task, now);
+        self.warn_if_images_stay_here(&first.machine_id, &task, now);
         self.history = crate::state::with_task(std::mem::take(&mut self.history), &task);
         self.composer.history_index = None;
         effects.push(Effect::SaveHistory(task));
@@ -656,7 +670,10 @@ impl App {
             // A named branch is used once; the next task gets its own.
             self.composer.workspace = WorkspaceSel::New;
         }
-        effects.push(Effect::Launch { machine: request.machine_id, plan: Box::new(plan) });
+        // A comparison is an experiment on one task, never a default.
+        self.composer.compare.clear();
+        let machine = first.machine_id.clone();
+        effects.extend(plans.into_iter().map(|plan| Effect::Launch { machine: machine.clone(), plan: Box::new(plan) }));
         self.rebuild();
     }
 
@@ -685,6 +702,7 @@ impl App {
         let composer = &mut self.composer;
         composer.picker = None;
         composer.error = None;
+        composer.compare.clear();
         composer.machine = Some(thread.machine_id.clone());
         match &record {
             Some(record) => {
@@ -758,17 +776,21 @@ impl App {
                     Outcome::Sent(record) | Outcome::WaitingForStartup(record) => record.clone(),
                 };
                 self.records.insert(record.id.clone(), record.clone());
-                let workspace = if record.workspace == "worktree" { "worktree" } else { "checkout" };
-                let remembered = Remembered {
-                    project: record.project.clone(),
-                    machine: record.machine_id.clone(),
-                    harness: record.harness.clone(),
-                    workspace: workspace.into(),
-                    model: record.model.clone(),
-                    thinking: record.thinking.clone(),
-                };
-                self.preferences.remember(&remembered);
-                effects.push(Effect::Remember(remembered));
+                // Of compared agents, only the composer's own choice is
+                // remembered: the others were picked to compare against it.
+                if record.comparison.is_none_or(|c| c.index == 0) {
+                    let workspace = if record.workspace == "worktree" { "worktree" } else { "checkout" };
+                    let remembered = Remembered {
+                        project: record.project.clone(),
+                        machine: record.machine_id.clone(),
+                        harness: record.harness.clone(),
+                        workspace: workspace.into(),
+                        model: record.model.clone(),
+                        thinking: record.thinking.clone(),
+                    };
+                    self.preferences.remember(&remembered);
+                    effects.push(Effect::Remember(remembered));
+                }
                 match outcome {
                     Outcome::Sent(record) => self.set_launch(id, LaunchState::Sent { unverified: record.unverified }),
                     Outcome::WaitingForStartup(record) => {

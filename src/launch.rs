@@ -25,6 +25,8 @@ const TITLE_LIMIT: usize = 72;
 /// How long an agent gets to attach a pasted image before the next paste.
 const IMAGE_SETTLE: Duration = Duration::from_millis(400);
 const BRANCH_SLUG_LIMIT: usize = 32;
+/// How much of a model id goes into a compared agent's branch name.
+const AGENT_SLUG_LIMIT: usize = 24;
 const FILLER: &[&str] = &["a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "with", "please", "can", "you"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +35,15 @@ pub enum WorkspaceChoice {
     NewWorktree { branch: Option<String> },
     /// An existing checkout of the project.
     Checkout { path: String },
+}
+
+/// One agent's place in a task sent to several agents at once, to compare
+/// their results. Each gets its own worktree; the first is the composer's
+/// own choice and the one remembered for next time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Comparison {
+    pub index: u8,
+    pub total: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +56,7 @@ pub struct Request {
     pub thinking: Option<String>,
     pub task: String,
     pub workspace: WorkspaceChoice,
+    pub comparison: Option<Comparison>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +110,9 @@ pub struct Record {
     pub failed_stage: Option<Stage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Set when the task went to several agents at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison: Option<Comparison>,
 }
 
 /// What `plan` decided, ready to run.
@@ -123,8 +138,8 @@ pub fn task_title(task: &str) -> String {
     collapsed.chars().take(TITLE_LIMIT).collect()
 }
 
-/// A short, unique branch name from the task's first line.
-pub fn branch_name(task: &str, taken: &[&str], prefix: &str) -> String {
+/// The branch slug for a task: its first line's words, without filler.
+pub fn branch_slug(task: &str) -> String {
     let first = task.trim().lines().next().unwrap_or("").to_lowercase();
     let words: Vec<&str> = first.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let mut slug = String::new();
@@ -136,14 +151,49 @@ pub fn branch_name(task: &str, taken: &[&str], prefix: &str) -> String {
         slug = candidate;
     }
     let slug: String = if slug.is_empty() { "thread".into() } else { slug.chars().take(40).collect() };
-    let slug = slug.trim_matches('-').to_string();
-    let mut name = format!("{prefix}{slug}");
+    slug.trim_matches('-').to_string()
+}
+
+/// A short, unique branch name from the task's first line.
+pub fn branch_name(task: &str, taken: &[&str], prefix: &str) -> String {
+    unique_branch(&format!("{prefix}{}", branch_slug(task)), taken)
+}
+
+/// `name`, or `name-2`, `name-3`... when it is taken.
+pub fn unique_branch(name: &str, taken: &[&str]) -> String {
+    let mut candidate = name.to_string();
     let mut suffix = 2;
-    while taken.contains(&name.as_str()) {
-        name = format!("{prefix}{slug}-{suffix}");
+    while taken.contains(&candidate.as_str()) {
+        candidate = format!("{name}-{suffix}");
         suffix += 1;
     }
-    name
+    candidate
+}
+
+/// What tells compared agents' branches apart: the harness and the model,
+/// as in `claude-opus-5-5` or `codex`, without the harness repeated when the
+/// model id starts with it.
+pub fn agent_slug(harness: &str, model: Option<&str>) -> String {
+    let slug = |text: &str| {
+        text.to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join("-")
+    };
+    let harness = match slug(harness) {
+        h if h.is_empty() => "agent".to_string(),
+        h => h,
+    };
+    let Some(model) = model.map(slug).filter(|m| !m.is_empty()) else {
+        return harness;
+    };
+    let model = model.strip_prefix(&format!("{harness}-")).map(str::to_string).unwrap_or(model);
+    let model: String = model.chars().take(AGENT_SLUG_LIMIT).collect();
+    match model.trim_end_matches('-') {
+        "" => harness,
+        model => format!("{harness}-{model}"),
+    }
 }
 
 /// Git's rules for branch names, the ones a typed name can break.
@@ -281,7 +331,7 @@ pub fn plan(
     let slug =
         if slug.trim_matches('-').is_empty() { "thread".to_string() } else { slug.trim_matches('-').to_string() };
     let record = Record {
-        agent_name: format!("t-{slug}-{}", &id[..id.len().min(8)]),
+        agent_name: format!("t-{slug}-{}", short_id(&id)),
         machine_id: request.machine_id.clone(),
         machine_label: request.machine_label.clone(),
         project: request.project.name.clone(),
@@ -302,9 +352,22 @@ pub fn plan(
         unverified: false,
         failed_stage: None,
         error: None,
+        comparison: request.comparison,
         id,
     };
     Ok(Plan { record, agent_args: args, base: None, start_timeout_ms: settings.agent_start_timeout_ms })
+}
+
+/// Eight characters that tell launches apart, even two sent in the same
+/// second: the id is the launch's second followed by a counter, so the end
+/// of each half goes in.
+fn short_id(id: &str) -> String {
+    let n = id.len();
+    if n <= 8 {
+        return id.to_string();
+    }
+    let mid = n / 2;
+    format!("{}{}", &id[mid.saturating_sub(4)..mid], &id[n - 4..])
 }
 
 /// A `herdr` CLI failure: Herdr's error code when it gave one.

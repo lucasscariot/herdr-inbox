@@ -208,7 +208,12 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
             };
             let marker = if selected { "▸ " } else { "  " };
             let mut left = vec![(marker.into(), label_style)];
-            if let Pick::Harness(kind) = &choice.pick {
+            let kind = match &choice.pick {
+                Pick::Harness(kind) => Some(kind.as_str()),
+                Pick::CompareWith(contender) => Some(contender.harness.as_str()),
+                _ => None,
+            };
+            if let Some(kind) = kind {
                 let (mark, style) = super::harness::label(kind, palette);
                 left.push((mark, style.bg(bg)));
             }

@@ -4,6 +4,10 @@
 //! harness installed there, the harness its remembered model and thinking
 //! level for that machine. A choice that stops being valid (the machine lost
 //! the project, the harness is not installed there) falls back to a valid one.
+//!
+//! Off by default, a task can also go to one or two more agents at once, to
+//! compare their results. Each compared agent gets its own worktree, so they
+//! never touch each other's files; the comparison is used once and cleared.
 
 pub mod layout;
 
@@ -12,7 +16,7 @@ use std::collections::HashMap;
 use crate::config::{Config, WorkspaceMode};
 use crate::discovery::{Catalog, Inventory, Project};
 use crate::editor::Editor;
-use crate::launch::{self, Request, WorkspaceChoice};
+use crate::launch::{self, Comparison, Request, WorkspaceChoice};
 use crate::presets::{self, Preset};
 use crate::state::Preferences;
 use crate::threads::harness_label_for;
@@ -21,6 +25,8 @@ use super::{Connection, MachineState};
 
 /// Harnesses offered first when a project has no remembered one.
 const PREFERRED: &[&str] = &["claude", "codex", "opencode", "pi", "gemini"];
+/// How many agents one task can go to at once.
+pub const COMPARE_LIMIT: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Field {
@@ -32,10 +38,12 @@ pub enum Field {
     Model,
     Thinking,
     Workspace,
+    /// More agents the same task goes to, each in its own worktree.
+    Compare,
 }
 
 impl Field {
-    pub const ORDER: [Field; 8] = [
+    pub const ORDER: [Field; 9] = [
         Field::Task,
         Field::Project,
         Field::Machine,
@@ -44,6 +52,7 @@ impl Field {
         Field::Model,
         Field::Thinking,
         Field::Workspace,
+        Field::Compare,
     ];
 
     pub fn label(self) -> &'static str {
@@ -56,6 +65,7 @@ impl Field {
             Field::Model => "Model",
             Field::Thinking => "Thinking",
             Field::Workspace => "Workspace",
+            Field::Compare => "Compare",
         }
     }
 
@@ -70,6 +80,7 @@ impl Field {
             Field::Preset => Some(7),
             Field::Thinking => Some(8),
             Field::Workspace => Some(9),
+            Field::Compare => Some(12),
         }
     }
 
@@ -88,6 +99,15 @@ pub enum WorkspaceSel {
     Checkout(String),
 }
 
+/// An agent a task can go to: a harness with a model and thinking level, or
+/// a harness with its own defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contender {
+    pub harness: String,
+    pub model: Option<String>,
+    pub thinking: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pick {
     Project(String),
@@ -96,6 +116,10 @@ pub enum Pick {
     Model(Option<String>),
     Thinking(Option<String>),
     Workspace(WorkspaceSel),
+    /// Back to one agent.
+    CompareNone,
+    /// Adds this agent to the comparison, or removes it when it is in.
+    CompareWith(Contender),
     Preset(String),
     /// Save the current harness, model and thinking under this name.
     SavePreset(String),
@@ -147,6 +171,8 @@ pub struct Composer {
     pub history_draft: String,
     /// Pasted images, shown in the task as `[Image #N]`.
     pub images: Vec<String>,
+    /// Other agents the task also goes to, for comparison. Empty: one agent.
+    pub compare: Vec<Contender>,
 }
 
 impl Default for Composer {
@@ -165,6 +191,7 @@ impl Default for Composer {
             history_index: None,
             history_draft: String::new(),
             images: Vec::new(),
+            compare: Vec::new(),
         }
     }
 }
@@ -300,12 +327,17 @@ impl Composer {
                 self.thinking = None;
             }
         }
+        self.compare.retain(|c| installed.contains(&c.harness));
         if let WorkspaceSel::Checkout(path) = &self.workspace {
             let exists =
                 ctx.project(self).is_some_and(|p| p.checkouts.iter().any(|c| &c.path == path) || &p.path == path);
             if !exists {
                 self.workspace = self.default_workspace(ctx);
             }
+        }
+        if self.is_comparing() && matches!(self.workspace, WorkspaceSel::Checkout(_)) {
+            // Compared agents never share a checkout.
+            self.workspace = WorkspaceSel::New;
         }
         if !self.fields(ctx).contains(&self.field) {
             self.field = Field::Task;
@@ -360,7 +392,27 @@ impl Composer {
                 self.settle(ctx);
             }
             Pick::Thinking(level) => self.thinking = level,
-            Pick::Workspace(workspace) => self.workspace = workspace,
+            Pick::Workspace(workspace) => {
+                if self.is_comparing() && matches!(workspace, WorkspaceSel::Checkout(_)) {
+                    self.error = Some("Compared agents each need their own worktree.".into());
+                    return;
+                }
+                self.workspace = workspace;
+            }
+            Pick::CompareNone => self.compare.clear(),
+            Pick::CompareWith(contender) => {
+                if let Some(index) = self.compare.iter().position(|c| *c == contender) {
+                    self.compare.remove(index);
+                } else if self.compare.len() + 1 >= COMPARE_LIMIT {
+                    self.error = Some(format!("{COMPARE_LIMIT} agents at most."));
+                    return;
+                } else {
+                    self.compare.push(contender);
+                    if matches!(self.workspace, WorkspaceSel::Checkout(_)) {
+                        self.workspace = WorkspaceSel::New;
+                    }
+                }
+            }
             Pick::Preset(name) => {
                 let Some(preset) = ctx.presets.iter().find(|p| p.name == name).cloned() else {
                     return;
@@ -433,19 +485,88 @@ impl Composer {
         self.images = images;
     }
 
-    /// The branch a new worktree would get right now.
-    pub fn branch_preview(&self, ctx: &Context) -> Option<String> {
+    /// Whether the task goes to more than one agent.
+    pub fn is_comparing(&self) -> bool {
+        !self.compare.is_empty()
+    }
+
+    /// Every agent the task goes to, the composer's own choice first.
+    pub fn contenders(&self) -> Vec<Contender> {
+        let Some(harness) = self.harness.clone() else {
+            return Vec::new();
+        };
+        let mut all = vec![Contender { harness, model: self.model.clone(), thinking: self.thinking.clone() }];
+        all.extend(self.compare.iter().cloned());
+        all
+    }
+
+    /// The stem of the branches new worktrees would get: the typed name, or
+    /// the prefix and the task's words. None for a checkout, or before any
+    /// task is written.
+    fn branch_base(&self, ctx: &Context) -> Option<String> {
         match &self.workspace {
             WorkspaceSel::Named(name) => Some(name.clone()),
             // No task, no name worth showing yet.
             WorkspaceSel::New if self.task.is_blank() => None,
             WorkspaceSel::New => {
-                let project = ctx.project(self)?;
                 let machine = ctx.machine(self.machine.as_deref()?)?;
                 let prefix = ctx.config.for_machine(&machine.id, &machine.label, machine.is_local()).branch_prefix;
-                Some(launch::branch_name(&launch::task_words(self.task.text()), &project.taken_branches(), &prefix))
+                Some(format!("{prefix}{}", launch::branch_slug(&launch::task_words(self.task.text()))))
             }
             WorkspaceSel::Checkout(_) => None,
+        }
+    }
+
+    /// The branches new worktrees would get right now, one per agent. The
+    /// name of a comparison carries each agent's harness and model.
+    pub fn planned_branches(&self, ctx: &Context) -> Option<Vec<String>> {
+        let base = self.branch_base(ctx)?;
+        let mut taken: Vec<String> =
+            ctx.project(self).map(|p| p.taken_branches().iter().map(|b| b.to_string()).collect()).unwrap_or_default();
+        if !self.is_comparing() {
+            let taken: Vec<&str> = taken.iter().map(String::as_str).collect();
+            return Some(vec![match &self.workspace {
+                WorkspaceSel::Named(name) => name.clone(),
+                _ => launch::unique_branch(&base, &taken),
+            }]);
+        }
+        let mut branches = Vec::new();
+        for agent in self.contenders() {
+            let wanted = format!("{base}-{}", launch::agent_slug(&agent.harness, agent.model.as_deref()));
+            let free: Vec<&str> = taken.iter().map(String::as_str).collect();
+            let branch = launch::unique_branch(&wanted, &free);
+            taken.push(branch.clone());
+            branches.push(branch);
+        }
+        Some(branches)
+    }
+
+    /// The branch a new worktree would get right now. A comparison's
+    /// branches share their stem and read as `fix-login-{claude,codex}`.
+    pub fn branch_preview(&self, ctx: &Context) -> Option<String> {
+        let branches = self.planned_branches(ctx)?;
+        if branches.len() < 2 {
+            return branches.into_iter().next();
+        }
+        let base = self.branch_base(ctx)?;
+        let stem = format!("{base}-");
+        let suffixes: Vec<&str> = branches.iter().map(|b| b.strip_prefix(&stem).unwrap_or(b)).collect();
+        Some(format!("{base}-{{{}}}", suffixes.join(",")))
+    }
+
+    /// How an agent reads in the Compare row and list: `Codex GPT-5`.
+    pub fn contender_label(&self, ctx: &Context, contender: &Contender) -> String {
+        let harness = harness_label_for(&contender.harness);
+        let catalog = self.machine.as_deref().and_then(|m| ctx.inventory(m)?.models.get(&contender.harness));
+        match &contender.model {
+            Some(model) => {
+                let label = catalog
+                    .and_then(|c| c.choices.iter().find(|c| &c.id == model))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_else(|| model.clone());
+                format!("{harness} {label}")
+            }
+            None => harness,
         }
     }
 
@@ -572,17 +693,73 @@ impl Composer {
                     for checkout in checkouts {
                         let label =
                             if checkout.branch.is_empty() { "checkout".to_string() } else { checkout.branch.clone() };
-                        let detail = if checkout.linked {
+                        let detail = if self.is_comparing() {
+                            "compared agents each need their own worktree".to_string()
+                        } else if checkout.linked {
                             checkout.path.clone()
                         } else {
                             format!("{} · main checkout", checkout.path)
                         };
-                        choices.push(choice(label, detail, Pick::Workspace(WorkspaceSel::Checkout(checkout.path))));
+                        choices.push(Choice {
+                            label,
+                            detail,
+                            pick: Pick::Workspace(WorkspaceSel::Checkout(checkout.path)),
+                            enabled: !self.is_comparing(),
+                        });
                     }
                 }
                 choices
             }
+            Field::Compare => self.compare_choices(ctx),
         }
+    }
+
+    /// Off first, then every preset and every installed harness, each one
+    /// ticked when it is in the comparison.
+    fn compare_choices(&self, ctx: &Context) -> Vec<Choice> {
+        let installed = self.machine.as_deref().map(|m| ctx.installed(m)).unwrap_or_default();
+        let full = self.compare.len() + 1 >= COMPARE_LIMIT;
+        let mut choices = vec![Choice {
+            label: "Off".into(),
+            detail: "one agent, the choices above".into(),
+            pick: Pick::CompareNone,
+            enabled: true,
+        }];
+        let mut add = |name: String, detail: String, contender: Contender| {
+            let added = self.compare.contains(&contender);
+            choices.push(Choice {
+                label: if added { format!("✓ {name}") } else { name },
+                detail: if added {
+                    "in the comparison · pick again to drop".into()
+                } else if full {
+                    format!("{COMPARE_LIMIT} agents at most")
+                } else {
+                    detail
+                },
+                pick: Pick::CompareWith(contender),
+                enabled: added || !full,
+            });
+        };
+        for preset in ctx.presets.iter().filter(|p| installed.contains(&p.harness)) {
+            let thinking = if preset.thinking.is_empty() { String::new() } else { format!(" · {}", preset.thinking) };
+            add(
+                preset.name.clone(),
+                format!("{} · {}{thinking}", harness_label_for(&preset.harness), preset.model),
+                Contender {
+                    harness: preset.harness.clone(),
+                    model: Some(preset.model.clone()),
+                    thinking: Some(preset.thinking.clone()).filter(|t| !t.is_empty()),
+                },
+            );
+        }
+        for kind in installed {
+            add(
+                harness_label_for(&kind),
+                "its default model".into(),
+                Contender { harness: kind, model: None, thinking: None },
+            );
+        }
+        choices
     }
 
     fn preset_choices(&self, ctx: &Context, query: &str) -> Vec<Choice> {
@@ -644,8 +821,9 @@ impl Composer {
         choices
     }
 
-    /// A launch request, or why it cannot be sent yet.
-    pub fn request(&self, ctx: &Context) -> Result<Request, String> {
+    /// One launch request per agent, or why nothing can be sent yet. A
+    /// comparison is all or nothing: every agent is checked first.
+    pub fn requests(&self, ctx: &Context) -> Result<Vec<Request>, String> {
         if self.task.is_blank() {
             return Err("Write a task first.".into());
         }
@@ -657,21 +835,48 @@ impl Composer {
         }
         let harness = self.harness.clone().ok_or(format!("No agent CLI is installed on {}.", machine.label))?;
         let project = ctx.project(self).cloned().ok_or(format!("{project_name} is not on {}.", machine.label))?;
-        let workspace = match &self.workspace {
-            WorkspaceSel::New => WorkspaceChoice::NewWorktree { branch: None },
-            WorkspaceSel::Named(name) => WorkspaceChoice::NewWorktree { branch: Some(name.clone()) },
-            WorkspaceSel::Checkout(path) => WorkspaceChoice::Checkout { path: path.clone() },
-        };
-        Ok(Request {
-            machine_id,
+        let request = |harness: String, model, thinking, workspace, comparison| Request {
+            machine_id: machine_id.clone(),
             machine_label: machine.label.clone(),
-            project,
+            project: project.clone(),
             harness,
-            model: self.model.clone(),
-            thinking: self.thinking.clone(),
+            model,
+            thinking,
             task: self.task_text(),
             workspace,
-        })
+            comparison,
+        };
+        if !self.is_comparing() {
+            let workspace = match &self.workspace {
+                WorkspaceSel::New => WorkspaceChoice::NewWorktree { branch: None },
+                WorkspaceSel::Named(name) => WorkspaceChoice::NewWorktree { branch: Some(name.clone()) },
+                WorkspaceSel::Checkout(path) => WorkspaceChoice::Checkout { path: path.clone() },
+            };
+            return Ok(vec![request(harness, self.model.clone(), self.thinking.clone(), workspace, None)]);
+        }
+        let installed = ctx.installed(&machine_id);
+        if let Some(missing) = self.compare.iter().find(|c| !installed.contains(&c.harness)) {
+            return Err(format!("{} is not installed on {}.", harness_label_for(&missing.harness), machine.label));
+        }
+        let branches = self
+            .planned_branches(ctx)
+            .ok_or("Compared agents each need their own worktree. Pick New worktree.".to_string())?;
+        let contenders = self.contenders();
+        let total = contenders.len() as u8;
+        Ok(contenders
+            .into_iter()
+            .zip(branches)
+            .enumerate()
+            .map(|(index, (agent, branch))| {
+                request(
+                    agent.harness,
+                    agent.model,
+                    agent.thinking,
+                    WorkspaceChoice::NewWorktree { branch: Some(branch) },
+                    Some(Comparison { index: index as u8, total }),
+                )
+            })
+            .collect())
     }
 
     /// The value shown for a field.
@@ -709,6 +914,14 @@ impl Composer {
                 None if ctx.presets.is_empty() => "None yet · Ctrl+D saves one".into(),
                 None => "None".into(),
             },
+            Field::Compare => {
+                if self.compare.is_empty() {
+                    "Off · one agent".into()
+                } else {
+                    let others: Vec<String> = self.compare.iter().map(|c| self.contender_label(ctx, c)).collect();
+                    format!("{} agents · also {}", self.compare.len() + 1, others.join(", "))
+                }
+            }
             Field::Workspace => match &self.workspace {
                 WorkspaceSel::New => "New worktree".into(),
                 WorkspaceSel::Named(name) => format!("New worktree · {name}"),

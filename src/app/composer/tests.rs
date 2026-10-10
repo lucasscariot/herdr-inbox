@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::*;
 use crate::discovery::{CheckoutEntry, Choice as ModelChoice};
+use crate::launch::Comparison;
 use crate::state::{ProjectChoices, Remembered};
 
 fn machine(id: &str, label: &str, connection: Connection) -> MachineState {
@@ -221,10 +222,10 @@ fn a_project_on_an_unreachable_machine_only_still_settles_there() {
     let mut composer = settled(&world);
     composer.apply(&world.ctx(), Pick::Project("cockpit".into()));
     assert_eq!(composer.machine.as_deref(), Some("book"));
-    let err = composer.request(&world.ctx()).unwrap_err();
+    let err = composer.requests(&world.ctx()).unwrap_err();
     assert_eq!(err, "Write a task first.");
     composer.task.set("Fix it");
-    assert_eq!(composer.request(&world.ctx()).unwrap_err(), "MacBook is not reachable right now.");
+    assert_eq!(composer.requests(&world.ctx()).unwrap_err(), "MacBook is not reachable right now.");
 }
 
 #[test]
@@ -252,9 +253,11 @@ fn the_thinking_field_shows_only_for_harnesses_with_levels() {
     composer.next_field(&world.ctx(), true);
     assert_eq!(composer.field, Field::Workspace, "thinking is skipped");
     composer.next_field(&world.ctx(), true);
+    assert_eq!(composer.field, Field::Compare);
+    composer.next_field(&world.ctx(), true);
     assert_eq!(composer.field, Field::Task, "wraps around");
     composer.next_field(&world.ctx(), false);
-    assert_eq!(composer.field, Field::Workspace);
+    assert_eq!(composer.field, Field::Compare);
 }
 
 #[test]
@@ -367,7 +370,7 @@ fn a_valid_request_carries_every_choice() {
     composer.task.set("  Fix login loop  ");
     composer.apply(&world.ctx(), Pick::Model(Some("opus".into())));
     composer.apply(&world.ctx(), Pick::Thinking(Some("high".into())));
-    let request = composer.request(&world.ctx()).unwrap();
+    let request = composer.requests(&world.ctx()).unwrap().remove(0);
     assert_eq!(request.machine_label, "Local");
     assert_eq!(request.project.name, "api");
     assert_eq!(request.harness, "claude");
@@ -408,7 +411,7 @@ fn with_nothing_discovered_the_composer_says_so_and_refuses_to_send() {
     assert_eq!(composer.project, None);
     assert_eq!(composer.value(&world.ctx(), Field::Project), "none found yet");
     composer.task.set("x");
-    assert_eq!(composer.request(&world.ctx()).unwrap_err(), "Pick a project.");
+    assert_eq!(composer.requests(&world.ctx()).unwrap_err(), "Pick a project.");
     let _ = ProjectChoices::default();
 }
 
@@ -416,5 +419,121 @@ fn with_nothing_discovered_the_composer_says_so_and_refuses_to_send() {
 fn function_keys_map_to_fields() {
     assert_eq!(Field::from_key(2), Some(Field::Project));
     assert_eq!(Field::from_key(9), Some(Field::Workspace));
+    assert_eq!(Field::from_key(12), Some(Field::Compare));
     assert_eq!(Field::from_key(5), None, "F5 is not a field");
+}
+
+fn contender(harness: &str, model: Option<&str>, thinking: Option<&str>) -> Contender {
+    Contender { harness: harness.into(), model: model.map(str::to_string), thinking: thinking.map(str::to_string) }
+}
+
+#[test]
+fn comparing_is_off_until_an_agent_is_added_and_stops_at_three() {
+    let mut world = world();
+    world.presets = vec![
+        Preset { name: "Opus high".into(), harness: "claude".into(), model: "opus".into(), thinking: "high".into() },
+        Preset { name: "Studio only".into(), harness: "pi".into(), model: "x".into(), thinking: String::new() },
+    ];
+    let mut composer = settled(&world);
+    assert!(!composer.is_comparing(), "one agent by default");
+    assert_eq!(composer.value(&world.ctx(), Field::Compare), "Off · one agent");
+    let labels: Vec<(String, bool)> =
+        composer.choices(&world.ctx(), Field::Compare, "").into_iter().map(|c| (c.label, c.enabled)).collect();
+    assert_eq!(
+        labels,
+        [("Off".to_string(), true), ("Opus high".into(), true), ("Codex".into(), true), ("Claude".into(), true)],
+        "presets and harnesses installed here; the Pi preset is not"
+    );
+
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("codex", None, None)));
+    assert_eq!(composer.compare, [contender("codex", None, None)]);
+    assert_eq!(composer.value(&world.ctx(), Field::Compare), "2 agents · also Codex");
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("claude", Some("opus"), Some("high"))));
+    assert_eq!(composer.value(&world.ctx(), Field::Compare), "3 agents · also Codex, Claude Opus");
+    let choices = composer.choices(&world.ctx(), Field::Compare, "");
+    assert_eq!(choices[1].label, "✓ Opus high");
+    assert!(choices[1].enabled, "an added agent can always be dropped");
+    assert_eq!(choices[3].label, "Claude");
+    assert!(!choices[3].enabled, "three agents at most");
+    assert_eq!(choices[3].detail, "3 agents at most");
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("claude", None, None)));
+    assert_eq!(composer.compare.len(), 2, "a fourth agent is refused");
+    assert_eq!(composer.error.as_deref(), Some("3 agents at most."));
+
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("codex", None, None)));
+    assert_eq!(composer.compare, [contender("claude", Some("opus"), Some("high"))], "picking again drops it");
+    composer.apply(&world.ctx(), Pick::CompareNone);
+    assert!(!composer.is_comparing());
+}
+
+#[test]
+fn compared_agents_each_get_their_own_worktree_with_a_telling_branch() {
+    let world = world();
+    let mut composer = settled(&world);
+    composer.apply(&world.ctx(), Pick::Project("cockpit".into()));
+    composer.apply(&world.ctx(), Pick::Workspace(WorkspaceSel::Checkout("/w/cockpit".into())));
+    composer.task.set("Fix login");
+    composer.apply(&world.ctx(), Pick::Model(Some("claude-opus-5-5".into())));
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("codex", Some("gpt-5"), None)));
+    assert_eq!(composer.workspace, WorkspaceSel::New, "a checkout cannot hold two agents");
+    let choices = composer.choices(&world.ctx(), Field::Workspace, "");
+    let checkouts: Vec<&Choice> =
+        choices.iter().filter(|c| matches!(c.pick, Pick::Workspace(WorkspaceSel::Checkout(_)))).collect();
+    assert!(!checkouts.is_empty() && checkouts.iter().all(|c| !c.enabled), "checkouts are shown but disabled");
+    assert_eq!(checkouts[0].detail, "compared agents each need their own worktree");
+    composer.apply(&world.ctx(), Pick::Workspace(WorkspaceSel::Checkout("/w/cockpit".into())));
+    assert_eq!(composer.workspace, WorkspaceSel::New, "and refused if picked anyway");
+    assert!(composer.error.is_some());
+
+    assert_eq!(composer.branch_preview(&world.ctx()).as_deref(), Some("fix-login-{claude-opus-5-5,codex-gpt-5}"));
+    let requests = composer.requests(&world.ctx()).unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].harness, "claude");
+    assert_eq!(requests[0].model.as_deref(), Some("claude-opus-5-5"));
+    assert_eq!(
+        requests[0].workspace,
+        WorkspaceChoice::NewWorktree { branch: Some("fix-login-claude-opus-5-5".into()) },
+        "the harness is not repeated when the model id starts with it"
+    );
+    assert_eq!(requests[0].comparison, Some(Comparison { index: 0, total: 2 }));
+    assert_eq!(requests[1].harness, "codex");
+    assert_eq!(requests[1].workspace, WorkspaceChoice::NewWorktree { branch: Some("fix-login-codex-gpt-5".into()) });
+    assert_eq!(requests[1].comparison, Some(Comparison { index: 1, total: 2 }));
+    assert_eq!(requests[1].task, requests[0].task, "the same task for every agent");
+
+    // A named branch is the stem; branches that exist get a number.
+    composer.apply(&world.ctx(), Pick::Workspace(WorkspaceSel::Named("fix-login".into())));
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("claude", Some("claude-opus-5-5"), None)));
+    let branches = composer.planned_branches(&world.ctx()).unwrap();
+    assert_eq!(branches, ["fix-login-claude-opus-5-5", "fix-login-codex-gpt-5", "fix-login-claude-opus-5-5-2"]);
+    assert_eq!(
+        composer.branch_preview(&world.ctx()).as_deref(),
+        Some("fix-login-{claude-opus-5-5,codex-gpt-5,claude-opus-5-5-2}")
+    );
+    let prefixed = World {
+        config: Config {
+            global: crate::config::MachineSettings { branch_prefix: Some("lucas/".into()), ..Default::default() },
+            ..Config::default()
+        },
+        ..world
+    };
+    composer.apply(&prefixed.ctx(), Pick::Workspace(WorkspaceSel::New));
+    assert_eq!(composer.planned_branches(&prefixed.ctx()).unwrap()[0], "lucas/fix-login-claude-opus-5-5");
+}
+
+#[test]
+fn a_compared_agent_the_machine_lacks_is_dropped_when_the_machine_changes() {
+    let world = world();
+    let mut composer = settled(&world);
+    composer.task.set("Fix it");
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("claude", None, None)));
+    composer.apply(&world.ctx(), Pick::CompareWith(contender("codex", None, None)));
+    composer.apply(&world.ctx(), Pick::Machine("studio".into()));
+    assert_eq!(composer.compare, [contender("codex", None, None)], "the studio has no Claude");
+    composer.compare.push(contender("claude", None, None));
+    assert_eq!(
+        composer.requests(&world.ctx()).unwrap_err(),
+        "Claude is not installed on Mac Studio.",
+        "nothing launches when one agent cannot"
+    );
 }

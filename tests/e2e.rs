@@ -786,6 +786,64 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
 }
 
 #[test]
+fn comparing_agents_launches_the_task_once_per_agent_in_separate_worktrees() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    let repo = real_repo(&root.join("work"), "cockpit");
+    // Two agent CLIs that never become ready: both launches must fail
+    // cleanly, each after creating its own worktree.
+    for cli in ["claude", "codex"] {
+        write_executable(&root.join("bin").join(cli), &format!("#!/bin/sh\necho 'not really {cli}'\nexit 3\n"));
+    }
+    let config = format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display());
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
+    std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("Harness    Claude");
+    inbox.wait_for_text("Compare    Off · one agent");
+    inbox.keys("Fix the login loop");
+    inbox.wait_for_text("⎇ fix-login-loop");
+    // F12 opens the comparison list; typing filters it to Codex.
+    inbox.keys("\x1b[24~");
+    inbox.wait_for_text(" Compare ");
+    inbox.keys("codex");
+    inbox.wait_for_text("its default model");
+    inbox.keys("\r");
+    inbox.wait_for_text("Compare    2 agents · also Codex");
+    inbox.wait_for_text("⎇ fix-login-loop-{claude,codex}");
+    inbox.keys("\r");
+    inbox.wait_for_text("LAUNCHES");
+    inbox.wait_for_text("✗ cockpit · Claude");
+    inbox.wait_for_text("✗ cockpit · Codex");
+    inbox.wait_for_text("Compare    Off · one agent");
+
+    for branch in ["fix-login-loop-claude", "fix-login-loop-codex"] {
+        let worktree = root.join("home/.herdr/worktrees/cockpit").join(branch);
+        assert!(worktree.is_dir(), "{} is missing", worktree.display());
+        let branches = Command::new("git").args(["branch", "--list", branch]).current_dir(&repo).output().expect("git");
+        assert!(String::from_utf8_lossy(&branches.stdout).contains(branch));
+    }
+    let mut journals: Vec<serde_json::Value> = std::fs::read_dir(root.join("state/herdr-inbox/launches"))
+        .expect("journals")
+        .map(|entry| serde_json::from_slice(&std::fs::read(entry.expect("entry").path()).expect("read")).expect("json"))
+        .collect();
+    journals.sort_by_key(|journal| journal["comparison"]["index"].as_u64());
+    assert_eq!(journals.len(), 2);
+    assert_eq!(journals[0]["harness"], "claude");
+    assert_eq!(journals[0]["comparison"], serde_json::json!({"index": 0, "total": 2}));
+    assert_eq!(journals[1]["harness"], "codex");
+    assert_eq!(journals[1]["comparison"], serde_json::json!({"index": 1, "total": 2}));
+    assert_ne!(journals[0]["agent_name"], journals[1]["agent_name"]);
+    assert_eq!(journals[0]["task"], journals[1]["task"]);
+}
+
+#[test]
 fn dictation_records_meters_and_types_the_transcript_into_the_composer() {
     if !enabled() {
         return;

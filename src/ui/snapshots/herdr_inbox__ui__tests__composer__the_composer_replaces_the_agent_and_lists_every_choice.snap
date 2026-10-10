@@ -19,9 +19,9 @@ expression: "text(&render(&app, at(1)))"
  WORKING  1                         │    Model      Default (opus)                                     F4  ›
 ▎api                      ◐ working │    Thinking   Default                                            F8  ›
 ▎Add invoice export                 │    Workspace  New worktree  ⎇ fix-login-redirect-loop            F9  ›
-▎◆ Codex · ⎇ main                   │
-                                    │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
- IDLE  1                            │
+▎◆ Codex · ⎇ main                   │    Compare    Off · one agent                                   F12  ›
+                                    │
+ IDLE  1                            │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
 ▎scratch                     ○ idle │
 ▎New Pi thread                      │
 ▎π Pi                               │
