@@ -130,6 +130,22 @@ fn branch_names_keep_negations() {
 }
 
 #[test]
+fn branch_names_keep_the_direction_of_a_request() {
+    assert_eq!(branch_name("Turn on authentication", &[], ""), "turn-on-authentication");
+    assert_eq!(branch_name("Turn off authentication", &[], ""), "turn-off-authentication");
+    assert_eq!(branch_name("Please turn authentication off", &[], ""), "turn-authentication-off");
+    assert_eq!(branch_name("Use more logging", &[], ""), "use-more-logging");
+    assert_eq!(branch_name("Use less logging", &[], ""), "use-less-logging");
+    assert_eq!(branch_name("Clean up the tests", &[], ""), "clean-up-tests", "a particle completes the leading verb");
+    assert_eq!(branch_name("Sign in button is broken", &[], ""), "sign-in-button-broken");
+    assert_eq!(
+        branch_name("Fix the login loop on mobile", &[], ""),
+        "fix-login-loop-mobile",
+        "but is filler as a preposition"
+    );
+}
+
+#[test]
 fn branch_names_skip_sentences_that_say_nothing() {
     assert_eq!(branch_name("Hi there! Fix the login loop.", &[], ""), "fix-login-loop", "greetings are skipped");
     assert_eq!(branch_name("Hi there!", &[], ""), "hi-there", "pure filler still names the task when nothing follows");

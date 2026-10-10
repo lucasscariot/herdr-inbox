@@ -48,11 +48,15 @@ const FILLER: &[&str] = &[
     "please thanks thank kindly maybe perhaps just really very actually basically also still currently right ok \
      okay hi hello hey so now then well",
     // prepositions, conjunctions, particles and question words
-    "to of in on for and or with at by from as into onto about over under up out off through if but than when \
-     while where how why yes too yet more less much many via per vs etc",
+    "to of in on for and or with at by from as into onto about over under up out through if but than when while \
+     where how why yes too yet much many via per vs etc",
     // contractions without their apostrophe; the negative ones are negations
     "im ive id ill youre youve weve were theyre thats theres heres whats hes shes itll",
 ];
+/// Particles that are filler as prepositions ("the loop on mobile") but
+/// carry the meaning of a phrasal verb right after the leading word: "turn
+/// on auth" is `turn-on-auth`, "clean up tests" is `clean-up-tests`.
+const PHRASAL_PARTICLES: &str = "on in up out";
 /// Negations reverse a task's meaning, so they stay in its name as `not`:
 /// "Don't delete backups" is `not-delete-backups`.
 const NEGATIONS: &str = "dont doesnt didnt isnt arent wasnt werent cant cannot couldnt wont wouldnt shouldnt never not";
@@ -179,9 +183,9 @@ pub fn branch_slug(task: &str) -> String {
         if words.is_empty() {
             continue;
         }
-        let content: Vec<&String> = words.iter().filter(|w| !is_filler(w)).collect();
+        let content = content_words(&words);
         if !content.is_empty() {
-            return join_slug(content.into_iter().map(String::as_str));
+            return join_slug(content.into_iter());
         }
         // A sentence of pure filler ("Hi there!") names the task only when
         // nothing better follows.
@@ -224,6 +228,21 @@ fn sentences(line: &str) -> Vec<&str> {
 
 fn is_filler(word: &str) -> bool {
     FILLER.iter().any(|group| group.split_whitespace().any(|w| w == word))
+}
+
+/// The words that name the task: everything but filler, plus a particle
+/// that directly follows the leading word and so completes its verb.
+fn content_words(words: &[String]) -> Vec<&str> {
+    let mut content: Vec<&str> = Vec::new();
+    let mut previous_kept = false;
+    for word in words {
+        let phrasal = content.len() == 1 && previous_kept && PHRASAL_PARTICLES.split_whitespace().any(|p| p == word);
+        previous_kept = phrasal || !is_filler(word);
+        if previous_kept {
+            content.push(word);
+        }
+    }
+    content
 }
 
 /// The lowercase ASCII words of a sentence, apostrophes removed so that
