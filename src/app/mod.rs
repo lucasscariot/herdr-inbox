@@ -718,6 +718,9 @@ impl App {
         composer.picker = None;
         composer.error = None;
         composer.compare.clear();
+        // A new thread opened and closed before discovery answered may still
+        // be waiting for its first preset; the thread's choices win.
+        composer.start_preset = false;
         composer.machine = Some(thread.machine_id.clone());
         match &record {
             Some(record) => {

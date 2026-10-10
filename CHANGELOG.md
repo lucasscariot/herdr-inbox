@@ -41,6 +41,15 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Added
 
+- A preset strip right under the task: every preset is a chip in the user's
+  order of preference, the chip in use is highlighted, and a "+ Save as
+  preset…" chip (or `Ctrl+D`) saves the current choices. `F7` focuses the
+  strip, `←`/`→` move, `Enter` applies, `1`-`9` apply the nth preset,
+  `Ctrl+←`/`Ctrl+→` reorder and persist the order, `Ctrl+R` renames,
+  `Delete` removes, and chips are clickable.
+- A new thread starts on the first preset whose CLI is installed on the
+  chosen machine; the composer goes back to it after each send. Send and
+  keep (`Ctrl+S`) and resending a thread keep their own choices.
 - Compare agents from the composer (`F12`, off by default): the same task
   goes to two or three agents at once, each in its own new worktree whose
   branch ends with the agent's harness and model. One bad choice launches

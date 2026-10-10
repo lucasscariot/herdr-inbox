@@ -34,6 +34,9 @@ impl ComposerLayout {
     pub const LABEL_WIDTH: u16 = 11;
     /// Room kept for a row's key hint, `F7  ›`.
     const KEY_WIDTH: u16 = 7;
+    /// Rows under the strip that stay with the fields: a blank line and the
+    /// seven field rows.
+    const RESERVED_ROWS: u16 = 8;
 
     pub fn new(area: Rect, composer: &Composer, ctx: &Context) -> Option<Self> {
         if area.width < 20 || area.height < 8 {
@@ -51,7 +54,9 @@ impl ComposerLayout {
         let task_cursor = (task_inner.x + col.min(inner_width), task_inner.y + row - task_scroll);
         let limit = area.bottom().saturating_sub(2);
         // The strip: chips flow after the label and wrap under it, the first
-        // row leaving room for the key hint on the right.
+        // row leaving room for the key hint on the right. It never grows
+        // into the rows the fields need: chips past that are left out.
+        let strip_end = limit.saturating_sub(Self::RESERVED_ROWS).max(task_box.bottom() + 1).min(limit);
         let mut y = task_box.bottom();
         // A chip's own padding takes the place of the space before a value.
         let chips_x = content.x + 1 + Self::LABEL_WIDTH;
@@ -69,7 +74,7 @@ impl ComposerLayout {
             if x + width > right && x > chips_x {
                 y += 1;
                 x = chips_x;
-                if y >= limit {
+                if y >= strip_end {
                     break;
                 }
             }
@@ -171,5 +176,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_crowded_strip_leaves_the_fields_and_send_their_rows() {
+        let presets = (0..14)
+            .map(|i| crate::presets::Preset {
+                name: format!("A rather long preset name {i}"),
+                harness: "claude".into(),
+                model: "opus".into(),
+                thinking: String::new(),
+            })
+            .collect();
+        let mut app = App::new(100, 24, vec![]).with_memory(presets, vec![]);
+        app.composer.task.set(&"A long task with several lines\n".repeat(12));
+        let layout = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(layout.chips.len() < 15, "not every chip fits in 24 rows");
+        assert!(layout.strip.height >= 1);
+        assert!(layout.fields.iter().any(|(f, _)| *f == Field::Workspace), "{:?}", layout.fields);
+        assert!(layout.send.height > 0, "send stays reachable");
+        assert_eq!(layout.fields[0].1.y, layout.strip.bottom() + 1);
     }
 }

@@ -52,11 +52,15 @@ pub fn clean(presets: Vec<Preset>) -> Vec<Preset> {
         .collect()
 }
 
-/// Adds a preset, replacing one with the same name.
+/// Adds a preset at the end, or replaces the one with the same name in
+/// place: its position is the user's preference and stays.
 pub fn save(presets: &[Preset], preset: Preset) -> Result<Vec<Preset>, String> {
     preset.validate()?;
-    let mut next: Vec<Preset> = presets.iter().filter(|p| p.name != preset.name).cloned().collect();
-    next.push(preset);
+    let mut next = presets.to_vec();
+    match next.iter().position(|p| p.name == preset.name) {
+        Some(index) => next[index] = preset,
+        None => next.push(preset),
+    }
     Ok(next)
 }
 
@@ -140,10 +144,12 @@ mod tests {
     }
 
     #[test]
-    fn saving_replaces_a_preset_with_the_same_name() {
+    fn saving_replaces_a_preset_with_the_same_name_in_place() {
         let presets = vec![preset("a", "claude", "opus", ""), preset("b", "pi", "x", "")];
         let next = save(&presets, preset("a", "claude", "sonnet", "high")).unwrap();
-        assert_eq!(next, vec![preset("b", "pi", "x", ""), preset("a", "claude", "sonnet", "high")]);
+        assert_eq!(next, vec![preset("a", "claude", "sonnet", "high"), preset("b", "pi", "x", "")]);
+        let next = save(&presets, preset("c", "codex", "g", "")).unwrap();
+        assert_eq!(next.last().map(|p| p.name.as_str()), Some("c"), "a new preset goes last");
         assert!(save(&presets, preset("c", "claude", "", "")).unwrap_err().contains("Pick a model"));
     }
 

@@ -1777,6 +1777,45 @@ mod conveniences {
     }
 
     #[test]
+    fn a_pending_first_preset_does_not_override_a_resent_thread() {
+        let (mut app, _) = loaded();
+        app = app.with_memory(two_presets(), vec![]);
+        let mut codex = record("a1", Some("w2:p1"), Stage::Submitted);
+        codex.harness = "codex".into();
+        codex.model = "gpt-5".into();
+        codex.thinking = String::new();
+        app.update(Input::Journals(vec![codex]), at(1));
+        // A new thread, opened and closed before the inventory arrived.
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert!(app.composer.start_preset);
+        app.update(press(KeyCode::Esc), at(1));
+        app.focus = Focus::List;
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.task.text(), "Task a1\nwith details", "the thread was resent");
+        assert!(!app.composer.start_preset);
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(2));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        assert_eq!(app.composer.model.as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn saving_over_the_first_preset_keeps_it_first() {
+        let mut app = composing(two_presets(), vec![]);
+        app.with_composer(|c, ctx| c.apply(ctx, Pick::Thinking(None)));
+        ctrl(&mut app, 'd');
+        for _ in 0..app.composer.picker.as_ref().unwrap().query.chars().count() {
+            app.update(press(KeyCode::Backspace), at(1));
+        }
+        type_text(&mut app, "Deep");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        assert_eq!(
+            effects,
+            vec![Effect::SavePresets(vec![preset("Deep", "claude", "opus", ""), preset("Fast", "codex", "gpt-5", "")])]
+        );
+    }
+
+    #[test]
     fn the_strip_lists_presets_in_order_then_the_save_chip() {
         let mut app = composing(vec![preset("Deep", "claude", "opus", "high"), preset("Pi", "pi", "x", "")], vec![]);
         {
