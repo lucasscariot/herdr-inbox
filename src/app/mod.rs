@@ -616,6 +616,11 @@ impl App {
             }
         }
         self.with_composer(|composer, ctx| composer.settle(ctx));
+        if self.composer.machine.as_deref() == Some(machine) && self.inventories.contains_key(machine) {
+            // Fresh word from the thread's machine: the first preset it has
+            // is now the one applied, and stays until chosen otherwise.
+            self.composer.start_preset = false;
+        }
     }
 
     /// Validates the composer and starts a launch, or one per compared agent.

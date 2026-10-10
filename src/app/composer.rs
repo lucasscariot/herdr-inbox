@@ -225,8 +225,10 @@ pub struct Composer {
     /// was reached with F7 while writing, the strip itself when reached
     /// with Tab.
     pub strip_return: Field,
-    /// A new thread starts on the first preset: applied by the next
-    /// `settle` that knows what the machine has installed.
+    /// A new thread starts on the first preset: applied by every `settle`
+    /// that knows what the machine has installed, until discovery answers
+    /// afresh or the user picks a harness, model, thinking or preset by
+    /// hand. A cached inventory alone never settles the choice.
     pub start_preset: bool,
 }
 
@@ -455,7 +457,7 @@ impl Composer {
             self.model = remembered.models.get(&machine).and_then(|m| m.get(self.harness.as_deref()?)).cloned();
             self.thinking = remembered.thinking.get(&machine).and_then(|m| m.get(self.harness.as_deref()?)).cloned();
         }
-        if std::mem::take(&mut self.start_preset)
+        if self.start_preset
             && let Some(preset) = ctx.presets.iter().find(|p| installed.contains(&p.harness))
         {
             self.harness = Some(preset.harness.clone());
@@ -502,6 +504,10 @@ impl Composer {
 
     /// Applies a picked choice and re-settles everything after it.
     pub fn apply(&mut self, ctx: &Context, pick: Pick) {
+        if matches!(pick, Pick::Harness(_) | Pick::Model(_) | Pick::Thinking(_) | Pick::Preset(_)) {
+            // A choice made by hand outranks the first-preset default.
+            self.start_preset = false;
+        }
         match pick {
             Pick::Project(name) => {
                 if self.project.as_deref() != Some(&name) {
