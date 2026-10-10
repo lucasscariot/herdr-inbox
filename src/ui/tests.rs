@@ -134,6 +134,75 @@ fn the_inbox_groups_threads_by_what_they_need() {
 }
 
 #[test]
+fn routine_labels_stay_neutral_with_an_orange_accent() {
+    for accent in ["#ff9f0a", "#123456"] {
+        let palette = crate::theme::from_herdr_config(&format!(
+            "[theme]\nname = \"terminal\"\n[theme.custom]\naccent = \"{accent}\"\ntext = \"#dddddd\"\nsubtext0 = \"#aaaaaa\""
+        ));
+        let mut app = App::new(110, 30, vec![]);
+        app.update(snapshot(LOCAL, vec![]), at(0));
+        let terminal = render_with_palette(&app, at(0), &palette);
+        let buffer = terminal.backend().buffer();
+        for label in ["inbox", "+  New thread"] {
+            assert_eq!(buffer[find(&terminal, label)].fg, palette.text, "{label} is not an accent");
+        }
+        assert_eq!(buffer[find(&terminal, "Filter threads")].fg, palette.subtext0);
+        press(&mut app, KeyCode::Char('n'));
+        let terminal = render_with_palette(&app, at(0), &palette);
+        let buffer = terminal.backend().buffer();
+        let (x, y) = (app.layout.terminal.x + 2, app.layout.terminal.y + 1);
+        assert_eq!(buffer[(x, y)].symbol(), "N");
+        assert_eq!(buffer[(x, y)].fg, palette.text, "the composer heading is neutral");
+        for label in ["NEW THREAD", "Describe the task.", "send & keep", "F7  ›"] {
+            assert_eq!(buffer[find(&terminal, label)].fg, palette.subtext0, "{label} is neutral");
+        }
+        assert_eq!(buffer[find(&terminal, "+  New thread")].fg, palette.accent, "the active action");
+        let frame = &buffer[find(&terminal, "╭")];
+        assert_eq!(frame.fg, palette.accent, "the focused task");
+        assert!(frame.modifier.contains(Modifier::DIM));
+    }
+}
+
+#[test]
+fn thread_metadata_is_neutral_and_only_the_visible_discussion_is_accented() {
+    let palette = crate::theme::from_herdr_config(
+        "[theme.custom]\naccent = \"#123456\"\nsubtext0 = \"#abcdef\"\nmauve = \"#ff9f0a\"",
+    );
+    let mut app = loaded(110, 30);
+    let terminal = render_with_palette(&app, at(0), &palette);
+    let buffer = terminal.backend().buffer();
+    let (x, y) = find(&terminal, "▎Fix the login");
+    assert_eq!(buffer[(x + 1, y)].fg, palette.accent);
+    for label in ["Claude", "⎇ main"] {
+        assert_eq!(buffer[find(&terminal, label)].fg, palette.subtext0, "{label} is metadata, not an accent");
+    }
+    press(&mut app, KeyCode::Char('n'));
+    let terminal = render_with_palette(&app, at(0), &palette);
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(x + 1, y)].fg, palette.text, "the previous discussion is hidden by the composer");
+    press(&mut app, KeyCode::Esc);
+    let terminal = render_with_palette(&app, at(0), &palette);
+    assert_eq!(terminal.backend().buffer()[(x + 1, y)].fg, palette.accent, "returning restores the accent");
+}
+
+#[test]
+fn action_hints_use_neutral_theme_colours_without_a_server_or_after_a_takeover() {
+    let palette = crate::theme::from_herdr_config("[theme.custom]\naccent = \"#ff9f0a\"\nsubtext0 = \"#abcdef\"");
+    let mut app = App::new(80, 12, vec![]);
+    app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
+    let terminal = render_with_palette(&app, at(0), &palette);
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[find(&terminal, "inbox")].fg, palette.text);
+    for key in ["Enter", "q quit"] {
+        assert_eq!(buffer[find(&terminal, key)].fg, palette.subtext0);
+    }
+    let mut app = loaded(100, 24);
+    app.update(Input::Terminal { generation: 1, message: Message::Closed { reason: Some(TAKEN_OVER.into()) } }, at(1));
+    let terminal = render_with_palette(&app, at(1), &palette);
+    assert_eq!(terminal.backend().buffer()[find(&terminal, "Enter")].fg, palette.subtext0);
+}
+
+#[test]
 fn status_colors_carry_meaning() {
     let app = loaded(100, 24);
     let terminal = render(&app, at(0));
@@ -143,7 +212,7 @@ fn status_colors_carry_meaning() {
     assert_eq!(buffer[find(&terminal, "◐ working")].fg, palette.yellow);
     assert_eq!(buffer[find(&terminal, "✓ ready")].fg, palette.teal);
     assert_eq!(buffer[find(&terminal, "NEEDS INPUT")].fg, palette.red);
-    assert_eq!(buffer[find(&terminal, "⎇ main")].fg, palette.mauve);
+    assert_eq!(buffer[find(&terminal, "⎇ main")].fg, palette.subtext0);
 }
 
 #[test]
@@ -590,6 +659,15 @@ mod composer {
         assert_eq!(app.composer.task.cursor(), 4);
         key(&mut app, KeyCode::Char('X'));
         assert_eq!(app.composer.task.text(), "Fix Xthe login redirect loop");
+    }
+
+    #[test]
+    fn branch_previews_use_neutral_theme_text() {
+        let app = composing(110, 30);
+        let palette = crate::theme::from_herdr_config("[theme.custom]\nsubtext0 = \"#abcdef\"\nmauve = \"#ff9f0a\"");
+        let terminal = render_with_palette(&app, at(1), &palette);
+        let branch = app.composer.branch_preview(&app.composer_context()).expect("worktree branch");
+        assert_eq!(terminal.backend().buffer()[find(&terminal, &format!("⎇ {branch}"))].fg, palette.subtext0);
     }
 
     #[test]

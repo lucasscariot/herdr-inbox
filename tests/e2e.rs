@@ -250,6 +250,18 @@ impl Inbox {
         self.screen.lock().unwrap().screen().contents()
     }
 
+    fn foreground(&self, needle: &str) -> vt100::Color {
+        use unicode_width::UnicodeWidthStr;
+        let screen = self.screen.lock().unwrap();
+        let text = screen.screen().contents();
+        let (row, column) = text
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| line.find(needle).map(|byte| (row as u16, line[..byte].width() as u16)))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{text}"));
+        screen.screen().cell(row, column).expect("text cell").fgcolor()
+    }
+
     fn wait_for_text(&self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
@@ -505,6 +517,58 @@ fn updates_browse_and_install_a_checked_release_without_losing_the_draft_or_sess
     inbox.wait_for_text("Keep this draft");
     inbox.press("\x07");
     inbox.wait_for_text("Installed 2.0.0");
+}
+
+#[test]
+fn herdr_config_colours_neutral_labels_and_only_active_accents() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    for (accent, rgb) in [("#ff9f0a", (255, 159, 10)), ("#123456", (18, 52, 86))] {
+        std::fs::write(
+            sandbox.root.path().join("config/herdr/config.toml"),
+            format!(
+                "[theme]\nname = \"terminal\"\n[theme.custom]\naccent = \"{accent}\"\ntext = \"#dddddd\"\nsubtext0 = \"#aaaaaa\""
+            ),
+        )
+        .expect("Herdr theme config");
+        let mut inbox = Inbox::start(&sandbox, 110, 30);
+        inbox.wait_for_text("No agent threads yet.");
+        assert_eq!(inbox.foreground("inbox"), vt100::Color::Rgb(221, 221, 221));
+        assert_eq!(inbox.foreground("+  New thread"), vt100::Color::Rgb(221, 221, 221));
+        assert_eq!(inbox.foreground("Filter threads"), vt100::Color::Rgb(170, 170, 170));
+        inbox.press("n");
+        inbox.wait_for_text("NEW THREAD");
+        let accent = vt100::Color::Rgb(rgb.0, rgb.1, rgb.2);
+        assert_eq!(inbox.foreground("+  New thread"), accent);
+        assert_eq!(inbox.foreground("╭"), accent);
+        // The composer heading appears above the sidebar action.
+        assert_eq!(inbox.foreground("New thread  "), vt100::Color::Rgb(221, 221, 221));
+        for label in ["NEW THREAD", "Describe the task.", "send & keep", "F7  ›"] {
+            assert_eq!(inbox.foreground(label), vt100::Color::Rgb(170, 170, 170), "{label}");
+        }
+    }
+}
+
+#[test]
+fn the_theme_follows_herdr_config_path_over_the_default_file() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    std::fs::write(sandbox.root.path().join("config/herdr/config.toml"), "[ui]\naccent = \"#ff9f0a\"\n")
+        .expect("default Herdr config");
+    let config = sandbox.root.path().join("custom herdr.toml");
+    std::fs::write(&config, "[theme.custom]\naccent = \"#123456\"\ntext = \"#dddddd\"\n")
+        .expect("alternate Herdr config");
+    let mut inbox = Inbox::start_with(&sandbox, 110, 30, &[("HERDR_CONFIG_PATH", config.to_str().unwrap())]);
+    inbox.wait_for_text("No agent threads yet.");
+    assert_eq!(inbox.foreground("inbox"), vt100::Color::Rgb(221, 221, 221));
+    inbox.press("n");
+    inbox.wait_for_text("NEW THREAD");
+    assert_eq!(inbox.foreground("+  New thread"), vt100::Color::Rgb(18, 52, 86));
+    assert_eq!(inbox.foreground("╭"), vt100::Color::Rgb(18, 52, 86));
 }
 
 #[test]

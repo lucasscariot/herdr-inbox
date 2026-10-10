@@ -21,7 +21,7 @@ pub struct Drawn {
 
 pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: SystemTime) -> Drawn {
     let base = Style::new().fg(palette.text).bg(palette.panel_bg);
-    let dim = base.fg(palette.overlay0);
+    let dim = base.fg(palette.subtext0).add_modifier(Modifier::DIM);
     fill(buf, area, base);
     let ctx = app.composer_context();
     let composer = &app.composer;
@@ -41,7 +41,7 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         x,
         layout.content.y,
         width,
-        &[("New thread".into(), base.fg(palette.accent).add_modifier(Modifier::BOLD))],
+        &[("New thread".into(), base.add_modifier(Modifier::BOLD))],
         &[(status, dim)],
     );
     split_line(
@@ -110,10 +110,17 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         if *field == Field::Workspace
             && let Some(branch) = composer.branch_preview(&ctx)
         {
-            left.push((format!("  ⎇ {branch}"), style.fg(palette.mauve)));
+            left.push((format!("  ⎇ {branch}"), style.fg(palette.subtext0)));
         }
         let key = field.key().filter(|_| enabled).map(|n| format!("F{n}  ›")).unwrap_or_default();
-        split_line(buf, row.x, row.y, row.width, &left, &[(key, style.fg(palette.overlay0))]);
+        split_line(
+            buf,
+            row.x,
+            row.y,
+            row.width,
+            &left,
+            &[(key, style.fg(palette.subtext0).add_modifier(Modifier::DIM))],
+        );
     }
     if layout.send.height > 0 {
         let key = base.fg(palette.subtext0).add_modifier(Modifier::BOLD);
@@ -276,7 +283,14 @@ fn strip(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Palette
         (marker.to_string(), base.fg(palette.accent)),
         (format!("{:<width$}", Field::Preset.label(), width = LABEL_WIDTH as usize), base.fg(palette.subtext0)),
     ];
-    split_line(buf, area.x, area.y, area.width, &label, &[("F7  ›".into(), base.fg(palette.overlay0))]);
+    split_line(
+        buf,
+        area.x,
+        area.y,
+        area.width,
+        &label,
+        &[("F7  ›".into(), base.fg(palette.subtext0).add_modifier(Modifier::DIM))],
+    );
     let at_cursor = composer.chip_at_cursor(&ctx);
     for (chip, rect) in &layout.chips {
         let under_cursor = focused && chip.chip == at_cursor.chip;

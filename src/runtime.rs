@@ -40,7 +40,11 @@ use redraw::Redraw;
 pub fn run(options: Options) -> anyhow::Result<()> {
     let env = SocketEnv::from_process();
     let endpoint = socket::resolve(options.session.as_deref(), &env)?;
-    let palette = theme::load(&socket::config_dir(&env)?.join("config.toml"));
+    let mut herdr_config = socket::config_dir(&env)?.join("config.toml");
+    if let Some(path) = std::env::var_os("HERDR_CONFIG_PATH").filter(|path| !path.is_empty()) {
+        herdr_config = path.into();
+    }
+    let palette = theme::load(&herdr_config);
     let herdr = herdr_command(&options, &endpoint);
     let paths = match &options.config {
         // An explicit file is the only one read; no legacy fallback.
