@@ -58,9 +58,11 @@ publication in one workflow avoids GitHub's suppression of tag events created
 by `GITHUB_TOKEN`.
 
 Linux jobs run in the Blueprint's ARM64 Docker runners on Mac Studio. BuildKit
-builds static musl binaries for both CPU architectures from a narrow source
-context, with emulation for x86_64. macOS jobs use a dedicated native ARM64
-runner and Xcode, with Rosetta to check the x86_64 binary. Both platforms use
+cross-compiles static musl binaries from a narrow source context using a native
+Rust compiler and `rust-lld` for the final link. A target-platform stage checks
+the ELF architecture and version, so only the brief x86_64 execution uses
+emulation. macOS jobs use a dedicated native ARM64 runner and Xcode, with
+Rosetta to check the x86_64 binary. Both platforms use
 `scripts/package-release.sh` to keep the installer's archive layout unchanged.
 
 PR workflows use `pull_request_target` and reject fork heads before checkout.

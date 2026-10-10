@@ -4,6 +4,14 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Linux release builds use native Rust cross-compilation and LLVM linking,
+  avoiding the emulated GCC linker crash. Verify the ELF architecture before
+  exporting each binary.
+
 ## [1.0.0](https://github.com/lucasscariot/herdr-inbox/compare/v0.4.0...v1.0.0) (2026-10-10)
 
 
