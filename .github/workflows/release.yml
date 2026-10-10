@@ -1,94 +1,241 @@
 name: Release
 
-# A `v*` tag builds every binary and publishes them as a GitHub release, with
-# checksums the installer verifies. Pull requests that touch the release path
-# build the same binaries without publishing, so a broken release is caught
-# before the tag.
-
 on:
   push:
-    tags: ["v*"]
-  pull_request:
+    branches: [main]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
     paths:
-      - ".github/workflows/release.yml"
+      - ".github/workflows/**"
+      - ".github/docker/**"
+      - "release-please-config.json"
+      - ".release-please-manifest.json"
+      - "scripts/package-release.sh"
       - "install.sh"
       - "Cargo.toml"
       - "Cargo.lock"
+  # Build and test the selected branch without creating tags or releases.
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
 
 jobs:
+  release-please:
+    name: Release Please
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install GitHub CLI in the runner container
+        run: |
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      # GITHUB_TOKEN's PR events do not start CI. Explicit dispatches do.
+      - name: Test the release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          branch=$(jq --exit-status --raw-output '.headBranchName' <<< "$RELEASE_PR")
+          gh workflow run release.yml --ref "$branch"
+
+  checks:
+    name: Release checks
+    needs: release-please
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      statuses: write
+    with:
+      ref: ${{ needs.release-please.outputs.sha || github.event.pull_request.head.sha || github.sha }}
+
   build:
     name: Build · ${{ matrix.asset }}
-    runs-on: ${{ matrix.os }}
+    needs: [release-please, checks]
+    if: >-
+      always() && !cancelled() &&
+      needs.checks.result == 'success' &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
+      # The shared Linux VM has 4 GiB. Do not overlap LLVM release linking.
+      max-parallel: 1
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            runner: [self-hosted, Linux, ARM64, blueprint]
             asset: linux-x86_64
+            platform: linux/amd64
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-24.04-arm
+            runner: [self-hosted, Linux, ARM64, blueprint]
             asset: linux-aarch64
+            platform: linux/arm64
           - target: x86_64-apple-darwin
-            os: macos-latest
+            runner: [self-hosted, macOS, ARM64, herdr-inbox]
             asset: macos-x86_64
           - target: aarch64-apple-darwin
-            os: macos-latest
+            runner: [self-hosted, macOS, ARM64, herdr-inbox]
             asset: macos-aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        if: runner.os == 'macOS'
         with:
           targets: ${{ matrix.target }}
-      - name: Install musl
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os == 'macOS'
+        with:
+          shared-key: release-${{ matrix.target }}
+      - uses: docker/setup-buildx-action@v4
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Package
+      - name: Build and check the static Linux binary
+        if: runner.os == 'Linux'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
         run: |
-          name="herdr-inbox-${{ matrix.asset }}"
+          docker buildx build . \
+            --file .github/docker/release.Dockerfile \
+            --platform "$PLATFORM" \
+            --build-arg "RUST_TARGET=$TARGET" \
+            --build-arg "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+            --output type=local,dest=dist
+      - name: Build and check the macOS binary
+        if: runner.os == 'macOS'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target "$TARGET"
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/herdr-inbox" dist/
-          cp LICENSE README.md dist/
-          tar -czf "$name.tar.gz" -C dist herdr-inbox LICENSE README.md
-          if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"; else shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"; fi
-          cat "$name.tar.gz.sha256"
-      - name: Check the binary runs here
-        if: matrix.target != 'x86_64-apple-darwin'
-        run: ./dist/herdr-inbox --version
-      - uses: actions/upload-artifact@v4
+          cp "target/$TARGET/release/herdr-inbox" dist/
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f 2)
+          [[ $(./dist/herdr-inbox --version) == "herdr-inbox $version" ]]
+      - name: Package
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: bash scripts/package-release.sh dist/herdr-inbox "$ASSET"
+      - uses: actions/upload-artifact@v7
         with:
           name: herdr-inbox-${{ matrix.asset }}
           path: |
             herdr-inbox-${{ matrix.asset }}.tar.gz
             herdr-inbox-${{ matrix.asset }}.tar.gz.sha256
+          if-no-files-found: error
+
+  report:
+    name: Report release builds at the tested commit
+    needs: [release-please, checks, build]
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'push' || needs.release-please.outputs.release_created == 'true')
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    permissions:
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TESTED_SHA: ${{ needs.release-please.outputs.sha || github.event.pull_request.head.sha || github.sha }}
+      CHECKS_RESULT: ${{ needs.checks.result }}
+      BUILD_RESULT: ${{ needs.build.result }}
+    steps:
+      - name: Install GitHub CLI in the runner container
+        run: |
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
+      - name: Report the actual build result
+        run: |
+          state=failure
+          if [[ "$CHECKS_RESULT" == success && "$BUILD_RESULT" == success ]]; then
+            state=success
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            -f context='Self-hosted release builds' -f "state=$state" \
+            -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f description='Four checked binaries and their SHA-256 archives' > /dev/null
+          [[ "$state" == success ]]
 
   publish:
-    name: Publish the release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    name: Publish the complete release
+    needs: [release-please, checks, build]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: [self-hosted, Linux, ARM64, blueprint]
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: herdr-inbox-*
           path: artifacts
           merge-multiple: true
-      - name: Check the tag matches the crate version
+      - name: Install GitHub CLI in the runner container
         run: |
-          crate="v$(grep -m1 '^version' Cargo.toml | cut -d '"' -f 2)"
-          [ "$crate" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $crate"; exit 1; }
-      - name: Create the release
+          if ! command -v gh >/dev/null; then
+            apt-get update
+            apt-get install --yes --no-install-recommends gh
+          fi
+      - name: Verify and publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" artifacts/* --verify-tag --generate-notes --title "Herdr Inbox ${GITHUB_REF_NAME#v}"
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f 2)
+          [[ "$RELEASE_TAG" == "v$version" ]] || { echo 'Release tag does not match Cargo.toml'; exit 1; }
+          [[ $(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft) == true ]] || {
+            echo 'Refusing to change an already published release'
+            exit 1
+          }
+          for asset in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64; do
+            (cd artifacts && sha256sum --check "herdr-inbox-$asset.tar.gz.sha256")
+          done
+          gh release upload "$RELEASE_TAG" artifacts/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

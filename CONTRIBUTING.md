@@ -28,7 +28,8 @@ HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
   colours that carry meaning.
 - Protocol code is tested against a fake Herdr server on a real Unix socket
   (`src/testing.rs`), which keeps Herdr's connection rules: one request per
-  connection, long-lived subscriptions.
+  connection, long-lived subscriptions. Subprocess fixtures report readiness
+  before tests release or stop them, rather than relying on short startup sleeps.
 - The end-to-end test starts a real Herdr server with every directory in a
   temporary folder and drives the real binary in a pseudo-terminal.
 - Typing latency has two checks: `runtime::redraw` replays keys and echoes
@@ -37,6 +38,11 @@ HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
   continuous agent output. Their 250 ms deadline catches the old 700 ms
   delay without relying on sub-frame wall-clock timing on shared CI runners.
   Run `HERDR_E2E=1 cargo test --test e2e -- --nocapture` to see the samples.
+
+The checks run on the self-hosted Blueprint Linux runners and a dedicated
+macOS runner on Mac Studio. The release workflow also tests all four packaged
+binaries. Fork PRs never run code on these machines; after review, a maintainer
+can move the changes to a branch in this repository. See [CI and releases](docs/ci.md).
 
 ## Style
 

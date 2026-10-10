@@ -111,6 +111,16 @@ pub fn write_line(stream: &mut UnixStream, value: &Value) {
     let _ = stream.flush();
 }
 
+/// Waits for a fixture's observable readiness instead of assuming a startup time.
+#[track_caller]
+pub fn wait_until(mut ready: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !ready() {
+        assert!(std::time::Instant::now() < deadline, "test fixture did not become ready");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Writes an executable script without this process ever holding it open for
 /// writing. Tests run in parallel threads; a thread that forks while another
 /// holds a write handle passes that handle to its child, and executing the
@@ -126,4 +136,29 @@ pub fn write_executable(path: &Path, body: &str) {
         .expect("spawn sh to write a test script");
     child.stdin.take().expect("stdin").write_all(body.as_bytes()).expect("write test script");
     assert!(child.wait().expect("wait for sh").success(), "writing {} failed", path.display());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wait_until;
+
+    #[test]
+    fn ready_fixtures_are_checked_once() {
+        let mut checks = 0;
+        wait_until(|| {
+            checks += 1;
+            true
+        });
+        assert_eq!(checks, 1);
+    }
+
+    #[test]
+    fn unready_fixtures_are_polled_until_they_are_ready() {
+        let mut checks = 0;
+        wait_until(|| {
+            checks += 1;
+            checks == 3
+        });
+        assert_eq!(checks, 3);
+    }
 }

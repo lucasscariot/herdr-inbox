@@ -221,6 +221,7 @@ mod tests {
         let recorder = fake_recorder(dir.path(), 4096);
         let path = dir.path().join("rec.wav");
         let recording = Recording::start(&[recorder, path.display().to_string()], path.clone()).unwrap();
+        crate::testing::wait_until(|| std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= 4100));
         std::thread::sleep(Duration::from_millis(200));
         assert!(recording.elapsed() >= Duration::from_millis(200));
         let finished = recording.stop().unwrap();
@@ -236,7 +237,7 @@ mod tests {
         let path = dir.path().join("rec.wav");
         let recording =
             Recording::start(&[script.display().to_string(), path.display().to_string()], path.clone()).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        crate::testing::wait_until(|| !recording.stderr.lock().unwrap().is_empty());
         let err = recording.stop().unwrap_err();
         assert_eq!(err, "The recording is empty. audio open error: Device or resource busy");
         assert!(!path.exists());
@@ -248,7 +249,7 @@ mod tests {
         let recorder = fake_recorder(dir.path(), 4096);
         let path = dir.path().join("rec.wav");
         let recording = Recording::start(&[recorder, path.display().to_string()], path.clone()).unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        crate::testing::wait_until(|| std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() >= 4100));
         recording.cancel();
         assert!(!path.exists());
     }

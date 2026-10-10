@@ -299,9 +299,14 @@ cargo test                   # unit tests and the installer, no Herdr needed
 HERDR_E2E=1 cargo test --test e2e   # end to end against a real herdr
 ```
 
-To release, set the version in `Cargo.toml`, add it to `CHANGELOG.md`, and
-push a `vX.Y.Z` tag. The release workflow builds the four binaries and
-publishes them with their checksums.
+Release Please maintains a release PR from Conventional Commits on `main`,
+updating `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`. The maintainer merges
+that PR to release. The workflow builds and tests all four binaries on
+self-hosted runners, uploads their checksums, then publishes the draft release.
+No hand-written version bump or tag push is needed.
+
+[CI and releases](docs/ci.md) covers the Blueprint Linux runners, the native
+macOS runner, fork safety and retrying a failed release.
 
 The end-to-end tests start their own Herdr server with every directory in a
 temporary folder, so they never touch your sessions. CI runs them against the
