@@ -814,6 +814,91 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
 }
 
 #[test]
+fn presets_lead_the_composer_in_the_real_terminal() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    real_repo(&root.join("work"), "cockpit");
+    // A Claude that takes a model and an effort level, records how it was
+    // started, and never becomes ready.
+    write_executable(
+        &root.join("bin/claude"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = --help ]; then printf '%s\\n' '--model <MODEL>' '--effort <low|medium|high>'; exit 0; fi\nprintf '%s\\n' \"$@\" > '{}/claude-start.args'\necho 'not really claude'\nexit 3\n",
+            root.display()
+        ),
+    );
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).unwrap();
+    std::fs::write(
+        root.join("config/herdr-inbox/config.toml"),
+        format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display()),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("state/herdr-inbox")).unwrap();
+    let presets = root.join("state/herdr-inbox/presets.json");
+    std::fs::write(
+        &presets,
+        serde_json::json!([
+            {"name": "Deep", "harness": "claude", "model": "opus", "thinking": "high"},
+            {"name": "Quick", "harness": "claude", "model": "haiku", "thinking": ""},
+            {"name": "Pi max", "harness": "pi", "model": "x", "thinking": "max"}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("Presets");
+    inbox.wait_for_text("✻ Deep");
+    inbox.wait_for_text("+ Save as preset…");
+    // A new thread starts on the first preset.
+    inbox.wait_for_text("Model      Opus");
+    inbox.wait_for_text("Thinking   high");
+    // F7 then a digit switches in one move and goes back to writing.
+    inbox.keys("\x1b[18~");
+    inbox.wait_for_text("Claude · opus · high");
+    inbox.keys("2");
+    inbox.wait_for_text("Model      Haiku");
+    inbox.wait_for_text("Thinking   Default");
+    inbox.keys("Fix it");
+    inbox.wait_for_text("Fix it");
+    // Ctrl+← on the strip moves the preset in use to the front and persists.
+    inbox.keys("\x1b[18~");
+    inbox.keys("\x1b[1;5D");
+    let first_on_disk = || {
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&presets).unwrap_or_default()).unwrap_or_default();
+        saved[0]["name"].as_str().unwrap_or_default().to_string()
+    };
+    sandbox.wait_for(|| first_on_disk() == "Quick", "the reordered presets on disk");
+    let text = inbox.text();
+    let strip = text.lines().find(|l| l.contains("Presets")).expect("the strip");
+    assert!(strip.find("Quick") < strip.find("Deep"), "{strip}");
+    // The save chip asks for a name; Esc leaves it.
+    inbox.keys("\x1b[C\x1b[C\x1b[C");
+    inbox.wait_for_text("the current harness, model and thinking, as a new chip");
+    inbox.keys("\r");
+    inbox.wait_for_text("╭ Save preset ");
+    inbox.wait_for_text("Save as Claude · Haiku");
+    inbox.keys("\x1b");
+    inbox.wait_until_gone("╭ Save preset ");
+    // Enter on the task sends with the chosen preset.
+    inbox.keys("\x1b[A");
+    inbox.keys("\r");
+    inbox.wait_for_text("✗ cockpit · Claude");
+    let args = std::fs::read_to_string(root.join("claude-start.args"))
+        .unwrap_or_else(|err| panic!("the sandbox Claude was not launched: {err}; screen:\n{}", inbox.text()));
+    assert!(args.contains("--model\nhaiku\n"), "{args}");
+    assert!(!args.contains("--effort"), "{args}");
+    // The next thread starts on the (new) first preset, which is the same one.
+    inbox.wait_for_text("Model      Haiku");
+}
+
+#[test]
 fn comparing_agents_launches_the_task_once_per_agent_in_separate_worktrees() {
     if !enabled() {
         return;

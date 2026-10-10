@@ -5,6 +5,10 @@
 //! level for that machine. A choice that stops being valid (the machine lost
 //! the project, the harness is not installed there) falls back to a valid one.
 //!
+//! Presets sit right under the task as a strip of chips, in the user's order
+//! of preference: a new thread starts on the first one, and a chip applies
+//! its harness, model and thinking level in one move.
+//!
 //! Off by default, a task can also go to one or two more agents at once, to
 //! compare their results. Each compared agent gets its own worktree, so they
 //! never touch each other's files; the comparison is used once and cleared.
@@ -31,9 +35,10 @@ pub const COMPARE_LIMIT: usize = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Field {
     Task,
+    /// The preset strip under the task.
+    Preset,
     Project,
     Machine,
-    Preset,
     Harness,
     Model,
     Thinking,
@@ -45,9 +50,9 @@ pub enum Field {
 impl Field {
     pub const ORDER: [Field; 9] = [
         Field::Task,
+        Field::Preset,
         Field::Project,
         Field::Machine,
-        Field::Preset,
         Field::Harness,
         Field::Model,
         Field::Thinking,
@@ -60,7 +65,7 @@ impl Field {
             Field::Task => "Task",
             Field::Project => "Project",
             Field::Machine => "Machine",
-            Field::Preset => "Preset",
+            Field::Preset => "Presets",
             Field::Harness => "Harness",
             Field::Model => "Model",
             Field::Thinking => "Thinking",
@@ -146,10 +151,51 @@ pub struct Picker {
     /// Where focus goes back when the picker closes: the task, when it was
     /// opened with a function key while typing.
     pub return_to: Field,
-    /// In the preset picker: the preset being renamed.
+    /// A preset prompt: the preset being renamed.
     pub renaming: Option<String>,
-    /// Opened to save a preset (Ctrl+D): saving comes first.
+    /// A preset prompt: naming the preset about to be saved.
     pub saving: bool,
+}
+
+impl Picker {
+    /// What the popup is for, as its title.
+    pub fn title(&self) -> String {
+        match (self.field, self.saving, &self.renaming) {
+            (Field::Preset, true, _) => "Save preset".into(),
+            (Field::Preset, _, Some(_)) => "Rename preset".into(),
+            (field, _, _) => field.label().into(),
+        }
+    }
+}
+
+/// One chip in the preset strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chip {
+    /// A saved preset, by its position.
+    Preset(usize),
+    /// Saves the current harness, model and thinking as a new preset.
+    Save,
+}
+
+/// A chip ready to draw or click.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipView {
+    pub chip: Chip,
+    pub label: String,
+    /// The harness whose mark goes before the label.
+    pub harness: Option<String>,
+    /// A preset for a harness not installed on this machine is shown, dimmed.
+    pub enabled: bool,
+    /// The preset the current choices match.
+    pub active: bool,
+}
+
+impl ChipView {
+    /// Columns the chip takes: a space each side, the mark and its space.
+    pub fn width(&self) -> u16 {
+        use unicode_width::UnicodeWidthStr;
+        2 + self.label.width() as u16 + if self.harness.is_some() { 2 } else { 0 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +219,15 @@ pub struct Composer {
     pub images: Vec<String>,
     /// Other agents the task also goes to, for comparison. Empty: one agent.
     pub compare: Vec<Contender>,
+    /// The chip under the cursor while the preset strip has focus.
+    pub preset_cursor: usize,
+    /// Where focus goes after a chip is applied: the task when the strip
+    /// was reached with F7 while writing, the strip itself when reached
+    /// with Tab.
+    pub strip_return: Field,
+    /// A new thread starts on the first preset: applied by the next
+    /// `settle` that knows what the machine has installed.
+    pub start_preset: bool,
 }
 
 impl Default for Composer {
@@ -192,6 +247,9 @@ impl Default for Composer {
             history_draft: String::new(),
             images: Vec::new(),
             compare: Vec::new(),
+            preset_cursor: 0,
+            strip_return: Field::Preset,
+            start_preset: false,
         }
     }
 }
@@ -256,7 +314,85 @@ impl Composer {
         let fields = self.fields(ctx);
         let index = fields.iter().position(|f| *f == self.field).unwrap_or(0);
         let next = if forward { (index + 1) % fields.len() } else { (index + fields.len() - 1) % fields.len() };
-        self.field = fields[next];
+        match fields[next] {
+            Field::Preset => {
+                self.field = Field::Preset;
+                self.focus_presets(ctx);
+            }
+            field => self.field = field,
+        }
+    }
+
+    /// Leaves the strip after a chip was applied.
+    pub fn leave_presets(&mut self) {
+        if self.field == Field::Preset {
+            self.field = self.strip_return;
+        }
+    }
+
+    /// Focuses the preset strip, the cursor on the preset in use. Applying
+    /// a chip then goes back to the field focus came from.
+    pub fn focus_presets(&mut self, ctx: &Context) {
+        self.strip_return = self.field;
+        self.field = Field::Preset;
+        let active = self.matching_preset(ctx.presets).map(|p| p.name.clone());
+        self.preset_cursor = ctx.presets.iter().position(|p| Some(&p.name) == active.as_ref()).unwrap_or(0);
+    }
+
+    /// Moves the strip cursor, wrapping around the ends.
+    pub fn move_preset_cursor(&mut self, ctx: &Context, forward: bool) {
+        let count = self.chips(ctx).len();
+        let cursor = self.preset_cursor.min(count - 1);
+        self.preset_cursor = if forward { (cursor + 1) % count } else { (cursor + count - 1) % count };
+    }
+
+    /// The preset strip: every preset in order of preference, then the save
+    /// action. A strip with no presets is only the save action.
+    pub fn chips(&self, ctx: &Context) -> Vec<ChipView> {
+        let installed = self.machine.as_deref().map(|m| ctx.installed(m)).unwrap_or_default();
+        let active = self.matching_preset(ctx.presets).map(|p| p.name.clone());
+        let mut chips: Vec<ChipView> = ctx
+            .presets
+            .iter()
+            .enumerate()
+            .map(|(index, preset)| ChipView {
+                chip: Chip::Preset(index),
+                label: preset.name.clone(),
+                harness: Some(preset.harness.clone()),
+                enabled: installed.contains(&preset.harness),
+                active: active.as_deref() == Some(preset.name.as_str()),
+            })
+            .collect();
+        chips.push(ChipView {
+            chip: Chip::Save,
+            label: "+ Save as preset…".into(),
+            harness: None,
+            enabled: true,
+            active: false,
+        });
+        chips
+    }
+
+    /// The chip under the strip cursor.
+    pub fn chip_at_cursor(&self, ctx: &Context) -> ChipView {
+        let chips = self.chips(ctx);
+        let index = self.preset_cursor.min(chips.len() - 1);
+        chips[index].clone()
+    }
+
+    /// Describes the chip under the cursor: the preset's harness, model and
+    /// thinking, or why it cannot be picked.
+    pub fn chip_detail(&self, ctx: &Context, chip: &ChipView) -> String {
+        match chip.chip {
+            Chip::Save => "the current harness, model and thinking, as a new chip".into(),
+            Chip::Preset(_) if !chip.enabled => "not installed on this machine".into(),
+            Chip::Preset(index) => {
+                let preset = &ctx.presets[index];
+                let thinking =
+                    if preset.thinking.is_empty() { String::new() } else { format!(" · {}", preset.thinking) };
+                format!("{} · {}{thinking}", harness_label_for(&preset.harness), preset.model)
+            }
+        }
     }
 
     pub fn open_picker(&mut self, field: Field, query: &str) {
@@ -318,6 +454,13 @@ impl Composer {
                 .or_else(|| installed.first().cloned());
             self.model = remembered.models.get(&machine).and_then(|m| m.get(self.harness.as_deref()?)).cloned();
             self.thinking = remembered.thinking.get(&machine).and_then(|m| m.get(self.harness.as_deref()?)).cloned();
+        }
+        if std::mem::take(&mut self.start_preset)
+            && let Some(preset) = ctx.presets.iter().find(|p| installed.contains(&p.harness))
+        {
+            self.harness = Some(preset.harness.clone());
+            self.model = Some(preset.model.clone());
+            self.thinking = Some(preset.thinking.clone()).filter(|t| !t.is_empty());
         }
         if let Some(catalog) = ctx.catalog(self).cloned() {
             if self.model.is_some() && !catalog.selectable {
@@ -762,9 +905,14 @@ impl Composer {
         choices
     }
 
+    /// The preset prompts: the strip picks presets, so the popup only ever
+    /// asks for a name, to save the current choices or to rename a preset.
     fn preset_choices(&self, ctx: &Context, query: &str) -> Vec<Choice> {
         let typed = query.trim();
-        if let Some(from) = self.picker.as_ref().and_then(|p| p.renaming.clone()) {
+        let Some(picker) = self.picker.as_ref() else {
+            return Vec::new();
+        };
+        if let Some(from) = picker.renaming.clone() {
             return vec![Choice {
                 label: format!("Rename to {typed}"),
                 detail: format!("was {from}"),
@@ -772,53 +920,33 @@ impl Composer {
                 enabled: !typed.is_empty(),
             }];
         }
-        let installed = self.machine.as_deref().map(|m| ctx.installed(m)).unwrap_or_default();
-        ctx.presets
-            .iter()
-            .map(|preset| {
-                let thinking =
-                    if preset.thinking.is_empty() { String::new() } else { format!(" · {}", preset.thinking) };
-                let available = installed.contains(&preset.harness);
-                Choice {
-                    label: preset.name.clone(),
-                    detail: if available {
-                        format!("{} · {}{thinking}", harness_label_for(&preset.harness), preset.model)
-                    } else {
-                        "not installed here".into()
-                    },
-                    pick: Pick::Preset(preset.name.clone()),
-                    enabled: available,
-                }
-            })
-            .collect()
+        if !picker.saving {
+            return Vec::new();
+        }
+        let ready = self.harness.is_some() && self.model.is_some();
+        let taken = ctx.presets.iter().any(|p| p.name == typed);
+        // The title says what is saved; the row keeps its room for the name.
+        vec![Choice {
+            label: format!("Save as {typed}"),
+            detail: if !ready {
+                "pick a model first".into()
+            } else if taken {
+                "replaces the existing preset".into()
+            } else {
+                String::new()
+            },
+            pick: Pick::SavePreset(typed.to_string()),
+            enabled: ready && !typed.is_empty(),
+        }]
     }
 
-    /// Every choice for a field, best match first, with the action to save a
-    /// new preset on top when the query names one.
+    /// Every choice for a field, best match first. A preset prompt is its
+    /// one action, never ranked.
     pub fn choices_with_actions(&self, ctx: &Context, field: Field, query: &str) -> Vec<Choice> {
-        let mut choices = self.choices(ctx, field, query);
-        let typed = query.trim();
-        let renaming = self.picker.as_ref().is_some_and(|p| p.renaming.is_some());
-        if field == Field::Preset && !renaming && !typed.is_empty() && !ctx.presets.iter().any(|p| p.name == typed) {
-            let ready = self.harness.is_some() && self.model.is_some();
-            let save = Choice {
-                label: format!("Save as {typed}"),
-                detail: if ready {
-                    "the current harness, model and thinking".into()
-                } else {
-                    "pick a model first".into()
-                },
-                pick: Pick::SavePreset(typed.to_string()),
-                enabled: ready,
-            };
-            // Typing finds presets; saving leads only when asked for with Ctrl+D.
-            if self.picker.as_ref().is_some_and(|p| p.saving) {
-                choices.insert(0, save);
-            } else {
-                choices.push(save);
-            }
+        if field == Field::Preset {
+            return self.preset_choices(ctx, query);
         }
-        choices
+        self.choices(ctx, field, query)
     }
 
     /// One launch request per agent, or why nothing can be sent yet. A
@@ -911,7 +1039,6 @@ impl Composer {
             }
             Field::Preset => match self.matching_preset(ctx.presets) {
                 Some(preset) => preset.name.clone(),
-                None if ctx.presets.is_empty() => "None yet · Ctrl+D saves one".into(),
                 None => "None".into(),
             },
             Field::Compare => {

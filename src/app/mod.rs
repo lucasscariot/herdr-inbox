@@ -26,7 +26,7 @@ use crate::state::{Preferences, Remembered};
 use crate::threads::{self, Activity, Source, Thread, ThreadId};
 
 pub use composer::layout::ComposerLayout;
-pub use composer::{COMPARE_LIMIT, Choice, Composer, Contender, Field, Pick, Picker, WorkspaceSel};
+pub use composer::{COMPARE_LIMIT, Chip, ChipView, Choice, Composer, Contender, Field, Pick, Picker, WorkspaceSel};
 pub use dictation::{Dictation, Entry, Menu, MenuItem, Phase, SpeechStatus, Target, Then, menu_items};
 pub use layout::{Layout, Row, RowKind, SEARCH_RULE_ROW, STATS_ROW, STATS_RULE_ROW, TITLE_ROW};
 pub use updates::{UpdatePhase, Updates, dialog as update_dialog};
@@ -574,8 +574,15 @@ impl App {
         effects
     }
 
-    /// Opens the composer, discovering every reachable machine again.
+    /// Opens the composer for a new thread, which starts on the first
+    /// preset, discovering every reachable machine again.
     pub(crate) fn open_composer(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
+        self.composer.start_preset = true;
+        self.show_composer(now, effects);
+    }
+
+    /// Shows the composer with the choices it holds.
+    pub(crate) fn show_composer(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
         self.focus = Focus::Composer;
         self.composer.picker = None;
         self.composer.field = Field::Task;
@@ -670,6 +677,9 @@ impl App {
         effects.push(Effect::SaveHistory(task));
         if !keep {
             self.composer.task.clear();
+            // The next thread starts on the first preset again.
+            self.composer.start_preset = true;
+            self.with_composer(|composer, ctx| composer.settle(ctx));
         }
         if matches!(self.composer.workspace, WorkspaceSel::Named(_)) {
             // A named branch is used once; the next task gets its own.
@@ -708,6 +718,9 @@ impl App {
         composer.picker = None;
         composer.error = None;
         composer.compare.clear();
+        // A new thread opened and closed before discovery answered may still
+        // be waiting for its first preset; the thread's choices win.
+        composer.start_preset = false;
         composer.machine = Some(thread.machine_id.clone());
         match &record {
             Some(record) => {
@@ -735,7 +748,7 @@ impl App {
             }
         }
         composer.field = Field::Task;
-        self.open_composer(now, effects);
+        self.show_composer(now, effects);
     }
 
     /// The launch journal behind a thread: by pane for live threads, by id

@@ -11,10 +11,10 @@ expression: "text(&render(&app, at(1)))"
  NEEDS INPUT  1                     │  │                                                                   │
 ▎cockpit                    ● input │  │                                                                   │
 ▎Fix the login redirect loop on mo… │  ╰───────────────────────────────────────────────────────────────────╯
-▎✻ Claude · ⎇ fix-login-redirect    │
-                                    │    Project    cockpit                                            F2  ›
- READY  1                           │    Machine    Local                                              F6  ›
-▎site                       ✓ ready │    Preset     None yet · Ctrl+D saves one                        F7  ›
+▎✻ Claude · ⎇ fix-login-redirect    │    Presets    + Save as preset…                                  F7  ›
+                                    │
+ READY  1                           │    Project    cockpit                                            F2  ›
+▎site                       ✓ ready │    Machine    Local                                              F6  ›
 ▎Review navigation                  │    Harness    Claude                                             F3  ›
 ▎◈ OpenCode · ⎇ feat/a-very-long-b… │    Model      Default (opus)                                     F4  ›
                                     │    Thinking   Default                                            F8  ›

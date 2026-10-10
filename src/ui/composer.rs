@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use super::{clip, fill, frame, orbit_in, split_line};
-use crate::app::{App, ComposerLayout, Field, LaunchState, Pick};
+use crate::app::{App, Chip, ComposerLayout, Field, LaunchState, Pick};
 use crate::theme::Palette;
 
 const LABEL_WIDTH: u16 = crate::app::ComposerLayout::LABEL_WIDTH;
@@ -84,10 +84,12 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
     }
     let mut cursor = (focused && !dictating).then_some(layout.task_cursor);
     if let Some(error) = &composer.error
-        && layout.task_box.bottom() < area.bottom()
+        && layout.strip.bottom() < area.bottom()
     {
-        split_line(buf, x, layout.task_box.bottom(), width, &[(error.clone(), base.fg(palette.red))], &[]);
+        split_line(buf, x, layout.strip.bottom(), width, &[(error.clone(), base.fg(palette.red))], &[]);
     }
+
+    strip(buf, app, &layout, palette);
 
     let enabled_fields = composer.fields(&ctx);
     for (field, row) in &layout.fields {
@@ -116,14 +118,27 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
     if layout.send.height > 0 {
         let key = base.fg(palette.subtext0).add_modifier(Modifier::BOLD);
         let dictate = if app.config.speech.space_hold_enabled() { "hold ␣" } else { "⌃T" };
-        let hints = [
-            ("↵", "send"),
-            ("⌃S", "send & keep"),
-            (dictate, "dictate"),
-            ("⇥", "fields"),
-            ("F7", "presets"),
-            ("F10", "voice"),
-        ];
+        let on_strip = composer.field == Field::Preset && composer.picker.is_none();
+        let hints: &[(&str, &str)] = if on_strip {
+            &[
+                ("←→", "choose"),
+                ("↵", "apply"),
+                ("1-9", "quick pick"),
+                ("⌃D", "save"),
+                ("⌃R", "rename"),
+                ("⌦", "remove"),
+                ("⌃←→", "reorder"),
+            ]
+        } else {
+            &[
+                ("↵", "send"),
+                ("⌃S", "send & keep"),
+                (dictate, "dictate"),
+                ("⇥", "fields"),
+                ("F7", "presets"),
+                ("F10", "voice"),
+            ]
+        };
         let mut parts = Vec::new();
         for (index, (k, label)) in hints.iter().enumerate() {
             if index > 0 {
@@ -184,7 +199,7 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
             .border_type(BorderType::Rounded)
             .border_style(frame(palette, true).bg(palette.surface0))
             .title_style(popup_style.fg(palette.subtext0))
-            .title(format!(" {} ", picker.field.label()))
+            .title(format!(" {} ", picker.title()))
             .render(popup, buf);
         let query = format!("› {}", picker.query);
         split_line(buf, geometry.query.x, geometry.query.y, geometry.query.width, &[(query.clone(), popup_style)], &[]);
@@ -239,4 +254,64 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         }
     }
     Drawn { cursor }
+}
+
+/// The preset strip: a label, then one chip per preset in the user's order
+/// and a chip to save the current choices. The preset in use is bold in the
+/// accent; while the strip has focus the chip under the cursor is reversed
+/// and described on the right.
+fn strip(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Palette) {
+    let ctx = app.composer_context();
+    let composer = &app.composer;
+    let area = layout.strip;
+    if area.height == 0 {
+        return;
+    }
+    let focused = composer.field == Field::Preset && composer.picker.is_none();
+    let bg = if focused { palette.active_row_bg } else { palette.panel_bg };
+    let base = Style::new().fg(palette.text).bg(bg);
+    fill(buf, area, base);
+    let marker = if focused { "▸ " } else { "  " };
+    let label = [
+        (marker.to_string(), base.fg(palette.accent)),
+        (format!("{:<width$}", Field::Preset.label(), width = LABEL_WIDTH as usize), base.fg(palette.subtext0)),
+    ];
+    split_line(buf, area.x, area.y, area.width, &label, &[("F7  ›".into(), base.fg(palette.overlay0))]);
+    let at_cursor = composer.chip_at_cursor(&ctx);
+    for (chip, rect) in &layout.chips {
+        let under_cursor = focused && chip.chip == at_cursor.chip;
+        let mut style = if chip.active {
+            base.fg(palette.accent).bg(palette.selection_bg).add_modifier(Modifier::BOLD)
+        } else if !chip.enabled {
+            base.fg(palette.overlay0).bg(palette.raised()).add_modifier(Modifier::DIM)
+        } else if chip.chip == Chip::Save {
+            base.fg(palette.subtext0).bg(palette.raised())
+        } else {
+            base.bg(palette.raised())
+        };
+        if under_cursor {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        fill(buf, *rect, style);
+        let mut parts = vec![(" ".to_string(), style)];
+        if let Some(kind) = &chip.harness {
+            let (mark, mark_style) = super::harness::label(kind, palette);
+            let mark_style = if chip.enabled { mark_style.bg(style.bg.unwrap_or(bg)) } else { style };
+            parts.push((mark, if under_cursor { mark_style.add_modifier(Modifier::REVERSED) } else { mark_style }));
+        }
+        parts.push((chip.label.clone(), style));
+        split_line(buf, rect.x, rect.y, rect.width, &parts, &[]);
+    }
+    // The chip under the cursor is described on the line under the strip,
+    // unless an error needs that line.
+    if focused
+        && composer.error.is_none()
+        && let Some((_, first)) = layout.chips.first()
+        && area.bottom() < layout.fields.first().map(|(_, r)| r.y).unwrap_or(area.bottom() + 1)
+    {
+        let detail = composer.chip_detail(&ctx, &at_cursor);
+        let style = Style::new().fg(palette.overlay0).bg(palette.panel_bg);
+        let x = first.x + 1;
+        split_line(buf, x, area.bottom(), area.right().saturating_sub(x), &[(detail, style)], &[]);
+    }
 }

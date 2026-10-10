@@ -32,12 +32,12 @@ public interfaces.
 | `editor`, `fuzzy` | The composer's text box, cell-to-cursor placement using the same Unicode-aware wrapping as drawing, and its pickers' ranking. Model pickers match labels and ids. |
 | `images` | Pasted images: `[Image #N]` placeholders in the editor, their paths in the sent text, and the split that pastes each image on its own so agents attach it. Pure. |
 | `clipboard` | Reads the clipboard for `Ctrl+V` (`wl-paste`, `xclip`, `osascript`) and saves an image privately under the cache directory. |
-| `presets` | Named harness, model and thinking combinations, in the plugin's `presets.json` format. |
+| `presets` | Named harness, model and thinking combinations, in the plugin's `presets.json` format, kept in the user's order of preference. |
 | `speech` | Dictation: `recorder` (whatever is installed, stopped with SIGINT so the WAV is finalized), `meter` (an FFT over the file being written, twelve bands, an adaptive noise floor), `backends` (a command, voxtype, whisper.cpp, or a hosted service through `curl` with the key on stdin), `whisper` (builds whisper.cpp and downloads a model). |
 | `update` | Checks GitHub's latest stable release through a bounded `curl` request, compares semantic versions, and runs the embedded checksum-checked installer against the current executable. |
 | `app::updates` | The update dialog's state, confirmation and notes scrolling. Checks and installs are effects, never I/O in the app. |
 | `app` | The state machine. `update(Input) -> Vec<Effect>`; no I/O, so every behaviour is unit-tested. |
-| `app::composer::layout` | Pure geometry shared by composer drawing and mouse input: task viewport, field rows, send target and scrolled picker rows. Decoration sits below the controls. |
+| `app::composer::layout` | Pure geometry shared by composer drawing and mouse input: task viewport, the preset strip's wrapping chips, field rows, send target and scrolled picker rows. Decoration sits below the controls. |
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
 | `keys` | Encodes key presses as xterm bytes for the pane, honouring its cursor-key and bracketed-paste modes. |
@@ -46,7 +46,7 @@ public interfaces.
 | `orbit` | The orbit logo: the fleet as rings and beads, rendered to Braille cells. Pure, a function of the time. |
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
 | `ui` | Pure drawing from `&App`, including themed frames and explicit popup title styles. |
-| `ui::harness` | One single-width coloured glyph per harness, drawn before its readable name in the sidebar and the composer picker. Claude, Codex, Pi and OpenCode have distinct glyphs; other harnesses get a neutral one. |
+| `ui::harness` | One single-width coloured glyph per harness, drawn before its readable name in the sidebar, the preset chips and the composer picker. Claude, Codex, Pi and OpenCode have distinct glyphs; other harnesses get a neutral one. |
 | `runtime` | Terminal setup, the event loop, effect execution. |
 | `runtime::redraw` | Applies inputs and schedules draws with a 16 ms frame limit. Forwarded keys wait for the agent's echo instead of redrawing an unchanged screen. |
 
@@ -111,6 +111,13 @@ assert the compiled version separately from the version-independent layout.
   group's count, before the filter, so the filter never hides how much is
   waiting), then the actions (New thread and the filter field), then the list,
   separated by hairline rules. `app::layout` names each header row.
+- **Presets lead the composer.** The strip under the task shows every preset
+  as a chip, in the order kept in `presets.json`, which is the user's order
+  of preference: `Ctrl+←`/`Ctrl+→` reorder it. Opening the composer for a new
+  thread, and sending a task, set `start_preset`; the next `settle` that knows
+  what the machine has installed applies the first preset whose CLI is there,
+  so a preset is never applied before discovery can validate it. Resending a
+  thread keeps the thread's own choices instead.
 - **Thinking belongs to the selected model.** Catalogs with per-model levels
   constrain both the picker and launch validation; changing models clears an
   incompatible level. Older catalogs keep their harness-wide levels. Codex

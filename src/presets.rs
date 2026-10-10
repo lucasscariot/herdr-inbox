@@ -1,6 +1,7 @@
 //! Presets: named combinations of harness, model and thinking level, picked
 //! in one move in the composer. Stored as `presets.json` in the legacy
-//! plugin's format.
+//! plugin's format, in the user's order of preference: the first preset is
+//! the one every new thread starts on.
 
 use serde::{Deserialize, Serialize};
 
@@ -51,11 +52,15 @@ pub fn clean(presets: Vec<Preset>) -> Vec<Preset> {
         .collect()
 }
 
-/// Adds a preset, replacing one with the same name.
+/// Adds a preset at the end, or replaces the one with the same name in
+/// place: its position is the user's preference and stays.
 pub fn save(presets: &[Preset], preset: Preset) -> Result<Vec<Preset>, String> {
     preset.validate()?;
-    let mut next: Vec<Preset> = presets.iter().filter(|p| p.name != preset.name).cloned().collect();
-    next.push(preset);
+    let mut next = presets.to_vec();
+    match next.iter().position(|p| p.name == preset.name) {
+        Some(index) => next[index] = preset,
+        None => next.push(preset),
+    }
     Ok(next)
 }
 
@@ -79,6 +84,19 @@ pub fn rename(presets: &[Preset], from: &str, to: &str) -> Result<Vec<Preset>, S
 
 pub fn remove(presets: &[Preset], name: &str) -> Vec<Preset> {
     presets.iter().filter(|p| p.name != name).cloned().collect()
+}
+
+/// Moves a preset one place later (`forward`) or earlier in the order of
+/// preference. At either end, or for an unknown name, nothing changes.
+pub fn shift(presets: &[Preset], name: &str, forward: bool) -> Vec<Preset> {
+    let mut next = presets.to_vec();
+    if let Some(index) = next.iter().position(|p| p.name == name) {
+        let target = if forward { index + 1 } else { index.wrapping_sub(1) };
+        if target < next.len() {
+            next.swap(index, target);
+        }
+    }
+    next
 }
 
 /// A readable default name: "Claude · Opus · High".
@@ -126,10 +144,12 @@ mod tests {
     }
 
     #[test]
-    fn saving_replaces_a_preset_with_the_same_name() {
+    fn saving_replaces_a_preset_with_the_same_name_in_place() {
         let presets = vec![preset("a", "claude", "opus", ""), preset("b", "pi", "x", "")];
         let next = save(&presets, preset("a", "claude", "sonnet", "high")).unwrap();
-        assert_eq!(next, vec![preset("b", "pi", "x", ""), preset("a", "claude", "sonnet", "high")]);
+        assert_eq!(next, vec![preset("a", "claude", "sonnet", "high"), preset("b", "pi", "x", "")]);
+        let next = save(&presets, preset("c", "codex", "g", "")).unwrap();
+        assert_eq!(next.last().map(|p| p.name.as_str()), Some("c"), "a new preset goes last");
         assert!(save(&presets, preset("c", "claude", "", "")).unwrap_err().contains("Pick a model"));
     }
 
@@ -152,6 +172,18 @@ mod tests {
         assert!(presets[1].matches("pi", Some("x"), None));
         assert!(presets[1].matches("pi", Some("x"), Some("")));
         assert!(!presets[1].matches("pi", None, None), "a preset always names a model");
+    }
+
+    #[test]
+    fn shifting_moves_a_preset_one_place_and_stops_at_the_ends() {
+        let presets =
+            vec![preset("a", "claude", "opus", ""), preset("b", "pi", "x", ""), preset("c", "codex", "g", "")];
+        let names = |p: &[Preset]| p.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&shift(&presets, "b", false)), ["b", "a", "c"]);
+        assert_eq!(names(&shift(&presets, "b", true)), ["a", "c", "b"]);
+        assert_eq!(names(&shift(&presets, "a", false)), ["a", "b", "c"], "already first");
+        assert_eq!(names(&shift(&presets, "c", true)), ["a", "b", "c"], "already last");
+        assert_eq!(shift(&presets, "missing", true), presets);
     }
 
     #[test]

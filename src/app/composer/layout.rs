@@ -1,9 +1,10 @@
 //! Composer geometry shared by drawing and mouse hit testing. The task stays
-//! near the top; decorative content never moves the input or its choices.
+//! near the top, the preset strip right under it; decorative content never
+//! moves the input or its choices.
 
 use ratatui::layout::Rect;
 
-use super::{Composer, Context, Field};
+use super::{Chip, ChipView, Composer, Context, Field};
 
 pub struct ComposerLayout {
     pub content: Rect,
@@ -12,6 +13,10 @@ pub struct ComposerLayout {
     pub task_lines: Vec<String>,
     pub task_scroll: u16,
     pub task_cursor: (u16, u16),
+    /// The preset strip's rows, label included.
+    pub strip: Rect,
+    /// Every chip that fits, flowing left to right and wrapping.
+    pub chips: Vec<(ChipView, Rect)>,
     pub fields: Vec<(Field, Rect)>,
     pub send: Rect,
     pub details_y: u16,
@@ -27,6 +32,11 @@ pub struct PickerLayout {
 
 impl ComposerLayout {
     pub const LABEL_WIDTH: u16 = 11;
+    /// Room kept for a row's key hint, `F7  ›`.
+    const KEY_WIDTH: u16 = 7;
+    /// Rows under the strip that stay with the fields: a blank line and the
+    /// seven field rows.
+    const RESERVED_ROWS: u16 = 8;
 
     pub fn new(area: Rect, composer: &Composer, ctx: &Context) -> Option<Self> {
         if area.width < 20 || area.height < 8 {
@@ -42,11 +52,51 @@ impl ComposerLayout {
         let task_inner = Rect::new(task_box.x + 2, task_box.y + 1, inner_width, rows);
         let task_scroll = row.saturating_sub(rows - 1);
         let task_cursor = (task_inner.x + col.min(inner_width), task_inner.y + row - task_scroll);
-        let mut y = task_box.bottom() + 1;
+        let limit = area.bottom().saturating_sub(2);
+        // The strip: chips flow after the label and wrap under it, leaving
+        // room for the key hint on the right. It never grows into the rows
+        // the fields need: when the chips take more rows than that, the
+        // rows around the chip under the cursor show and the others wait.
+        let strip_top = task_box.bottom();
+        let strip_end = limit.saturating_sub(Self::RESERVED_ROWS).max(strip_top + 1).min(limit);
+        let allowed = strip_end.saturating_sub(strip_top);
+        // A chip's own padding takes the place of the space before a value.
+        let chips_x = content.x + 1 + Self::LABEL_WIDTH;
+        let right = content.right().saturating_sub(Self::KEY_WIDTH);
+        let room = right.saturating_sub(chips_x);
+        let mut placed: Vec<(ChipView, u16, u16, u16)> = Vec::new();
+        let (mut row, mut x) = (0u16, chips_x);
+        if room > 0 && allowed > 0 {
+            for chip in composer.chips(ctx) {
+                let width = chip.width().min(room);
+                if x + width > right && x > chips_x {
+                    row += 1;
+                    x = chips_x;
+                }
+                placed.push((chip, row, x, width));
+                x += width + 1;
+            }
+        }
+        let rows = placed.last().map(|(_, row, _, _)| row + 1).unwrap_or(0);
+        let anchor = match composer.field {
+            Field::Preset => {
+                let cursor = composer.chip_at_cursor(ctx).chip;
+                placed.iter().find(|(c, _, _, _)| c.chip == cursor).map(|(_, row, _, _)| *row).unwrap_or(0)
+            }
+            _ => 0,
+        };
+        let first_row = (anchor + 1).saturating_sub(allowed);
+        let chips: Vec<(ChipView, Rect)> = placed
+            .into_iter()
+            .filter(|(_, row, _, _)| *row >= first_row && *row < first_row + allowed)
+            .map(|(chip, row, x, width)| (chip, Rect::new(x, strip_top + row - first_row, width, 1)))
+            .collect();
+        let strip = Rect::new(content.x, strip_top, content.width, rows.saturating_sub(first_row).min(allowed));
+        let mut y = strip.bottom() + 1;
         let mut fields = Vec::new();
         // Show unsupported thinking explicitly rather than making a row vanish.
-        for field in Field::ORDER.into_iter().filter(|f| *f != Field::Task) {
-            if y >= area.bottom().saturating_sub(2) {
+        for field in Field::ORDER.into_iter().filter(|f| !matches!(f, Field::Task | Field::Preset)) {
+            if y >= limit {
                 break;
             }
             fields.push((field, Rect::new(content.x, y, content.width, 1)));
@@ -54,8 +104,10 @@ impl ComposerLayout {
         }
         let send = if y + 1 < area.bottom() { Rect::new(content.x, y + 1, 8, 1) } else { Rect::default() };
         let picker = composer.picker.as_ref().map(|picker| {
-            let anchor =
-                fields.iter().find(|(f, _)| *f == picker.field).map(|(_, r)| r.bottom()).unwrap_or(content.y + 1);
+            let anchor = match picker.field {
+                Field::Preset => strip.bottom(),
+                field => fields.iter().find(|(f, _)| *f == field).map(|(_, r)| r.bottom()).unwrap_or(content.y + 1),
+            };
             let choices = composer.choices_with_actions(ctx, picker.field, &picker.query);
             let height = (choices.len().clamp(1, 10) as u16 + 3).min(area.height - 2);
             let width = content.width.saturating_sub(Self::LABEL_WIDTH).max(20).min(content.width);
@@ -72,6 +124,8 @@ impl ComposerLayout {
             task_lines,
             task_scroll,
             task_cursor,
+            strip,
+            chips,
             fields,
             send,
             details_y: y + 3,
@@ -80,7 +134,15 @@ impl ComposerLayout {
     }
 
     pub fn field_at(&self, x: u16, y: u16) -> Option<Field> {
+        if contains(self.strip, x, y) {
+            return Some(Field::Preset);
+        }
         self.fields.iter().find(|(_, rect)| contains(*rect, x, y)).map(|(field, _)| *field)
+    }
+
+    /// The chip under a point in the strip.
+    pub fn chip_at(&self, x: u16, y: u16) -> Option<Chip> {
+        self.chips.iter().find(|(_, rect)| contains(*rect, x, y)).map(|(chip, _)| chip.chip)
     }
 }
 
@@ -107,6 +169,8 @@ mod tests {
                     };
                     let mut rects = vec![layout.content, layout.task_box, layout.task_inner, layout.send];
                     rects.extend(layout.fields.iter().map(|(_, rect)| *rect));
+                    rects.push(layout.strip);
+                    rects.extend(layout.chips.iter().map(|(_, rect)| *rect));
                     if let Some(picker) = layout.picker {
                         rects.extend([picker.popup, picker.query, picker.rows]);
                     }
@@ -121,5 +185,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_crowded_strip_leaves_the_fields_and_send_their_rows() {
+        let presets = (0..14)
+            .map(|i| crate::presets::Preset {
+                name: format!("A rather long preset name {i}"),
+                harness: "claude".into(),
+                model: "opus".into(),
+                thinking: String::new(),
+            })
+            .collect();
+        let mut app = App::new(100, 24, vec![]).with_memory(presets, vec![]);
+        app.composer.task.set(&"A long task with several lines\n".repeat(12));
+        let layout = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(layout.chips.len() < 15, "not every chip fits in 24 rows");
+        assert!(layout.strip.height >= 1);
+        assert!(layout.fields.iter().any(|(f, _)| *f == Field::Workspace), "{:?}", layout.fields);
+        assert!(layout.send.height > 0, "send stays reachable");
+        assert_eq!(layout.fields[0].1.y, layout.strip.bottom() + 1);
+        let shown = |layout: &ComposerLayout| layout.chips.iter().map(|(c, _)| c.chip).collect::<Vec<_>>();
+        assert_eq!(shown(&layout)[0], Chip::Preset(0), "unfocused, the strip starts at the top");
+        // The rows follow the cursor, so the chip Enter would apply is always visible.
+        app.with_composer(|c, ctx| c.focus_presets(ctx));
+        app.composer.preset_cursor = 13;
+        let layout = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(shown(&layout).contains(&Chip::Preset(13)), "{:?}", shown(&layout));
+        assert!(!shown(&layout).contains(&Chip::Preset(0)));
+        assert!(layout.chips.iter().all(|(_, r)| r.y >= layout.strip.y && r.bottom() <= layout.strip.bottom()));
+        app.composer.preset_cursor = 14;
+        let layout = ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context()).unwrap();
+        assert!(shown(&layout).contains(&Chip::Save), "{:?}", shown(&layout));
+        assert_eq!(layout.fields[0].1.y, layout.strip.bottom() + 1);
     }
 }
