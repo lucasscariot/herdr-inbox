@@ -18,7 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Keep ignored edits out of the code queue, including its one pending slot.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base && 'description' || 'checks' }}
   cancel-in-progress: true
 
 defaults:
@@ -37,7 +38,11 @@ env:
 jobs:
   title:
     name: Conventional Commit title
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    # Editing only the description must not cancel and restart the tested head.
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)
     runs-on: [self-hosted, Linux, ARM64, blueprint]
     steps:
       - name: Check the PR title
@@ -52,7 +57,9 @@ jobs:
 
   rust:
     name: Rust and end to end · ${{ matrix.os }}
-    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -102,7 +109,9 @@ jobs:
 
   installer:
     name: Installer
-    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)
     runs-on: [self-hosted, Linux, ARM64, blueprint]
     timeout-minutes: 10
     steps:
@@ -124,7 +133,8 @@ jobs:
     needs: [title, rust, installer]
     if: >-
       always() && !cancelled() &&
-      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base)
     runs-on: [self-hosted, Linux, ARM64, blueprint]
     permissions:
       statuses: write

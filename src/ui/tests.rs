@@ -1135,6 +1135,20 @@ mod self_updates {
         ] {
             assert!(screen.contains(needle), "missing {needle:?}:\n{screen}");
         }
+        // Assert the real package version above, but keep the golden layout
+        // independent of Release Please's version bumps and their text width.
+        let running = format!("Running {}", crate::update::CURRENT_VERSION);
+        let screen = screen
+            .lines()
+            .map(|line| match line.split_once(&running) {
+                Some((before, after)) => {
+                    let width = running.len() + after.chars().take_while(|ch| *ch == ' ').count();
+                    format!("{before}{:<width$}{}", "Running <version>", after.trim_start_matches(' '))
+                }
+                None => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         insta::assert_snapshot!(screen);
     }
 

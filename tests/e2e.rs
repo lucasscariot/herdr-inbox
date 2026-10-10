@@ -52,13 +52,18 @@ struct Sandbox {
 
 impl Sandbox {
     fn start() -> Self {
+        Self::start_with(&herdr_bin()).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn start_with(binary: &str) -> Result<Self, String> {
         // Unix socket paths are limited to ~100 bytes: keep the root short.
         let root = tempfile::Builder::new().prefix("hi-e2e").tempdir_in("/tmp").expect("tempdir");
         for dir in ["config", "state", "data", "cache", "home", "bin"] {
             std::fs::create_dir_all(root.path().join(dir)).expect("mkdir");
         }
-        let mut command = Command::new(herdr_bin());
-        command.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        let log = std::fs::File::create(root.path().join("server.log")).expect("server log");
+        let mut command = Command::new(binary);
+        command.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::from(log));
         let sandbox_env = Self::env_for(root.path());
         // macOS's login /bin/sh runs path_helper, which otherwise drops our
         // fixture directory and can launch an installed agent instead. Restore
@@ -67,9 +72,20 @@ impl Sandbox {
         std::fs::write(root.path().join("home/.profile"), format!("export PATH='{path}'\n")).expect("shell profile");
         apply_env(&mut command, &sandbox_env);
         let server = command.spawn().expect("start herdr server");
-        let sandbox = Self { root, server };
-        sandbox.wait_for(|| sandbox.socket().exists(), "the server socket");
-        sandbox
+        let mut sandbox = Self { root, server };
+        let api = herdr_inbox::herdr::api::Api::new(sandbox.socket()).with_timeout(Duration::from_millis(200));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while let Err(err) = api.ping() {
+            let exited = sandbox.server.try_wait().expect("server status");
+            if exited.is_some() || Instant::now() >= deadline {
+                let log = std::fs::read_to_string(sandbox.root.path().join("server.log")).unwrap_or_default();
+                return Err(format!(
+                    "Herdr server did not become ready: exit={exited:?}; last ping: {err}; stderr:\n{log}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(sandbox)
     }
 
     /// Saves `remote` as an SSH machine in this sandbox's Herdr, the way
@@ -115,7 +131,12 @@ impl Sandbox {
         command.args(args);
         apply_env(&mut command, &self.env());
         let output = command.output().expect("run herdr");
-        assert!(output.status.success(), "herdr {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "herdr {args:?} failed: {}; server stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            std::fs::read_to_string(self.root.path().join("server.log")).unwrap_or_default()
+        );
         serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
     }
 
@@ -574,6 +595,49 @@ fn fake_ssh(local: &Sandbox, remote: &Sandbox) -> PathBuf {
     writer.stdin.take().expect("stdin").write_all(script.as_bytes()).expect("write fake ssh");
     assert!(writer.wait().expect("wait").success());
     path
+}
+
+#[test]
+fn the_sandbox_waits_for_a_serving_socket_not_just_a_bound_socket() {
+    if !enabled() {
+        return;
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let delayed = fixture.path().join("delayed-herdr");
+    // Reproduce the bind/listen gap without relying on host scheduling. The
+    // first CLI command must wait for the real server, not this socket inode.
+    write_executable(
+        &delayed,
+        &format!(
+            "#!/bin/sh\npython3 - <<'PY'\nimport os, socket, time\np = os.environ['XDG_CONFIG_HOME'] + '/herdr/herdr.sock'\nos.makedirs(os.path.dirname(p), exist_ok=True)\ns = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\ns.bind(p)\ntime.sleep(0.5)\ns.close()\nos.unlink(p)\nPY\nexec '{}' \"$@\"\n",
+            herdr_bin()
+        ),
+    );
+    let sandbox = Sandbox::start_with(delayed.to_str().unwrap()).expect("delayed server becomes ready");
+    let created = sandbox.herdr(&[
+        "workspace",
+        "create",
+        "--cwd",
+        sandbox.root.path().to_str().unwrap(),
+        "--label",
+        "ready",
+        "--no-focus",
+    ]);
+    assert!(created["result"]["root_pane"]["pane_id"].is_string());
+}
+
+#[test]
+fn a_server_that_exits_during_startup_reports_its_exit_and_stderr() {
+    if !enabled() {
+        return;
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let failed = fixture.path().join("failed-herdr");
+    write_executable(&failed, "#!/bin/sh\necho 'fixture startup failed' >&2\nexit 19\n");
+    let started = Instant::now();
+    let error = Sandbox::start_with(failed.to_str().unwrap()).err().expect("startup fails");
+    assert!(error.contains("exit=Some(") && error.contains("fixture startup failed"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5), "do not wait out the 15-second readiness deadline after exit");
 }
 
 #[test]

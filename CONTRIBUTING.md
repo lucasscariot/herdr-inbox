@@ -25,13 +25,17 @@ HERDR_E2E=1 cargo test --test e2e   # needs herdr on PATH, or HERDR_BIN
   `src/app/tests.rs` for any behaviour you change.
 - Drawing is tested on a `TestBackend`: text snapshots with `insta`
   (`cargo insta review` after an intended change) plus explicit checks on the
-  colours that carry meaning.
+  colours that carry meaning. The update dialog asserts the compiled version
+  separately and normalizes only that field in its snapshot, so a release bump
+  does not require rewriting the golden layout.
 - Protocol code is tested against a fake Herdr server on a real Unix socket
   (`src/testing.rs`), which keeps Herdr's connection rules: one request per
   connection, long-lived subscriptions. Subprocess fixtures report readiness
   before tests release or stop them, rather than relying on short startup sleeps.
 - The end-to-end test starts a real Herdr server with every directory in a
-  temporary folder and drives the real binary in a pseudo-terminal.
+  temporary folder and drives the real binary in a pseudo-terminal. Startup
+  waits for a bounded API ping, not just the socket inode. An early exit reports
+  its status and sandbox stderr rather than failing at the first workspace call.
 - Typing latency has two checks: `runtime::redraw` replays keys and echoes
   with a controlled clock, including the 16 ms frame limit; the PTY tests
   measure cursor movement after each key, including a paused space and

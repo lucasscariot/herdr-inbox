@@ -6,7 +6,7 @@ expression: screen
  1 needs input · 1 ready         │
   +  New thread               n  │
  / Filter th╭ Update Herdr Inbox ──────────────────────────────────────────────────────╮
- NEEDS INPUT│ Running 1.0.0                                                            │
+ NEEDS INPUT│ Running <version>                                                        │
 ▎▄ █ ▄ cockp│ Latest stable 2.0.0                                                      │
 ▎▄███▄ Fix t│ Enter installs this release. Only the running Inbox binary changes.      │
 ▎▀ █ ▀ Claud│                                                                          │
