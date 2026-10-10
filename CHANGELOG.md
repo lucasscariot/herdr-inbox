@@ -4,6 +4,16 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.1](https://github.com/lucasscariot/herdr-inbox/compare/v1.3.0...v1.3.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **composer:** keep the first-preset default pending until discovery answers ([#35](https://github.com/lucasscariot/herdr-inbox/issues/35)) ([e232ae2](https://github.com/lucasscariot/herdr-inbox/commit/e232ae23fc7de54f702b0fdf96cb4cced12d2b0e))
+* **launch:** sharpen branch names on dates, subjects and abbreviations ([#36](https://github.com/lucasscariot/herdr-inbox/issues/36)) ([f1b3c7c](https://github.com/lucasscariot/herdr-inbox/commit/f1b3c7cee35e3e90d9a4c5f08937f474c6bbfa03))
+* **launch:** stop a bare "to" from marking the next word as a verb ([#38](https://github.com/lucasscariot/herdr-inbox/issues/38)) ([2215b8e](https://github.com/lucasscariot/herdr-inbox/commit/2215b8e28bb377f4963b7c80990ead23c2444d07))
+* **ui:** reserve theme accents for focus and selection ([#39](https://github.com/lucasscariot/herdr-inbox/issues/39)) ([aa6e7c9](https://github.com/lucasscariot/herdr-inbox/commit/aa6e7c97d55ef7210752d7ccc7c250f642f1af44))
+
 ## [1.3.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.2.1...v1.3.0) (2026-10-10)
 
 
