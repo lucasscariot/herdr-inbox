@@ -3,30 +3,30 @@ source: src/ui/tests.rs
 expression: "text(&render(&app, at(7)))"
 ---
  herdr inbox                 1/4 │
- 1 needs input · 1 ready         │  New thread                                     scanning Local…
-  +  New thread               n  │
- / Filter threads                │  What should we build?
- NEEDS INPUT  1                  │  ╭────────────────────────────────────────────────────────────╮
-▎cockpit                 ● input │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
-▎Fix the login redirect loop on… │  │                                                            │
-▎✻ Claude · ⎇ fix-login-redirect │  │                                                            │
-                                 │  ╰────────────────────────────────────────────────────────────╯
- READY  1                        │    Presets    + Save as preset…                           F7  ›
-▎site                    ✓ ready │
-▎Review navigation               │    Project    none found yet                              F2  ›
-▎◈ OpenCode · ⎇ feat/a-very-lon… │    Machine    —                                           F6  ›
-                                 │    Harness    none installed                              F3  ›
- WORKING  1                      │    Model      Default                                     F4  ›
-▎api                   ◐ working │    Thinking   No levels reported
-▎Add invoice export              │    Workspace  New worktree                                F9  ›
-▎◆ Codex · ⎇ main                │    Compare    Off · one agent                            F12  ›
+ ● 1  ✓ 1  ◐ 1  ○ 1    4 threads │  New thread                                     scanning Local…
+ ─────────────────────────────── │
+  +  New thread               n  │  What should we build?
+  /  Filter threads           /  │  ╭────────────────────────────────────────────────────────────╮
+ ─────────────────────────────── │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
+ NEEDS INPUT  1                  │  │                                                            │
+▎cockpit                 ● input │  │                                                            │
+▎Fix the login redirect loop on… │  ╰────────────────────────────────────────────────────────────╯
+▎✻ Claude · ⎇ fix-login-redirect │    Presets    + Save as preset…                           F7  ›
                                  │
- IDLE  1                         │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
+ READY  1                        │    Project    none found yet                              F2  ›
+▎site                    ✓ ready │    Machine    —                                           F6  ›
+▎Review navigation               │    Harness    none installed                              F3  ›
+▎◈ OpenCode · ⎇ feat/a-very-lon… │    Model      Default                                     F4  ›
+                                 │    Thinking   No levels reported
+ WORKING  1                      │    Workspace  New worktree                                F9  ›
+▎api                   ◐ working │    Compare    Off · one agent                            F12  ›
+▎Add invoice export              │
+▎◆ Codex · ⎇ main                │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
+                                 │
+ IDLE  1                         │
 ▎scratch                  ○ idle │
 ▎New Pi thread                   │
 ▎π Pi                            │
-                                 │
-                                 │
                                  │
                                  │                      ⣤⠤⠤⢤⣀⣀ ⡀
                                  │                     ⠐⢿⢷⡀  ⠈⠉⠛⠒⠤⣄⣀

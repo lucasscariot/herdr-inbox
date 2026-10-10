@@ -3,30 +3,30 @@ source: src/ui/tests.rs
 expression: "text(&render(&app, at(1)))"
 ---
  herdr inbox                    1/4 │
- 1 needs input · 1 ready            │  New thread                                                  esc close
-  +  New thread                  n  │
- / Filter threads                   │  What should we build?
- NEEDS INPUT  1                     │  ╭───────────────────────────────────────────────────────────────────╮
-▎cockpit                    ● input │  │ Fix the login redirect loop                                       │
-▎Fix the login redirect loop on mo… │  │                                                                   │
-▎✻ Claude · ⎇ fix-login-redirect    │  │                                                                   │
-                                    │  ╰───────────────────────────────────────────────────────────────────╯
- READY  1                           │    Presets    + Save as preset…                                  F7  ›
-▎site                       ✓ ready │
-▎Review navigation                  │    Project    cockpit                                            F2  ›
-▎◈ OpenCode · ⎇ feat/a-very-long-b… │    Machine    Local                                              F6  ›
-                                    │    Harness    Claude                                             F3  ›
- WORKING  1                         │    Model      Default (opus)                                     F4  ›
-▎api                      ◐ working │    Thinking   Default                                            F8  ›
-▎Add invoice export                 │    Workspace  New worktree  ⎇ fix-login-redirect-loop            F9  ›
-▎◆ Codex · ⎇ main                   │    Compare    Off · one agent                                   F12  ›
+ ● 1  ✓ 1  ◐ 1  ○ 1       4 threads │  New thread                                                  esc close
+ ────────────────────────────────── │
+  +  New thread                  n  │  What should we build?
+  /  Filter threads              /  │  ╭───────────────────────────────────────────────────────────────────╮
+ ────────────────────────────────── │  │ Fix the login redirect loop                                       │
+ NEEDS INPUT  1                     │  │                                                                   │
+▎cockpit                    ● input │  │                                                                   │
+▎Fix the login redirect loop on mo… │  ╰───────────────────────────────────────────────────────────────────╯
+▎✻ Claude · ⎇ fix-login-redirect    │    Presets    + Save as preset…                                  F7  ›
                                     │
- IDLE  1                            │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
+ READY  1                           │    Project    cockpit                                            F2  ›
+▎site                       ✓ ready │    Machine    Local                                              F6  ›
+▎Review navigation                  │    Harness    Claude                                             F3  ›
+▎◈ OpenCode · ⎇ feat/a-very-long-b… │    Model      Default (opus)                                     F4  ›
+                                    │    Thinking   Default                                            F8  ›
+ WORKING  1                         │    Workspace  New worktree  ⎇ fix-login-redirect-loop            F9  ›
+▎api                      ◐ working │    Compare    Off · one agent                                   F12  ›
+▎Add invoice export                 │
+▎◆ Codex · ⎇ main                   │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
+                                    │
+ IDLE  1                            │
 ▎scratch                     ○ idle │
 ▎New Pi thread                      │
 ▎π Pi                               │
-                                    │
-                                    │
                                     │
                                     │
                                     │
