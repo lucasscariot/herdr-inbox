@@ -7,22 +7,22 @@ expression: "text(&render(&app, at(0)))"
   +  New thread               n  │
  / Filter threads                │
  NEEDS INPUT  1                  │
-▎▄ █ ▄ cockpit           ● input │
-▎▄███▄ Fix the login redirect l… │
-▎▀ █ ▀ Claude · ⎇ fix-login-red… │
+▎cockpit                 ● input │
+▎Fix the login redirect loop on… │
+▎✻ Claude · ⎇ fix-login-redirect │
                                  │
  READY  1                        │
-▎█▀▀▀█ site              ✓ ready │
-▎█ ▀▄█ Review navigation         │          Opening Fix the login redirect loop on mobile…
-▎█▄▄▄█ OpenCode · ⎇ feat/a-very… │
+▎site                    ✓ ready │
+▎Review navigation               │          Opening Fix the login redirect loop on mobile…
+▎◈ OpenCode · ⎇ feat/a-very-lon… │
                                  │
  WORKING  1                      │
-▎▄▀▀▀▄ api             ◐ working │
-▎█▄█▀█ Add invoice export        │
-▎▀▄▄▄▀ Codex · ⎇ main            │
+▎api                   ◐ working │
+▎Add invoice export              │
+▎◆ Codex · ⎇ main                │
                                  │
  IDLE  1                         │
-▎▄▄▄▄▄ scratch            ○ idle │
-▎ █ █  New Pi thread             │
-▎ █ █▄ Pi                        │
+▎scratch                  ○ idle │
+▎New Pi thread                   │
+▎π Pi                            │
   THREADS  ↵ agent  j/k move  n new  x archive  ⌃G updates  tab agent  q quit

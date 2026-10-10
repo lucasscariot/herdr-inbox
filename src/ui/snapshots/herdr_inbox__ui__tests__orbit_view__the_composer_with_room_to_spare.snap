@@ -7,24 +7,24 @@ expression: "text(&render(&app, at(7)))"
   +  New thread               n  │
  / Filter threads                │  What should we build?
  NEEDS INPUT  1                  │  ╭────────────────────────────────────────────────────────────╮
-▎▄ █ ▄ cockpit           ● input │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
-▎▄███▄ Fix the login redirect l… │  │                                                            │
-▎▀ █ ▀ Claude · ⎇ fix-login-red… │  │                                                            │
+▎cockpit                 ● input │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
+▎Fix the login redirect loop on… │  │                                                            │
+▎✻ Claude · ⎇ fix-login-redirect │  │                                                            │
                                  │  ╰────────────────────────────────────────────────────────────╯
  READY  1                        │
-▎█▀▀▀█ site              ✓ ready │    Project    none found yet                              F2  ›
-▎█ ▀▄█ Review navigation         │    Machine    —                                           F6  ›
-▎█▄▄▄█ OpenCode · ⎇ feat/a-very… │    Preset     None yet · Ctrl+D saves one                 F7  ›
+▎site                    ✓ ready │    Project    none found yet                              F2  ›
+▎Review navigation               │    Machine    —                                           F6  ›
+▎◈ OpenCode · ⎇ feat/a-very-lon… │    Preset     None yet · Ctrl+D saves one                 F7  ›
                                  │    Harness    none installed                              F3  ›
  WORKING  1                      │    Model      Default                                     F4  ›
-▎▄▀▀▀▄ api             ◐ working │    Thinking   No levels reported
-▎█▄█▀█ Add invoice export        │    Workspace  New worktree                                F9  ›
-▎▀▄▄▄▀ Codex · ⎇ main            │
+▎api                   ◐ working │    Thinking   No levels reported
+▎Add invoice export              │    Workspace  New worktree                                F9  ›
+▎◆ Codex · ⎇ main                │
                                  │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
  IDLE  1                         │
-▎▄▄▄▄▄ scratch            ○ idle │
-▎ █ █  New Pi thread             │
-▎ █ █▄ Pi                        │
+▎scratch                  ○ idle │
+▎New Pi thread                   │
+▎π Pi                            │
                                  │
                                  │
                                  │                      ⣤⠤⠤⢤⣀⣀ ⡀

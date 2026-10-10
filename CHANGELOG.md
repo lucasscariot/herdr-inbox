@@ -22,12 +22,17 @@ All notable changes to Herdr Inbox. The format follows
 
 - Clickable composer text, fields, picker choices and send action, with mouse
   wheel navigation in pickers. The input stays near the top of a tall window.
-- Pixel-style marks for Claude Code, Codex, Pi and OpenCode, readable harness
-  names before branches, a clickable sidebar filter, a position counter,
-  PageUp/PageDown navigation and a scroll thumb.
+- Coloured harness glyphs for Claude Code, Codex, Pi and OpenCode, readable
+  harness names before branches, a clickable sidebar filter, a position
+  counter, PageUp/PageDown navigation and a scroll thumb.
 - Codex thinking selection using each model's advertised reasoning levels and
   the CLI's config override. Model changes drop incompatible levels; old model
   caches refresh once to pick up the new capabilities.
+
+### Changed
+
+- The sidebar's five-column pixel marks are replaced by one small glyph per
+  harness on the metadata line, so thread rows get their full width back.
 
 ### Fixed
 

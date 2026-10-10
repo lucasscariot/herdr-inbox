@@ -11,19 +11,19 @@ to it, fully interactive.
   +  New thread                  n  │ > Fix the login redirect loop on mobile
  / Filter threads                   │
  NEEDS INPUT  1                     │   Do you want to make this edit?
-▎▄ █ ▄ cockpit              ● input │   ❯ 1. Yes
-▎▄███▄ Fix the login redirect loop… │     2. No
-▎▀ █ ▀ Claude · ⎇ fix-login-redire… │
+▎cockpit                    ● input │   ❯ 1. Yes
+▎Fix the login redirect loop on mo… │     2. No
+▎✻ Claude · ⎇ fix-login-redirect    │
                                     │
  READY  1                           │
-▎█▀▀▀█ site                 ✓ ready │
-▎█ ▀▄█ Review navigation            │
-▎█▄▄▄█ OpenCode · ⎇ main         2m │
+▎site                       ✓ ready │
+▎Review navigation                  │
+▎◈ OpenCode · ⎇ main             2m │
                                     │
  WORKING  1                         │
-▎▄▀▀▀▄ api                ◐ working │
-▎█▄█▀█ Add invoice export           │
-▎▀▄▄▄▀ Codex · ⎇ main           14s │
+▎api                      ◐ working │
+▎Add invoice export                 │
+▎◆ Codex · ⎇ main               14s │
   AGENT  tab threads
 ```
 
@@ -104,11 +104,11 @@ Keyboard focus stays in the list until you press Enter or Tab, or click the
 agent. Previewing a finished task does not mark it seen or move its row;
 focusing the agent does.
 
-Small pixel marks identify Claude Code, Codex, Pi and OpenCode in the sidebar.
-Harness names stay visible before branches, so a long branch cannot hide which
-agent is running. Other harnesses get a terminal mark and their own name. The
-marks use ordinary block characters, not images or a special font. A position
-counter and a scroll thumb show where you are in the list.
+A small coloured glyph marks each thread's harness before its name: ✻ for
+Claude Code, ◆ for Codex, π for Pi and ◈ for OpenCode. Other harnesses get a
+neutral ❯ and their own name. The harness name comes before the branch, so a
+long branch cannot hide which agent is running. A position counter and a
+scroll thumb show where you are in the list.
 
 Below the composer's controls when there is room, and when no thread is open,
 the orbit turns: the core is the inbox, each ring a machine, each bead a

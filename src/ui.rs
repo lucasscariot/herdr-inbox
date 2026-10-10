@@ -527,11 +527,8 @@ fn thread_line(
 ) {
     let status = status_style(thread.status, palette);
     buf.set_string(area.x, area.y, "▎", status);
-    let kind = thread.kind.as_deref().unwrap_or(&thread.harness);
-    let (mark, style) = harness::row(kind, line, palette);
-    buf.set_stringn(area.x + 1, area.y, mark, area.width.saturating_sub(1) as usize, style);
-    let x = area.x + harness::WIDTH + 2;
-    let width = area.width.saturating_sub(harness::WIDTH + 3);
+    let x = area.x + 1;
+    let width = area.width.saturating_sub(2);
     let dim = Style::new().fg(palette.overlay0);
     match line {
         0 => split_line(
@@ -567,9 +564,11 @@ fn thread_line(
             split_line(buf, x, area.y, width, &[(text, Style::new().fg(color))], &[]);
         }
         _ => {
-            // Keep the harness name visible even when a branch is long. Icons
-            // help recognition but never replace the readable label.
-            let mut left = vec![(thread.harness.clone(), dim)];
+            // The harness mark and name come first, so a long branch can never
+            // hide which agent is running. The glyph helps recognition but
+            // never replaces the readable label.
+            let kind = thread.kind.as_deref().unwrap_or(&thread.harness);
+            let mut left = vec![harness::label(kind, palette), (thread.harness.clone(), dim)];
             if let Some(machine) = &thread.machine_label {
                 left.push((" · ".into(), dim));
                 left.push((machine.clone(), Style::new().fg(palette.subtext0)));

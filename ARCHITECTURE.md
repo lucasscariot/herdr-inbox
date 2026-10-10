@@ -46,7 +46,7 @@ public interfaces.
 | `orbit` | The orbit logo: the fleet as rings and beads, rendered to Braille cells. Pure, a function of the time. |
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
 | `ui` | Pure drawing from `&App`, including themed frames and explicit popup title styles. |
-| `ui::harness` | Five-column, three-row logo-inspired pixel marks made of half-block characters. Claude, Codex, Pi and OpenCode have distinct marks; other harnesses keep a generic mark and their readable name. |
+| `ui::harness` | One single-width coloured glyph per harness, drawn before its readable name in the sidebar and the composer picker. Claude, Codex, Pi and OpenCode have distinct glyphs; other harnesses get a neutral one. |
 | `runtime` | Terminal setup, the event loop, effect execution. |
 | `runtime::redraw` | Applies inputs and schedules draws with a 16 ms frame limit. Forwarded keys wait for the agent's echo instead of redrawing an unchanged screen. |
 
