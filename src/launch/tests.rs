@@ -718,3 +718,320 @@ fn the_claude_status_line_is_added_unless_the_user_set_their_own() {
     let json = serde_json::to_string(&plan.record).unwrap();
     assert!(!json.contains("harness_auto"), "false is not written, so older journals read the same");
 }
+
+fn opencode(session_api: bool) -> Catalog {
+    Catalog {
+        choices: vec![Choice { id: "opencode/big-pickle".into(), label: "opencode/big-pickle".into() }],
+        selectable: true,
+        session_api,
+        ..Catalog::default()
+    }
+}
+
+fn opencode_request(model: Option<&str>) -> Request {
+    let mut request = request("Fix login loop", WorkspaceChoice::NewWorktree { branch: None });
+    request.harness = "opencode".into();
+    request.model = model.map(str::to_string);
+    request
+}
+
+#[test]
+fn opencode_2_gets_its_model_through_a_session_not_a_flag() {
+    let mut with_model = settings();
+    with_model
+        .harness_args
+        .insert("opencode".into(), ["--auto", "--model", "openai/gpt-5.5"].map(String::from).to_vec());
+    let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &with_model, Some(&opencode(true))).unwrap();
+    assert_eq!(plan.agent_args, ["--auto"]);
+    assert_eq!(plan.session.as_ref().map(|s| s.model.as_str()), Some("opencode/big-pickle"));
+    assert_eq!(plan.record.model, "opencode/big-pickle");
+
+    let pinned = plan_for(&opencode_request(None), &with_model, Some(&opencode(true))).unwrap();
+    assert_eq!(pinned.agent_args, ["--auto"]);
+    assert_eq!(pinned.session.map(|s| s.model), Some("openai/gpt-5.5".into()), "a pinned model still applies");
+
+    let plain = plan_for(&opencode_request(None), &settings(), Some(&opencode(true)));
+    assert_eq!(plain.unwrap().session, None, "no model, no session: OpenCode picks its own");
+
+    let v1 = plan_for(&opencode_request(Some("opencode/big-pickle")), &with_model, Some(&opencode(false))).unwrap();
+    assert_eq!(v1.agent_args, ["--auto", "--model", "opencode/big-pickle"]);
+    assert_eq!(v1.session, None);
+}
+
+#[test]
+fn opencode_sessions_split_provider_model_and_variant() {
+    let args = |model: &str, extra: &[&str]| {
+        let extra: Vec<String> = extra.iter().map(|a| a.to_string()).collect();
+        Session::new("opencode", model, &extra).map(|s| s.create_args("/w"))
+    };
+    let body = |args: Vec<String>| -> Value { serde_json::from_str(args.last().unwrap()).unwrap() };
+    assert_eq!(
+        body(args("lmstudio/qwen/qwen3-coder-30b", &[]).unwrap()),
+        serde_json::json!({"model": {"providerID": "lmstudio", "id": "qwen/qwen3-coder-30b"}, "location": {"directory": "/w"}})
+    );
+    assert_eq!(
+        body(args("openai/gpt-5.5#high", &[]).unwrap())["model"],
+        serde_json::json!({"providerID": "openai", "id": "gpt-5.5", "variant": "high"})
+    );
+    assert!(args("big-pickle", &[]).is_err());
+    assert!(args("/big-pickle", &[]).is_err());
+}
+
+#[test]
+fn opencode_sessions_go_to_the_server_the_agent_connects_to() {
+    let mut with_server = settings();
+    with_server.harness_args.insert("opencode".into(), ["--server", "http://box:4096"].map(String::from).to_vec());
+    let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
+    assert_eq!(plan.agent_args, ["--server", "http://box:4096"]);
+    let args = plan.session.unwrap().create_args("/w");
+    assert_eq!(args[..5], ["opencode", "api", "session.create", "--server", "http://box:4096"]);
+
+    with_server.harness_args.insert("opencode".into(), vec!["--server=http://other:1".into()]);
+    let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
+    assert_eq!(plan.session.unwrap().server.as_deref(), Some("http://other:1"));
+}
+
+#[test]
+fn bad_opencode_session_choices_are_refused_before_anything_runs() {
+    let bad = plan_for(&opencode_request(Some("big-pickle")), &settings(), Some(&opencode(true))).unwrap_err();
+    assert!(bad.contains("provider/model"), "{bad}");
+    let mut standalone = settings();
+    standalone.harness_args.insert("opencode".into(), vec!["--standalone".into()]);
+    let refused =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &standalone, Some(&opencode(true))).unwrap_err();
+    assert!(refused.contains("--standalone"), "{refused}");
+    let default = plan_for(&opencode_request(None), &standalone, Some(&opencode(true))).unwrap();
+    assert_eq!((default.agent_args, default.session), (vec!["--standalone".to_string()], None));
+}
+
+/// A fake `opencode` that logs its arguments, says whether its background
+/// service is `disabled`, and answers `api session.create` with `answer`.
+fn fake_opencode(dir: &Path, disabled: &str, answer: &str) -> String {
+    let path = dir.join("opencode");
+    let log = dir.join("opencode.log");
+    crate::testing::write_executable(
+        &path,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = service ] && {{ echo {disabled}; exit 0; }}\n{answer}\n",
+            log.display()
+        ),
+    );
+    path.display().to_string()
+}
+
+#[test]
+fn an_opencode_2_launch_creates_the_session_then_opens_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program =
+        fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc","model":{"id":"big-pickle"}}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    let (checked, created) = log.trim().split_once('\n').unwrap();
+    assert_eq!(checked, "service get disabled");
+    assert!(created.starts_with("api session.create --data "), "{created}");
+    let body: Value = serde_json::from_str(created.trim_start_matches("api session.create --data ")).unwrap();
+    assert_eq!(body["location"]["directory"], "/h/wt/new");
+    assert_eq!(body["model"], serde_json::json!({"providerID": "opencode", "id": "big-pickle"}));
+    assert_eq!(
+        calls(dir.path())[2],
+        "agent start t-fix-login-loop-4567cdef --kind opencode --pane w5:p1 --timeout 45000 -- --session ses_abc"
+    );
+}
+
+#[test]
+fn a_failed_opencode_session_stops_the_launch_before_the_agent_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(
+        dir.path(),
+        "false",
+        "printf '%s\\n' 'Error: background service unavailable' '    at cli.api (x.js:1:2)' '}' >&2; exit 1",
+    );
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, error }) = result else { panic!("{result:?}") };
+    assert_eq!(
+        error,
+        "could not create an OpenCode session for opencode/big-pickle: Error: background service unavailable"
+    );
+    assert_eq!(record.failed_stage, Some(Stage::Starting));
+    assert!(!calls(dir.path()).iter().any(|call| call.starts_with("agent start")));
+}
+
+#[test]
+fn a_disabled_opencode_service_stops_the_launch_before_any_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "true", "echo unreachable");
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, error }) = result else { panic!("{result:?}") };
+    assert!(error.contains("background service is disabled"), "{error}");
+    assert_eq!(record.failed_stage, Some(Stage::Creating));
+    assert!(calls(dir.path()).is_empty(), "no worktree was created");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert_eq!(log, "service get disabled\n", "no session was created");
+}
+
+#[test]
+fn a_named_server_skips_the_service_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut with_server = settings();
+    with_server.harness_args.insert("opencode".into(), vec!["--server=http://box:4096".into()]);
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "true", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert!(log.starts_with("api session.create --server http://box:4096 --data "), "{log}");
+}
+
+#[test]
+fn opencode_sessions_use_the_configured_executable() {
+    let mut custom = settings();
+    custom.harness_executables.insert("opencode".into(), "opencode-dev".into());
+    let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &custom, Some(&opencode(true))).unwrap();
+    assert_eq!(plan.session.unwrap().program, "opencode-dev");
+}
+
+#[test]
+fn every_spelling_of_standalone_is_recognised() {
+    let on = |args: &[&str]| switch(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), &["--standalone"]);
+    for args in
+        [&["--standalone"][..], &["--standalone=true"], &["--standalone=1"], &["--no-standalone", "--standalone"]]
+    {
+        assert!(on(args), "{args:?}");
+    }
+    for args in [
+        &[][..],
+        &["--standalone=false"],
+        &["--standalone=0"],
+        &["--no-standalone"],
+        &["--standalone", "--no-standalone"],
+    ] {
+        assert!(!on(args), "{args:?}");
+    }
+    let mut attached = settings();
+    attached.harness_args.insert("opencode".into(), vec!["--standalone=true".into()]);
+    let refused =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &attached, Some(&opencode(true))).unwrap_err();
+    assert!(refused.contains("--standalone"), "{refused}");
+}
+
+#[test]
+fn a_failed_agent_start_deletes_the_opencode_session_it_was_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "broken", "ok");
+    let mut with_server = settings();
+    with_server.harness_args.insert("opencode".into(), vec!["--server=http://box:4096".into()]);
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, .. }) = result else { panic!("{result:?}") };
+    assert_eq!(record.session_id, None, "the deleted session is no longer journaled");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert_eq!(log.lines().last(), Some("api session.remove --server http://box:4096 --param sessionID=ses_abc"));
+}
+
+#[test]
+fn a_startup_dialog_keeps_the_opencode_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "blocked", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::WaitingForStartup(_))), "{result:?}");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert!(!log.contains("session.remove"), "{log}");
+}
+
+#[test]
+fn the_opencode_session_is_journaled_before_the_agent_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let starts = |dir: &Path| calls(dir).iter().filter(|c| c.starts_with("agent start")).count();
+    let journaled = Mutex::new(Vec::new());
+    let result = execute(
+        &runner,
+        plan,
+        &|r| journaled.lock().unwrap().push((r.session_id.clone(), starts(dir.path()))),
+        &|_| {},
+    );
+    let Ok(Outcome::Sent(record)) = result else { panic!("{result:?}") };
+    assert_eq!(record.session_id.as_deref(), Some("ses_abc"));
+    let journaled = journaled.into_inner().unwrap();
+    let first = journaled.iter().find(|(id, _)| id.is_some()).unwrap();
+    assert_eq!(first, &(Some("ses_abc".to_string()), 0), "journaled before `agent start`: {journaled:?}");
+}
+
+#[test]
+fn a_failed_cleanup_keeps_the_session_in_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "broken", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program =
+        fake_opencode(dir.path(), "false", r#"[ "$2" = session.remove ] && exit 1; echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, .. }) = result else { panic!("{result:?}") };
+    assert_eq!(record.session_id.as_deref(), Some("ses_abc"));
+}
+
+#[test]
+fn opencode_session_selectors_are_refused_with_a_chosen_model() {
+    for flag in ["--continue", "-c", "--fork", "--session", "-s=ses_old", "--session=ses_old"] {
+        let mut resuming = settings();
+        resuming.harness_args.insert("opencode".into(), vec![flag.into()]);
+        let refused =
+            plan_for(&opencode_request(Some("opencode/big-pickle")), &resuming, Some(&opencode(true))).unwrap_err();
+        assert!(refused.contains("picks its own session"), "{flag}: {refused}");
+        let default = plan_for(&opencode_request(None), &resuming, Some(&opencode(true))).unwrap();
+        assert_eq!(default.agent_args, [flag], "Default leaves {flag} alone");
+    }
+}
+
+#[test]
+fn opencode_resume_switches_turned_off_are_allowed() {
+    let plan_with = |args: &[&str]| {
+        let mut custom = settings();
+        custom.harness_args.insert("opencode".into(), args.iter().map(|a| a.to_string()).collect());
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &custom, Some(&opencode(true)))
+    };
+    for off in [
+        &["--continue=false"][..],
+        &["-c=false"],
+        &["--fork=false"],
+        &["--no-continue"],
+        &["--fork", "--no-fork"],
+        &["--continue", "false"],
+        &["-c", "0"],
+        &["--fork", "no", "--auto"],
+        &["--standalone", "false"],
+    ] {
+        assert!(plan_with(off).is_ok(), "{off:?}");
+    }
+    for on in [
+        &["--continue=true"][..],
+        &["-c=1"],
+        &["--no-fork", "--fork"],
+        &["--session="],
+        &["-s", "ses_old"],
+        &["--continue", "true"],
+        &["--fork", "--auto"],
+    ] {
+        assert!(plan_with(on).unwrap_err().contains("picks its own session"), "{on:?}");
+    }
+}

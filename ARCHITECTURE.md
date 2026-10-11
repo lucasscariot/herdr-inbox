@@ -142,6 +142,25 @@ assert the compiled version separately from the version-independent layout.
   uses `--config model_reasoning_effort=\"level\"`, replacing only that key in
   configured arguments and preserving unrelated overrides. Agent terminal
   colours are never recoloured to match Inbox's own frames.
+- **OpenCode 2 takes its model through a session.** Its interactive command
+  refuses `--model`, so for a catalog with `session_api` the plan strips
+  `--model` from the arguments (a model pinned in `harness_args` becomes the
+  session's model) and, once the workspace exists, runs `opencode api
+  session.create` on the machine with the model and the workspace directory.
+  The agent then starts with `--session <id>`. A `--server` in the arguments
+  goes to the API call too, so the session lives where the TUI connects;
+  `--standalone` with a chosen model is refused, since its private server
+  never sees the session, and so are `--continue`, `--fork` and `--session`,
+  which make OpenCode open another session; so is a machine whose OpenCode background service
+  is disabled (`opencode service get disabled`, checked before any change),
+  where every command gets a private server. The session is created with the
+  executable from `harness_executables`, the one discovery read. The model's `provider/model` form is checked while
+  planning, so a bad choice creates no worktree. A failed creation stops the
+  launch before the agent starts; an agent that then fails to start has its
+  session deleted (`session.remove`), since OpenCode keeps sessions until
+  deleted. A startup dialog keeps it: the agent is running on it. The
+  session's id is journaled as soon as it exists (`session_id`), so a launch
+  interrupted before the agent starts still says which session it left. OpenCode 1 still gets `--model`.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
   own record: focusing a finished thread, or watching it finish, shows it as

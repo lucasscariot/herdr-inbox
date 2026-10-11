@@ -1045,6 +1045,7 @@ mod conveniences {
             unverified,
             failed_stage: None,
             error: Some("expected claude, detected bash".into()),
+            session_id: None,
             comparison: None,
         }
     }

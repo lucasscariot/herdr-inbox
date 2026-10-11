@@ -1606,6 +1606,7 @@ mod composer_flow {
             unverified: false,
             failed_stage: None,
             error: None,
+            session_id: None,
             comparison: None,
         };
         let effects = app.update(Input::Journals(vec![record]), at(1));
@@ -1718,6 +1719,7 @@ mod conveniences {
             unverified: false,
             failed_stage: None,
             error: Some("expected claude, detected bash\nfull log".into()),
+            session_id: None,
             comparison: None,
         }
     }

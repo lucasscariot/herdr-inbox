@@ -143,6 +143,10 @@ pub struct Record {
     pub failed_stage: Option<Stage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The OpenCode session made for the agent, journaled as soon as it
+    /// exists so an interrupted launch still says which one it left behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Set when the task went to several agents at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison: Option<Comparison>,
@@ -157,6 +161,84 @@ pub struct Plan {
     pub base: Option<String>,
     /// For `herdr agent start --timeout`.
     pub start_timeout_ms: u64,
+    /// A session to create before the agent starts, for a CLI that takes
+    /// its model that way.
+    pub session: Option<Session>,
+}
+
+/// OpenCode 2 has no `--model` on its interactive command: the model goes
+/// into a session created through its server API, which the TUI then opens
+/// with `--session`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub program: String,
+    /// `provider/model`, optionally followed by `#variant`.
+    pub model: String,
+    /// The `Model.Ref` OpenCode's API takes.
+    model_ref: Value,
+    /// The server named by `--server` in the agent's arguments, which the
+    /// session must be created on for the TUI to find it.
+    pub server: Option<String>,
+}
+
+impl Session {
+    /// Checks the model and the agent's arguments before anything runs.
+    pub fn new(program: &str, model: &str, args: &[String]) -> Result<Self, String> {
+        let (name, variant) = model.split_once('#').map_or((model, None), |(name, variant)| (name, Some(variant)));
+        let (provider, id) = name
+            .split_once('/')
+            .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
+            .ok_or_else(|| format!("OpenCode models are provider/model, not {model}"))?;
+        // These pick another session than the one made here, which the task
+        // would then miss and a failed start would not clean up. `--continue`
+        // and `--fork` are switches and can be turned off; `--session` names
+        // a session whenever it is given.
+        let session_flag = ["--session", "-s"]
+            .into_iter()
+            .find(|flag| args.iter().any(|arg| arg == flag || arg.starts_with(&format!("{flag}="))));
+        let switched_on = [("--continue", &["--continue", "-c"][..]), ("--fork", &["--fork"][..])]
+            .into_iter()
+            .find(|(_, names)| switch(args, names))
+            .map(|(flag, _)| flag);
+        if let Some(flag) = session_flag.or(switched_on) {
+            return Err(format!(
+                "OpenCode's {flag} picks its own session, so it cannot start on a chosen model: remove it from harness_args or pick Default"
+            ));
+        }
+        if switch(args, &["--standalone"]) {
+            // Its private server never sees a session created beforehand.
+            return Err("OpenCode with --standalone cannot start on a chosen model: pick Default".into());
+        }
+        let mut model_ref = serde_json::json!({ "providerID": provider, "id": id });
+        if let Some(variant) = variant.filter(|v| !v.is_empty()) {
+            model_ref["variant"] = variant.into();
+        }
+        Ok(Self { program: program.into(), model: model.into(), model_ref, server: flag_value(args, &["--server"]) })
+    }
+
+    /// `opencode api <operation>` on the agent's server.
+    fn api_args(&self, operation: &str) -> Vec<String> {
+        let mut args = vec![self.program.clone(), "api".into(), operation.into()];
+        if let Some(server) = &self.server {
+            args.extend(["--server".into(), server.clone()]);
+        }
+        args
+    }
+
+    /// The arguments of `opencode api session.create`.
+    fn create_args(&self, directory: &str) -> Vec<String> {
+        let body = serde_json::json!({ "model": self.model_ref, "location": { "directory": directory } });
+        let mut args = self.api_args("session.create");
+        args.extend(["--data".into(), body.to_string()]);
+        args
+    }
+
+    /// The arguments of `opencode api session.remove`.
+    fn remove_args(&self, id: &str) -> Vec<String> {
+        let mut args = self.api_args("session.remove");
+        args.extend(["--param".into(), format!("sessionID={id}")]);
+        args
+    }
 }
 
 impl Plan {
@@ -435,6 +517,47 @@ fn strip_flag(args: Vec<String>, names: &[&str]) -> Vec<String> {
     kept
 }
 
+/// Whether a boolean OpenCode option is on. Like its option parser, the
+/// last of `--name`, `--name=<bool>`, `--name <bool>` and `--no-name` wins,
+/// for any of the option's spellings (`--continue` or `-c`).
+fn switch(args: &[String], names: &[&str]) -> bool {
+    let truth = |value: &str| match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    };
+    let mut on = false;
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        for name in names {
+            let negated = name.strip_prefix("--").map(|long| format!("--no-{long}"));
+            if arg == name {
+                // A true/false word right after the switch is its value.
+                on = args.next_if(|next| truth(next).is_some()).and_then(|next| truth(next)).unwrap_or(true);
+            } else if negated.as_deref() == Some(arg.as_str()) {
+                on = false;
+            } else if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
+                on = truth(value).unwrap_or(!value.is_empty());
+            }
+        }
+    }
+    on
+}
+
+/// The value of the last occurrence of a flag in `args`.
+fn flag_value(args: &[String], names: &[&str]) -> Option<String> {
+    let mut value = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if names.contains(&arg.as_str()) {
+            value = args.next().cloned();
+        } else if let Some(attached) = names.iter().find_map(|name| arg.strip_prefix(&format!("{name}="))) {
+            value = Some(attached.to_string());
+        }
+    }
+    value.filter(|v| !v.is_empty())
+}
+
 /// Removes only Codex's reasoning override, keeping unrelated config values.
 fn strip_codex_effort(args: Vec<String>) -> Vec<String> {
     let is_effort = |value: &str| value.split_once('=').is_some_and(|(key, _)| key.trim() == "model_reasoning_effort");
@@ -494,7 +617,15 @@ pub fn plan(
     let catalog = catalog.cloned().unwrap_or_default();
     let mut args = settings.harness_args.get(&request.harness).cloned().unwrap_or_default();
     let model = request.model.clone().filter(|m| !m.trim().is_empty());
-    if let Some(model) = &model {
+    let mut session = None;
+    if request.harness == "opencode" && catalog.session_api {
+        // A model pinned in harness_args would make OpenCode refuse to start.
+        let pinned = flag_value(&args, &["--model", "-m"]);
+        args = strip_flag(args, &["--model", "-m"]);
+        // The executable discovery read, so the session goes to the same OpenCode.
+        let program = settings.harness_executables.get("opencode").map_or("opencode", String::as_str);
+        session = model.clone().or(pinned).map(|model| Session::new(program, &model, &args)).transpose()?;
+    } else if let Some(model) = &model {
         if !catalog.selectable {
             return Err(format!("{} does not support choosing a model at launch", request.harness));
         }
@@ -555,10 +686,11 @@ pub fn plan(
         unverified: false,
         failed_stage: None,
         error: None,
+        session_id: None,
         comparison: request.comparison,
         id,
     };
-    Ok(Plan { record, agent_args: args, base: None, start_timeout_ms: settings.agent_start_timeout_ms })
+    Ok(Plan { record, agent_args: args, base: None, start_timeout_ms: settings.agent_start_timeout_ms, session })
 }
 
 /// Eight characters that tell launches apart, even two sent in the same
@@ -591,7 +723,7 @@ impl std::fmt::Display for CliError {
 pub fn herdr(runner: &Runner, args: &[&str], timeout: Duration) -> Result<Value, CliError> {
     let mut command = runner.command(args);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let output = run(command, timeout)?;
+    let output = run(command, "herdr", timeout)?;
     let stdout = if runner.has_marker() {
         crate::herdr::ssh::after_marker(&output.stdout).unwrap_or("").to_string()
     } else {
@@ -617,10 +749,10 @@ struct Output {
     success: bool,
 }
 
-fn run(mut command: std::process::Command, timeout: Duration) -> Result<Output, CliError> {
+fn run(mut command: std::process::Command, program: &str, timeout: Duration) -> Result<Output, CliError> {
     use std::io::Read;
     let fail = |message: String| CliError { code: None, message };
-    let mut child = command.spawn().map_err(|err| fail(format!("cannot run herdr: {err}")))?;
+    let mut child = command.spawn().map_err(|err| fail(format!("cannot run {program}: {err}")))?;
     let mut stdout = child.stdout.take().ok_or_else(|| fail("no stdout".into()))?;
     let mut stderr = child.stderr.take().ok_or_else(|| fail("no stderr".into()))?;
     let (tx, rx) = std::sync::mpsc::channel();
@@ -636,7 +768,7 @@ fn run(mut command: std::process::Command, timeout: Duration) -> Result<Output, 
         let _ = child.kill();
     }
     let status = child.wait().map_err(|err| fail(err.to_string()))?;
-    let (stdout, stderr) = read.map_err(|_| fail("herdr did not answer in time".into()))?;
+    let (stdout, stderr) = read.map_err(|_| fail(format!("{program} did not answer in time")))?;
     Ok(Output { stdout, stderr, success: status.success() })
 }
 
@@ -696,7 +828,11 @@ fn steps(
     journal: &dyn Fn(&Record),
     progress: &dyn Fn(&str),
 ) -> Result<Outcome, String> {
-    let (agent_args, base) = (&plan.agent_args, plan.base.as_deref());
+    let (mut agent_args, base) = (plan.agent_args.clone(), plan.base.as_deref());
+    if let Some(session) = &plan.session {
+        // Before any change: a launch that cannot work leaves no worktree.
+        check_shared_server(runner, session)?;
+    }
     let created = if record.workspace == "worktree" {
         progress(&format!("creating worktree {}", record.branch));
         let mut args = vec![
@@ -744,6 +880,14 @@ fn steps(
     progress(&format!("starting {}", record.harness));
     record.stage = Stage::Starting;
     journal(record);
+    let mut created_session = None;
+    if let Some(session) = &plan.session {
+        let id = create_session(runner, session, &record.cwd)?;
+        record.session_id = Some(id.clone());
+        journal(record);
+        agent_args.extend(["--session".to_string(), id.clone()]);
+        created_session = Some((session, id));
+    }
     let timeout = plan.start_timeout_ms.to_string();
     let mut start: Vec<&str> =
         vec!["agent", "start", &record.agent_name, "--kind", &record.harness, "--pane", &pane, "--timeout", &timeout];
@@ -773,6 +917,13 @@ fn steps(
     };
     if let Err(error) = started {
         if !error.message.contains(STARTUP_BLOCKED) {
+            // OpenCode keeps sessions until deleted: a retry would leave
+            // one more empty session behind each time.
+            if let Some((session, id)) = &created_session
+                && remove_session(runner, session, id)
+            {
+                record.session_id = None;
+            }
             return Err(error.message);
         }
         // A trust, login or update dialog waits in the terminal. Keep the
@@ -789,6 +940,77 @@ fn steps(
     progress("sending the task");
     submit(runner, record, journal)?;
     Ok(Outcome::Sent(record.clone()))
+}
+
+/// Refuses a launch whose session the TUI could never open. With OpenCode's
+/// background service disabled, every command runs its own private server,
+/// so a session created ahead of the TUI is lost with it. A `--server` names
+/// a shared one instead.
+fn check_shared_server(runner: &Runner, session: &Session) -> Result<(), String> {
+    if session.server.is_some() {
+        return Ok(());
+    }
+    let mut command = runner.exec(&[&session.program, "service", "get", "disabled"]);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // An OpenCode that cannot answer gets the benefit of the doubt: creating
+    // the session reports any real failure.
+    let Ok(output) = run(command, &session.program, Duration::from_secs(15)) else {
+        return Ok(());
+    };
+    let stdout = if runner.has_marker() {
+        crate::herdr::ssh::after_marker(&output.stdout).unwrap_or("")
+    } else {
+        output.stdout.as_str()
+    };
+    if output.success && stdout.trim() == "true" {
+        return Err(format!(
+            "OpenCode's background service is disabled, so it cannot start on {}: enable it \
+             (opencode service set disabled false), add --server to its harness_args, or pick Default",
+            session.model
+        ));
+    }
+    Ok(())
+}
+
+/// Deletes a session the agent never opened, and says whether it is gone.
+/// Best effort: the launch has already failed and says why.
+fn remove_session(runner: &Runner, session: &Session, id: &str) -> bool {
+    let args = session.remove_args(id);
+    let mut command = runner.exec(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    run(command, &session.program, Duration::from_secs(15)).is_ok_and(|output| output.success)
+}
+
+/// Creates an OpenCode session with the chosen model and returns its id.
+fn create_session(runner: &Runner, session: &Session, directory: &str) -> Result<String, String> {
+    let fail = |reason: &str| format!("could not create an OpenCode session for {}: {reason}", session.model);
+    let args = session.create_args(directory);
+    let mut command = runner.exec(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let output = run(command, &session.program, Duration::from_secs(30)).map_err(|e| fail(&e.message))?;
+    let stdout = if runner.has_marker() {
+        crate::herdr::ssh::after_marker(&output.stdout).unwrap_or("")
+    } else {
+        output.stdout.as_str()
+    };
+    let answer: Option<Value> = stdout.lines().rev().find_map(|line| serde_json::from_str(line.trim()).ok());
+    match answer.as_ref().and_then(|answer| str_at(answer, &["data", "id"])) {
+        Some(id) if output.success => Ok(id.to_string()),
+        _ => {
+            // OpenCode follows its `Error: …` line with a stack trace.
+            let lines = || [output.stderr.as_str(), stdout].into_iter().flat_map(str::lines);
+            let reason = lines()
+                .find(|line| line.trim_start().starts_with("Error:"))
+                .or_else(|| {
+                    [output.stderr.as_str(), stdout]
+                        .into_iter()
+                        .flat_map(|text| text.lines().rev())
+                        .find(|line| !line.trim().is_empty())
+                })
+                .unwrap_or("no session id in the answer");
+            Err(fail(reason.trim()))
+        }
+    }
 }
 
 /// Sends the task and records the result.
