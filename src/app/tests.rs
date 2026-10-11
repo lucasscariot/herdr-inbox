@@ -1145,7 +1145,7 @@ mod composer_flow {
         let launches: Vec<&Record> = effects
             .iter()
             .filter_map(|e| match e {
-                Effect::Launch { machine, plan, .. } if machine == LOCAL => Some(&plan.record),
+                Effect::Launch { machine, plan } if machine == LOCAL => Some(&plan.record),
                 _ => None,
             })
             .collect();
@@ -2322,13 +2322,18 @@ mod conveniences {
         assert_eq!(plan.record.workspace, "checkout");
         assert_eq!(plan.record.cwd, "/h/wt/branch-t1");
         assert_eq!(plan.record.task, "Task t1\nwith details");
-        assert!(
-            effects.iter().any(|e| matches!(e, Effect::Launch { retires: Some(old), .. } if old == "t1")),
-            "the retry removes the failed journal once its own is written"
-        );
-        assert!(!effects.iter().any(|e| matches!(e, Effect::Dismiss { .. })), "not before: {effects:?}");
         assert!(!app.records.contains_key("t1"), "the failed launch is retired");
-        assert!(effects.iter().any(|e| matches!(e, Effect::Archive { workspace_id, .. } if workspace_id == "w9")));
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Dismiss { .. })),
+            "its journal stays until the retry ends: {effects:?}"
+        );
+        let sent = effects.clone();
+        let mut ended = plan.record.clone();
+        ended.stage = Stage::Submitted;
+        let effects =
+            app.update(Input::LaunchFinished { id: ended.id.clone(), result: Ok(Outcome::Sent(ended)) }, at(3));
+        assert!(effects.contains(&Effect::Dismiss { record: "t1".into() }), "{effects:?}");
+        assert!(sent.iter().any(|e| matches!(e, Effect::Archive { workspace_id, .. } if workspace_id == "w9")));
         assert!(app.thread(&row).is_none_or(|t| t.note.is_none()));
         assert!(app.composer.retry.is_none());
         assert_eq!(app.history.first().map(String::as_str), Some("Task t1\nwith details"));
@@ -2373,11 +2378,13 @@ mod conveniences {
         assert!(app.composer.retry.is_none());
         type_text(&mut app, "Other task");
         let effects = app.update(press(KeyCode::Enter), at(2));
-        assert!(
-            !effects.iter().any(|e| matches!(e, Effect::Launch { retires: Some(_), .. })),
-            "the failed launch stays"
-        );
-        assert!(app.records.contains_key("t2"));
+        let plan = effects
+            .iter()
+            .find_map(|e| if let Effect::Launch { plan, .. } = e { Some(plan.record.clone()) } else { None })
+            .unwrap();
+        assert!(app.records.contains_key("t2"), "the failed launch stays");
+        let effects = app.update(Input::LaunchFinished { id: plan.id.clone(), result: Ok(Outcome::Sent(plan)) }, at(3));
+        assert!(!effects.contains(&Effect::Dismiss { record: "t2".into() }), "{effects:?}");
     }
 
     #[test]

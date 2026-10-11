@@ -182,9 +182,6 @@ pub enum Effect {
     Launch {
         machine: String,
         plan: Box<Plan>,
-        /// A failed launch's journal to remove once this one's first journal
-        /// is written, so that a crash in between loses neither.
-        retires: Option<String>,
     },
     /// Send the task of a launch whose startup dialog was answered.
     Resume {
@@ -335,6 +332,10 @@ pub struct App {
     resume: Option<ThreadId>,
     /// Threads the user asked to archive, so their disappearance is expected.
     archiving: HashSet<ThreadId>,
+    /// Failed launches whose retry is running, by the retry's launch id. The
+    /// failed journal stays on disk until the retry ends, so that a crash
+    /// before then still shows the failed launch on restart.
+    retiring: HashMap<String, String>,
     pub config: Config,
     pub preferences: Preferences,
     pub inventories: HashMap<String, Inventory>,
@@ -419,6 +420,7 @@ impl App {
             auto_opened: false,
             resume: None,
             archiving: HashSet::new(),
+            retiring: HashMap::new(),
             config: Config::default(),
             preferences: Preferences::default(),
             inventories: HashMap::new(),
@@ -701,12 +703,10 @@ impl App {
         // A comparison is an experiment on one task, never a default.
         self.composer.compare.clear();
         let machine = first.machine_id.clone();
-        let mut retires = retired;
-        effects.extend(plans.into_iter().map(|plan| Effect::Launch {
-            machine: machine.clone(),
-            plan: Box::new(plan),
-            retires: retires.take(),
-        }));
+        if let (Some(old), Some(plan)) = (retired, plans.first()) {
+            self.retiring.insert(plan.record.id.clone(), old);
+        }
+        effects.extend(plans.into_iter().map(|plan| Effect::Launch { machine: machine.clone(), plan: Box::new(plan) }));
         self.rebuild();
     }
 
@@ -881,6 +881,10 @@ impl App {
         now: SystemTime,
         effects: &mut Vec<Effect>,
     ) {
+        // The retry's own journal now says how it ended.
+        if let Some(old) = self.retiring.remove(id) {
+            effects.push(Effect::Dismiss { record: old });
+        }
         match result {
             Ok(outcome) => {
                 let record = match &outcome {

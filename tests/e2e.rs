@@ -921,12 +921,21 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
     inbox.keys("\r");
     inbox.wait_for_text("Archived “Fix the login loop”");
     let journals = || -> Vec<serde_json::Value> {
+        // Atomic writes leave a `.inbox-*` temporary file for a moment.
         std::fs::read_dir(root.join("state/herdr-inbox/launches"))
             .expect("journals")
-            .map(|e| serde_json::from_slice(&std::fs::read(e.expect("entry").path()).expect("read")).expect("json"))
+            .map(|e| e.expect("entry").path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .filter_map(|p| serde_json::from_slice(&std::fs::read(p).ok()?).ok())
             .collect()
     };
-    sandbox.wait_for(|| journals().iter().any(|j| j["stage"] == "needs_attention"), "the retry to stop");
+    sandbox.wait_for(
+        || {
+            let journals = journals();
+            journals.len() == 1 && journals[0]["stage"] == "needs_attention" && journals[0]["workspace"] == "checkout"
+        },
+        "the retry to stop and replace the failed launch",
+    );
     let journals = journals();
     assert_eq!(journals.len(), 1, "the retry replaced the failed launch: {journals:?}");
     assert_eq!(journals[0]["workspace"], "checkout");
