@@ -316,7 +316,7 @@ mod tests {
             &codex,
             "#!/bin/sh\n[ \"$1\" = app-server ] || exit 1\nread first\nread second\nread third\n\
              printf '%s\\n' '{\"id\":0,\"result\":{}}' '{\"method\":\"account/updated\"}' \
-             '{\"id\":1,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":{\"usedPercent\":4,\"windowDurationMins\":300,\"resetsAt\":null},\"planType\":\"prolite\",\"rateLimitReachedType\":null},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n",
+             '{\"id\":1,\"result\":{\"ordinaryUsageAllowed\":'\"${FAKE_ALLOWED:-true}\"',\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":{\"usedPercent\":4,\"windowDurationMins\":300,\"resetsAt\":null},\"planType\":\"prolite\",\"rateLimitReachedType\":null},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n",
         )
         .unwrap();
         std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -343,7 +343,19 @@ mod tests {
         assert_eq!(openai.windows[0].resets_at, Some(1792305784));
         assert_eq!(openai.resets_available, 3);
         assert_eq!(openai.source, "app-server");
+        assert!(!openai.reached);
         assert_eq!(report.error("anthropic"), Some("no Claude thread has reported yet"));
+        // The app server's own verdict outranks the percentages.
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(PROBE)
+            .arg(settings(state.to_str(), codex.to_str(), false))
+            .env("HOME", dir.path())
+            .env("FAKE_ALLOWED", "false")
+            .output()
+            .unwrap();
+        let refused = finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap();
+        assert!(refused.usage("openai").unwrap().reached, "ordinaryUsageAllowed: false is a reached limit");
 
         // Claude Code runs the wrapper with its status line JSON; the user's
         // own status line still gets the same input.
@@ -373,6 +385,41 @@ mod tests {
         let output = child.wait_with_output().unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "mine: {\"model\":", "the user's status line is chained");
         assert_eq!(std::fs::metadata(&cache).unwrap().permissions().mode() & 0o777, 0o600);
+        // A project's own status line outranks the user's, as Claude Code
+        // would have ordered them without `--settings`.
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"statusLine": {"type": "command", "command": "printf 'project'"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".claude/settings.local.json"),
+            r#"{"statusLine": {"type": "command", "command": "printf 'local'"}}"#,
+        )
+        .unwrap();
+        let chained = |input: String| {
+            let mut child = std::process::Command::new("python3")
+                .arg(&wrapper)
+                .arg(&cache)
+                .env("CLAUDE_CONFIG_DIR", &claude_dir)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+            String::from_utf8_lossy(&child.wait_with_output().unwrap().stdout).into_owned()
+        };
+        let project_dir = project.to_string_lossy();
+        assert_eq!(chained(format!(r#"{{"workspace": {{"project_dir": "{project_dir}"}}}}"#)), "local");
+        std::fs::remove_file(project.join(".claude/settings.local.json")).unwrap();
+        assert_eq!(chained(format!(r#"{{"cwd": "{project_dir}"}}"#)), "project");
+        assert_eq!(
+            chained(r#"{"cwd": "/nowhere"}"#.into()),
+            "mine: {\"cwd\": \"",
+            "the user's when the project has none"
+        );
 
         let report = run(settings(state.to_str(), None, true));
         assert!(report.usage("openai").is_none(), "codex was not asked for");

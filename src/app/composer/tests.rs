@@ -744,6 +744,27 @@ mod usage {
     }
 
     #[test]
+    fn regression_the_next_task_keeps_auto_over_the_first_preset() {
+        let mut world = world_with_usage();
+        world.presets.push(Preset {
+            name: "Opus".into(),
+            harness: "claude".into(),
+            model: "opus".into(),
+            thinking: String::new(),
+        });
+        let mut composer = settled(&world);
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert_eq!(composer.harness.as_deref(), Some("codex"));
+        // A send asks for the first preset on the next task; Auto still wins.
+        composer.start_preset = true;
+        composer.settle(&world.ctx());
+        assert!(composer.auto_harness);
+        assert!(!composer.start_preset);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "the harness shown is the one sent");
+        assert_eq!(composer.model, None, "not the preset's model either");
+    }
+
+    #[test]
     fn a_configured_provider_lends_its_usage_to_another_harness() {
         let mut world = world_with_usage();
         world.config.usage.providers.insert("codex".into(), "anthropic".into());

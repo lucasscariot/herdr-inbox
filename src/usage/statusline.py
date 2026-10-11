@@ -25,15 +25,27 @@ if cache and isinstance(limits, dict):
     except OSError:
         pass
 
+# The user's own status line, in Claude Code's order of precedence below the
+# command line: the project's local settings, the project's settings, then
+# the user's. `--settings` hides them all, so the first one found is chained.
 config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or str(pathlib.Path.home() / ".claude")
+candidates = []
+workspace = data.get("workspace") if isinstance(data, dict) else None
+project_dir = workspace.get("project_dir") if isinstance(workspace, dict) else None
+for base in (project_dir, data.get("cwd") if isinstance(data, dict) else None):
+    if isinstance(base, str) and base:
+        candidates += [pathlib.Path(base) / ".claude/settings.local.json", pathlib.Path(base) / ".claude/settings.json"]
+candidates.append(pathlib.Path(config_dir) / "settings.json")
 command = None
-try:
-    settings = json.loads((pathlib.Path(config_dir) / "settings.json").read_text())
+for path in candidates:
+    try:
+        settings = json.loads(path.read_text())
+    except (OSError, ValueError):
+        continue
     status = settings.get("statusLine") if isinstance(settings, dict) else None
-    if isinstance(status, dict) and status.get("type", "command") == "command":
-        command = status.get("command")
-except (OSError, ValueError):
-    pass
+    if isinstance(status, dict) and status.get("type", "command") == "command" and isinstance(status.get("command"), str):
+        command = status["command"]
+        break
 own = os.path.basename(sys.argv[0]) if sys.argv else ""
 if isinstance(command, str) and command.strip() and own not in command:
     try:

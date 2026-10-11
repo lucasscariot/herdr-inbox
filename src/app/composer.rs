@@ -486,9 +486,12 @@ impl Composer {
         };
         let installed = ctx.installed(&machine);
         if self.harness.is_none() && remembered.harness.as_deref() == Some(AUTO) && ctx.config.usage.enabled {
-            // The project asked the inbox to choose: that outranks the
-            // first preset, which would undo the choice on every thread.
+            // The project asked the inbox to choose.
             self.auto_harness = true;
+        }
+        if self.auto_harness {
+            // The inbox's choice outranks the first preset, which would
+            // otherwise undo it on every new thread.
             self.start_preset = false;
         }
         if self.auto_harness

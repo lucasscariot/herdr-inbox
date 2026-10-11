@@ -106,17 +106,23 @@ def codex_windows(snapshot, camel):
     return windows
 
 
-def codex_usage(snapshot, camel, resets_available, read_at, source):
+def codex_usage(snapshot, camel, resets_available, read_at, source, allowed=None):
+    """`allowed` is the app server's own verdict (ordinaryUsageAllowed): when
+    present it decides, whatever the percentages say."""
     windows = codex_windows(snapshot, camel)
     if not windows:
         return {"error": "Codex reported no usage windows"}
     reached_key = "rateLimitReachedType" if camel else "rate_limit_reached_type"
     spend_key = "spendControlReached" if camel else "spend_control_reached"
     plan = snapshot.get("planType" if camel else "plan_type")
+    if allowed is None:
+        reached = bool(snapshot.get(reached_key)) or bool(snapshot.get(spend_key)) or any(w["used_percent"] >= 100 for w in windows)
+    else:
+        reached = not allowed
     return {"usage": {
         "windows": windows,
         "plan": plan if isinstance(plan, str) else None,
-        "reached": bool(snapshot.get(reached_key)) or bool(snapshot.get(spend_key)) or any(w["used_percent"] >= 100 for w in windows),
+        "reached": reached,
         "resets_available": resets_available,
         "read_at": read_at,
         "source": source,
@@ -151,7 +157,8 @@ def codex_app_server(executable):
                 snapshot = result.get("rateLimits") or {}
                 credits = result.get("rateLimitResetCredits") or {}
                 available = credits.get("availableCount") if isinstance(credits, dict) else 0
-                return codex_usage(snapshot, True, int(available or 0), now, "app-server")
+                allowed = result.get("ordinaryUsageAllowed")
+                return codex_usage(snapshot, True, int(available or 0), now, "app-server", allowed if isinstance(allowed, bool) else None)
         raise RuntimeError("the Codex app server did not answer in time")
     finally:
         timer.cancel()

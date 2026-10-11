@@ -276,7 +276,8 @@ The numbers come from the CLIs' own channels, never from a provider token:
   thread the inbox launches gets `--settings` with a small wrapper as its
   status line; the wrapper saves the numbers privately under
   `~/.local/state/herdr-inbox/usage/` and then runs your own `statusLine`
-  command, if you have one, on the same input. Claude numbers appear once an
+  command, if you have one (project local, project, then user settings, as
+  Claude Code orders them), on the same input. Claude numbers appear once an
   inbox-launched Claude thread has had its first reply, and follow the open
   threads; before that the row says `no usage data yet`. Threads started by
   plain `herdr` report too if you make the wrapper your status line in
