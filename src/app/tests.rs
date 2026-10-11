@@ -2330,6 +2330,31 @@ mod conveniences {
     }
 
     #[test]
+    fn a_retry_follows_its_worktree_when_discovery_lists_it_under_another_path() {
+        let mut app = composing(vec![], vec![]);
+        app.update(press(KeyCode::Esc), at(1));
+        let mut failed = timed_out("t3");
+        failed.cwd = "/var/wt/branch-t3".into();
+        app.update(Input::Journals(vec![failed]), at(1));
+        app.focus = Focus::List;
+        app.cursor = app.threads.iter().find(|t| t.note.is_some()).map(|t| t.id.clone());
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.workspace, WorkspaceSel::Checkout("/var/wt/branch-t3".into()));
+        // macOS: git reports the real path behind the /var symlink.
+        let mut fresh = inventory();
+        fresh.projects[0].checkouts.push(CheckoutEntry {
+            path: "/private/var/wt/branch-t3".into(),
+            branch: "branch-t3".into(),
+            linked: true,
+        });
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(fresh) }, at(2));
+        assert_eq!(app.composer.workspace, WorkspaceSel::Checkout("/private/var/wt/branch-t3".into()));
+        // Not listed at all yet: the retry still keeps its worktree.
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(3));
+        assert_eq!(app.composer.workspace, WorkspaceSel::Checkout("/var/wt/branch-t3".into()));
+    }
+
+    #[test]
     fn a_new_thread_is_not_a_retry() {
         let mut app = composing(vec![], vec![]);
         app.update(press(KeyCode::Esc), at(1));

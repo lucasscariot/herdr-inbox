@@ -617,6 +617,7 @@ impl App {
                 self.discovery_errors.insert(machine.to_string(), error);
             }
         }
+        self.keep_retry_worktree();
         self.with_composer(|composer, ctx| composer.settle(ctx));
         if fresh && self.composer.machine.as_deref() == Some(machine) {
             // Fresh word from the thread's machine: the first preset it has
@@ -726,9 +727,7 @@ impl App {
         };
         let record = self.record_for(&thread).cloned();
         let failed = record.as_ref().filter(|r| r.stage == launch::Stage::NeedsAttention);
-        if let Some(record) = failed {
-            self.offer_worktree(record);
-        }
+        let worktree = failed.and_then(|r| self.offer_worktree(r));
         let composer = &mut self.composer;
         composer.picker = None;
         composer.error = None;
@@ -747,9 +746,7 @@ impl App {
                 composer.workspace = match record.workspace.as_str() {
                     // A failed launch's worktree is reused when it was made,
                     // and its branch name otherwise.
-                    "worktree" if failed.is_some() && worktree_made(record) => {
-                        WorkspaceSel::Checkout(record.cwd.clone())
-                    }
+                    "worktree" if let Some(worktree) = &worktree => WorkspaceSel::Checkout(worktree.clone()),
                     "worktree" if failed.is_some() && !record.branch.is_empty() => {
                         WorkspaceSel::Named(record.branch.clone())
                     }
@@ -783,24 +780,49 @@ impl App {
             .max_by_key(|r| r.created_at)
     }
 
-    /// Lists a failed launch's worktree among its project's checkouts until
-    /// discovery sees it, so that a retry can be sent to it.
-    fn offer_worktree(&mut self, record: &Record) {
+    /// The failed launch's worktree as its project lists it: found by branch,
+    /// since the path Herdr reported can differ from git's (macOS `/var` is
+    /// `/private/var`), or added to the checkouts until discovery sees it.
+    fn offer_worktree(&mut self, record: &Record) -> Option<String> {
         if record.workspace != "worktree" || !worktree_made(record) {
-            return;
+            return None;
         }
         let project = self
             .inventories
             .get_mut(&record.machine_id)
             .and_then(|i| i.projects.iter_mut().find(|p| p.name == record.project));
-        if let Some(project) = project
-            && !project.checkouts.iter().any(|c| c.path == record.cwd)
-        {
-            project.checkouts.push(crate::discovery::CheckoutEntry {
-                path: record.cwd.clone(),
-                branch: record.branch.clone(),
-                linked: true,
-            });
+        let Some(project) = project else {
+            return Some(record.cwd.clone());
+        };
+        let listed = project
+            .checkouts
+            .iter()
+            .find(|c| (!record.branch.is_empty() && c.branch == record.branch) || c.path == record.cwd);
+        if let Some(checkout) = listed {
+            return Some(checkout.path.clone());
+        }
+        project.checkouts.push(crate::discovery::CheckoutEntry {
+            path: record.cwd.clone(),
+            branch: record.branch.clone(),
+            linked: true,
+        });
+        Some(record.cwd.clone())
+    }
+
+    /// Keeps a retry on its worktree when fresh discovery lists it under
+    /// another path, or does not list it yet.
+    fn keep_retry_worktree(&mut self) {
+        let Some(record) = self.composer.retry.as_ref().and_then(|id| self.records.get(id)).cloned() else {
+            return;
+        };
+        let WorkspaceSel::Checkout(path) = self.composer.workspace.clone() else {
+            return;
+        };
+        let listed = self.with_composer(|composer, ctx| {
+            ctx.project(composer).is_some_and(|p| p.checkouts.iter().any(|c| c.path == path) || p.path == path)
+        });
+        if !listed && let Some(worktree) = self.offer_worktree(&record) {
+            self.composer.workspace = WorkspaceSel::Checkout(worktree);
         }
     }
 

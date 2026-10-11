@@ -930,7 +930,8 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
     let journals = journals();
     assert_eq!(journals.len(), 1, "the retry replaced the failed launch: {journals:?}");
     assert_eq!(journals[0]["workspace"], "checkout");
-    assert_eq!(journals[0]["cwd"], worktree.display().to_string());
+    let cwd = std::fs::canonicalize(journals[0]["cwd"].as_str().expect("cwd")).expect("the retry's checkout");
+    assert_eq!(cwd, std::fs::canonicalize(&worktree).expect("worktree"), "the same worktree");
     assert_eq!(journals[0]["task"], "Fix the login loop");
     assert_eq!(journals[0]["failed_stage"], "starting", "it got past the worktree this time");
 }
