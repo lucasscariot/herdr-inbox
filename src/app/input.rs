@@ -565,6 +565,7 @@ fn skill_menu_key(
     skills: &[crate::discovery::Skill],
     key: KeyEvent,
 ) -> bool {
+    menu.follow(editor);
     let Some((_, offered)) = menu.offered(editor, skills) else {
         return false;
     };
@@ -669,6 +670,7 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
         return;
     }
     if let Some(reply) = app.reply.as_mut() {
+        reply.skill_menu.follow(&reply.editor);
         reply.editor.insert(text);
         return;
     }
@@ -680,7 +682,10 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
     if app.focus == Focus::Composer {
         match &mut app.composer.picker {
             Some(picker) => picker.query.push_str(text.lines().next().unwrap_or("")),
-            None if app.composer.field == Field::Task => app.composer.task.insert(text),
+            None if app.composer.field == Field::Task => {
+                app.composer.skill_menu.follow(&app.composer.task);
+                app.composer.task.insert(text);
+            }
             None => {}
         }
         return;

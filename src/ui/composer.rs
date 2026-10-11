@@ -208,7 +208,7 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
     {
         // Under the line being typed, over the strip and the fields.
         let below = Rect::new(area.x, layout.task_cursor.1, area.width, area.bottom() - layout.task_cursor.1);
-        super::skill_menu(buf, below, layout.task_cursor, true, &offered, composer.skill_menu.selected, palette);
+        super::skill_menu(buf, area, below, layout.task_cursor, true, &offered, composer.skill_menu.selected, palette);
     }
 
     if let Some(picker) = &composer.picker

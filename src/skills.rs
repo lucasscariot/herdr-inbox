@@ -66,6 +66,16 @@ impl Menu {
         (!found.is_empty()).then_some((start, found))
     }
 
+    /// Forgets a dismissal once its `$` is gone, so a later mention typed at
+    /// the same place, after a send or a clear, opens the menu again.
+    pub fn follow(&mut self, editor: &Editor) {
+        if let Some(start) = self.dismissed
+            && !editor.text().get(start..).is_some_and(|rest| rest.starts_with('$'))
+        {
+            self.dismissed = None;
+        }
+    }
+
     pub fn dismiss(&mut self, editor: &Editor) {
         self.dismissed = query(editor).map(|(start, _)| start);
         self.selected = 0;
@@ -205,6 +215,20 @@ mod tests {
         assert!(!menu.accept(&mut text, &skills));
         text.insert(" and $");
         assert!(menu.offered(&text, &skills).is_some(), "a new $ opens it again");
+    }
+
+    #[test]
+    fn a_dismissal_ends_with_its_dollar() {
+        let skills = skills();
+        let mut text = editor("$");
+        let mut menu = Menu::default();
+        menu.dismiss(&text);
+        menu.follow(&text);
+        assert!(menu.offered(&text, &skills).is_none(), "still the dismissed $");
+        text.clear();
+        menu.follow(&text);
+        text.insert("$");
+        assert!(menu.offered(&text, &skills).is_some(), "a new task's $ at the same place");
     }
 
     #[test]

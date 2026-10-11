@@ -380,15 +380,17 @@ pub fn clip_start(text: &str, width: usize) -> String {
     std::iter::once('…').chain(tail.into_iter().rev()).collect()
 }
 
-/// Draws `left` and `right` on one line of `area`, clipping `left` so `right`
-/// always fits.
 /// The most rows the `$` skill menu shows at once.
 const SKILL_ROWS: usize = 8;
 
 /// The `$` skill menu, below or above the line at `anchor`, kept inside
-/// `area`: each skill's name, then its description, dimmed.
+/// `area`: each skill's name, then its description, dimmed. It shrinks to
+/// what fits; when not even one row fits, it goes over the whole `screen`,
+/// since the keys still go to it.
+#[allow(clippy::too_many_arguments)]
 pub fn skill_menu(
     buf: &mut Buffer,
+    screen: Rect,
     area: Rect,
     anchor: (u16, u16),
     below: bool,
@@ -396,10 +398,11 @@ pub fn skill_menu(
     selected: usize,
     palette: &Palette,
 ) {
-    let rows = offered.len().min(SKILL_ROWS) as u16;
+    let area = if area.height < 3 || area.width < 8 { screen } else { area };
+    let rows = offered.len().min(SKILL_ROWS).min(area.height.saturating_sub(2) as usize) as u16;
     let width = area.width.min(72);
     let height = rows + 2;
-    if rows == 0 || width < 16 || area.height < height {
+    if rows == 0 || width < 4 {
         return;
     }
     let y = if below { anchor.1 + 1 } else { anchor.1.saturating_sub(height) };
@@ -437,6 +440,8 @@ pub fn skill_menu(
     }
 }
 
+/// Draws `left` and `right` on one line of `area`, clipping `left` so `right`
+/// always fits.
 fn split_line(buf: &mut Buffer, x: u16, y: u16, width: u16, left: &[(String, Style)], right: &[(String, Style)]) {
     let right_width: usize = right.iter().map(|(t, _)| t.width()).sum();
     let left_room = (width as usize).saturating_sub(if right_width > 0 { right_width + 1 } else { 0 });
@@ -777,7 +782,7 @@ fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &P
     if let Some((_, offered)) = reply.skill_menu.offered(&reply.editor, app.skills_on(machine)) {
         // Above the box, over the agent's screen.
         let above = Rect::new(area.x, area.y, area.width, rect.y.saturating_sub(area.y));
-        skill_menu(buf, above, (cursor.0, rect.y), false, &offered, reply.skill_menu.selected, palette);
+        skill_menu(buf, area, above, (cursor.0, rect.y), false, &offered, reply.skill_menu.selected, palette);
     }
     Some(cursor)
 }

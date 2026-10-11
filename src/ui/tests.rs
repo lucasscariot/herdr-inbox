@@ -1156,6 +1156,27 @@ mod conveniences {
     }
 
     #[test]
+    fn a_reply_with_no_room_above_still_shows_the_skills_it_takes_keys_for() {
+        let mut app = loaded(110, 10);
+        let skill = crate::discovery::Skill {
+            name: "deslop".into(),
+            description: "Remove slop".into(),
+            path: "/h/.agents/skills/deslop/SKILL.md".into(),
+        };
+        let inventory = crate::discovery::Inventory { skills: vec![skill], ..Default::default() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('r'));
+        // A tall reply on a short screen leaves no row above its box.
+        app.reply.as_mut().unwrap().editor.set(&"line\n".repeat(40));
+        for c in "now $".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        find(&render(&app, at(1)), "▸ $deslop");
+    }
+
+    #[test]
     fn a_narrow_filter_keeps_the_query_and_the_cursor_over_the_count() {
         let typed = |width: u16, query: &str| {
             let mut app = loaded(width, 30);
