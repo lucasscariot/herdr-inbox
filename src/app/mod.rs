@@ -182,6 +182,9 @@ pub enum Effect {
     Launch {
         machine: String,
         plan: Box<Plan>,
+        /// A failed launch's journal to remove once this one's first journal
+        /// is written, so that a crash in between loses neither.
+        retires: Option<String>,
     },
     /// Send the task of a launch whose startup dialog was answered.
     Resume {
@@ -660,9 +663,7 @@ impl App {
         let Some(first) = requests.first() else {
             return;
         };
-        if let Some(record) = self.composer.retry.take() {
-            self.retire(&record, effects);
-        }
+        let retired = self.composer.retry.take().and_then(|record| self.retire(&record, effects));
         for plan in &plans {
             let record = &plan.record;
             let mut harness = crate::threads::harness_label_for(&record.harness);
@@ -700,7 +701,12 @@ impl App {
         // A comparison is an experiment on one task, never a default.
         self.composer.compare.clear();
         let machine = first.machine_id.clone();
-        effects.extend(plans.into_iter().map(|plan| Effect::Launch { machine: machine.clone(), plan: Box::new(plan) }));
+        let mut retires = retired;
+        effects.extend(plans.into_iter().map(|plan| Effect::Launch {
+            machine: machine.clone(),
+            plan: Box::new(plan),
+            retires: retires.take(),
+        }));
         self.rebuild();
     }
 
@@ -828,11 +834,10 @@ impl App {
 
     /// Forgets a failed launch once its retry is sent, and closes the
     /// workspace it left behind. Its worktree stays on disk for the retry.
-    fn retire(&mut self, record_id: &str, effects: &mut Vec<Effect>) {
-        let Some(record) = self.records.remove(record_id) else {
-            return;
-        };
-        effects.push(Effect::Dismiss { record: record.id.clone() });
+    /// Returns its journal, for the retry to remove once its own is written.
+    fn retire(&mut self, record_id: &str, effects: &mut Vec<Effect>) -> Option<String> {
+        let record = self.records.remove(record_id)?;
+        let journal = record.id.clone();
         if let Some(workspace_id) = record.workspace_id.clone() {
             let thread = match &record.pane_id {
                 Some(pane) => threads::thread_id(&record.machine_id, pane),
@@ -843,6 +848,7 @@ impl App {
         }
         self.rebuild();
         self.fix_cursor();
+        Some(journal)
     }
 
     /// Forgets a failed launch's row. Its task stays in the history.

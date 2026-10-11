@@ -165,8 +165,9 @@ assert the compiled version separately from the version-independent layout.
   it is retried or dismissed; `e` brings its task back into the composer with
   its choices, any of which can change. A retry reuses the worktree the
   failed launch made, as a checkout, since its branch already has one, and
-  sending it retires the failed launch: its journal goes and its workspace
-  closes, leaving the worktree to the retry.
+  sending it retires the failed launch: its workspace closes, leaving the
+  worktree to the retry, and its journal goes once the retry's own journal is
+  written, so a crash in between loses neither.
 - **Dictated words are never lost.** Recording refuses to start without a
   way to transcribe; a delivery that fails keeps the transcript in its
   notice; while the microphone is open no key reaches an agent.

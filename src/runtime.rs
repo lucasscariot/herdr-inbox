@@ -298,9 +298,9 @@ fn perform(
                 work.discover(machine, transport.clone(), include_models);
             }
         }
-        Effect::Launch { machine, plan } => {
+        Effect::Launch { machine, plan, retires } => {
             if let Some((transport, link)) = fleet.get(&machine) {
-                work.launch(transport.runner(), *plan, link.refresher());
+                work.launch(transport.runner(), *plan, retires, link.refresher());
             }
         }
         Effect::Resume { machine, record } => {
@@ -573,13 +573,18 @@ impl Work {
         });
     }
 
-    fn launch(&self, runner: Runner, plan: Plan, refresh: impl Fn() + Send + 'static) {
+    fn launch(&self, runner: Runner, plan: Plan, retires: Option<String>, refresh: impl Fn() + Send + 'static) {
         let state = self.state.clone();
         let tx = self.tx.clone();
         thread::spawn(move || {
             let id = plan.record.id.clone();
+            let retires = std::cell::Cell::new(retires);
             let journal = |record: &Record| {
-                let _ = state.write(&format!("launches/{}.json", record.id), record);
+                let written = state.write(&format!("launches/{}.json", record.id), record).is_ok();
+                // The retried launch's journal goes once this one is on disk.
+                if written && let Some(old) = retires.take() {
+                    let _ = state.remove(&format!("launches/{old}.json"));
+                }
             };
             let progress = |text: &str| {
                 let _ = tx.send(Input::LaunchProgress { id: id.clone(), text: text.to_string() });
