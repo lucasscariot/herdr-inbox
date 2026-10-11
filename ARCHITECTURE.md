@@ -155,7 +155,9 @@ assert the compiled version separately from the version-independent layout.
   where every command gets a private server. The session is created with the
   executable from `harness_executables`, the one discovery read. The model's `provider/model` form is checked while
   planning, so a bad choice creates no worktree. A failed creation stops the
-  launch before the agent starts. OpenCode 1 still gets `--model`.
+  launch before the agent starts; an agent that then fails to start has its
+  session deleted (`session.remove`), since OpenCode keeps sessions until
+  deleted. A startup dialog keeps it: the agent is running on it. OpenCode 1 still gets `--model`.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
   own record: focusing a finished thread, or watching it finish, shows it as

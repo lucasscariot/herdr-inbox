@@ -886,7 +886,7 @@ case "$1" in
   --version) echo 'opencode v2.0.22'; exit 0 ;;
   models) echo 'opencode/big-pickle'; exit 0 ;;
   service) echo false; exit 0 ;;
-  api) printf '%s\n' "$@" > '{root}/opencode-api.args'
+  api) printf '%s\n' "$*" >> '{root}/opencode-api.calls'
        echo '{{"data":{{"id":"ses_e2e","model":{{"id":"big-pickle","providerID":"opencode"}}}}}}'; exit 0 ;;
 esac
 printf '%s\n' "$@" > '{root}/opencode-start.args'
@@ -916,10 +916,13 @@ exit 3
     inbox.wait_for_text("Fix login");
     inbox.click_text("↵ send", 2);
     inbox.wait_for_text("✗ cockpit · OpenCode");
-    let api = std::fs::read_to_string(root.join("opencode-api.args"))
+    let api = std::fs::read_to_string(root.join("opencode-api.calls"))
         .unwrap_or_else(|err| panic!("no OpenCode session was created: {err}; screen:\n{}", inbox.text()));
-    assert!(api.starts_with("api\nsession.create\n--data\n"), "{api}");
-    assert!(api.contains(r#""model":{"id":"big-pickle","providerID":"opencode"}"#), "{api}");
+    let calls: Vec<&str> = api.lines().collect();
+    assert!(calls[0].starts_with("api session.create --data "), "{api}");
+    assert!(calls[0].contains(r#""model":{"id":"big-pickle","providerID":"opencode"}"#), "{api}");
+    // This OpenCode never starts, so the session it was given is deleted.
+    assert_eq!(calls.get(1), Some(&"api session.remove --param sessionID=ses_e2e"), "{api}");
     let args = std::fs::read_to_string(root.join("opencode-start.args"))
         .unwrap_or_else(|err| panic!("the sandbox OpenCode was not launched: {err}; screen:\n{}", inbox.text()));
     assert_eq!(args, "--session\nses_e2e\n");

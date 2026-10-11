@@ -925,3 +925,31 @@ fn every_spelling_of_standalone_is_recognised() {
         plan_for(&opencode_request(Some("opencode/big-pickle")), &attached, Some(&opencode(true))).unwrap_err();
     assert!(refused.contains("--standalone"), "{refused}");
 }
+
+#[test]
+fn a_failed_agent_start_deletes_the_opencode_session_it_was_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "broken", "ok");
+    let mut with_server = settings();
+    with_server.harness_args.insert("opencode".into(), vec!["--server=http://box:4096".into()]);
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(result.is_err(), "{result:?}");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert_eq!(log.lines().last(), Some("api session.remove --server http://box:4096 --param sessionID=ses_abc"));
+}
+
+#[test]
+fn a_startup_dialog_keeps_the_opencode_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "blocked", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::WaitingForStartup(_))), "{result:?}");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert!(!log.contains("session.remove"), "{log}");
+}

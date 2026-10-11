@@ -196,14 +196,27 @@ impl Session {
         Ok(Self { program: program.into(), model: model.into(), model_ref, server: flag_value(args, &["--server"]) })
     }
 
-    /// The arguments of `opencode api session.create`.
-    fn create_args(&self, directory: &str) -> Vec<String> {
-        let body = serde_json::json!({ "model": self.model_ref, "location": { "directory": directory } });
-        let mut args = vec![self.program.clone(), "api".into(), "session.create".into()];
+    /// `opencode api <operation>` on the agent's server.
+    fn api_args(&self, operation: &str) -> Vec<String> {
+        let mut args = vec![self.program.clone(), "api".into(), operation.into()];
         if let Some(server) = &self.server {
             args.extend(["--server".into(), server.clone()]);
         }
+        args
+    }
+
+    /// The arguments of `opencode api session.create`.
+    fn create_args(&self, directory: &str) -> Vec<String> {
+        let body = serde_json::json!({ "model": self.model_ref, "location": { "directory": directory } });
+        let mut args = self.api_args("session.create");
         args.extend(["--data".into(), body.to_string()]);
+        args
+    }
+
+    /// The arguments of `opencode api session.remove`.
+    fn remove_args(&self, id: &str) -> Vec<String> {
+        let mut args = self.api_args("session.remove");
+        args.extend(["--param".into(), format!("sessionID={id}")]);
         args
     }
 }
@@ -833,9 +846,11 @@ fn steps(
     progress(&format!("starting {}", record.harness));
     record.stage = Stage::Starting;
     journal(record);
+    let mut created_session = None;
     if let Some(session) = &plan.session {
         let id = create_session(runner, session, &record.cwd)?;
-        agent_args.extend(["--session".to_string(), id]);
+        agent_args.extend(["--session".to_string(), id.clone()]);
+        created_session = Some((session, id));
     }
     let timeout = plan.start_timeout_ms.to_string();
     let mut start: Vec<&str> =
@@ -866,6 +881,11 @@ fn steps(
     };
     if let Err(error) = started {
         if !error.message.contains(STARTUP_BLOCKED) {
+            // OpenCode keeps sessions until deleted: a retry would leave
+            // one more empty session behind each time.
+            if let Some((session, id)) = &created_session {
+                remove_session(runner, session, id);
+            }
             return Err(error.message);
         }
         // A trust, login or update dialog waits in the terminal. Keep the
@@ -912,6 +932,15 @@ fn check_shared_server(runner: &Runner, session: &Session) -> Result<(), String>
         ));
     }
     Ok(())
+}
+
+/// Deletes a session the agent never opened. Best effort: the launch has
+/// already failed and says why.
+fn remove_session(runner: &Runner, session: &Session, id: &str) {
+    let args = session.remove_args(id);
+    let mut command = runner.exec(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let _ = run(command, &session.program, Duration::from_secs(15));
 }
 
 /// Creates an OpenCode session with the chosen model and returns its id.
