@@ -885,6 +885,7 @@ case "$1" in
   --help) printf '%s\n' '--session, -s string' '--prompt string'; exit 0 ;;
   --version) echo 'opencode v2.0.22'; exit 0 ;;
   models) echo 'opencode/big-pickle'; exit 0 ;;
+  service) echo false; exit 0 ;;
   api) printf '%s\n' "$@" > '{root}/opencode-api.args'
        echo '{{"data":{{"id":"ses_e2e","model":{{"id":"big-pickle","providerID":"opencode"}}}}}}'; exit 0 ;;
 esac

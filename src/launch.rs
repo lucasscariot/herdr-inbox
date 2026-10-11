@@ -562,7 +562,9 @@ pub fn plan(
         // A model pinned in harness_args would make OpenCode refuse to start.
         let pinned = flag_value(&args, &["--model", "-m"]);
         args = strip_flag(args, &["--model", "-m"]);
-        session = model.clone().or(pinned).map(|model| Session::new("opencode", &model, &args)).transpose()?;
+        // The executable discovery read, so the session goes to the same OpenCode.
+        let program = settings.harness_executables.get("opencode").map_or("opencode", String::as_str);
+        session = model.clone().or(pinned).map(|model| Session::new(program, &model, &args)).transpose()?;
     } else if let Some(model) = &model {
         if !catalog.selectable {
             return Err(format!("{} does not support choosing a model at launch", request.harness));
@@ -766,6 +768,10 @@ fn steps(
     progress: &dyn Fn(&str),
 ) -> Result<Outcome, String> {
     let (mut agent_args, base) = (plan.agent_args.clone(), plan.base.as_deref());
+    if let Some(session) = &plan.session {
+        // Before any change: a launch that cannot work leaves no worktree.
+        check_shared_server(runner, session)?;
+    }
     let created = if record.workspace == "worktree" {
         progress(&format!("creating worktree {}", record.branch));
         let mut args = vec![
@@ -862,6 +868,36 @@ fn steps(
     progress("sending the task");
     submit(runner, record, journal)?;
     Ok(Outcome::Sent(record.clone()))
+}
+
+/// Refuses a launch whose session the TUI could never open. With OpenCode's
+/// background service disabled, every command runs its own private server,
+/// so a session created ahead of the TUI is lost with it. A `--server` names
+/// a shared one instead.
+fn check_shared_server(runner: &Runner, session: &Session) -> Result<(), String> {
+    if session.server.is_some() {
+        return Ok(());
+    }
+    let mut command = runner.exec(&[&session.program, "service", "get", "disabled"]);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // An OpenCode that cannot answer gets the benefit of the doubt: creating
+    // the session reports any real failure.
+    let Ok(output) = run(command, &session.program, Duration::from_secs(15)) else {
+        return Ok(());
+    };
+    let stdout = if runner.has_marker() {
+        crate::herdr::ssh::after_marker(&output.stdout).unwrap_or("")
+    } else {
+        output.stdout.as_str()
+    };
+    if output.success && stdout.trim() == "true" {
+        return Err(format!(
+            "OpenCode's background service is disabled, so it cannot start on {}: enable it \
+             (opencode service set disabled false), add --server to its harness_args, or pick Default",
+            session.model
+        ));
+    }
+    Ok(())
 }
 
 /// Creates an OpenCode session with the chosen model and returns its id.

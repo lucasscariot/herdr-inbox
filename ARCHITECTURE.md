@@ -150,7 +150,10 @@ assert the compiled version separately from the version-independent layout.
   The agent then starts with `--session <id>`. A `--server` in the arguments
   goes to the API call too, so the session lives where the TUI connects;
   `--standalone` with a chosen model is refused, since its private server
-  never sees the session. The model's `provider/model` form is checked while
+  never sees the session; so is a machine whose OpenCode background service
+  is disabled (`opencode service get disabled`, checked before any change),
+  where every command gets a private server. The session is created with the
+  executable from `harness_executables`, the one discovery read. The model's `provider/model` form is checked while
   planning, so a bad choice creates no worktree. A failed creation stops the
   launch before the agent starts. OpenCode 1 still gets `--model`.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own

@@ -804,14 +804,17 @@ fn bad_opencode_session_choices_are_refused_before_anything_runs() {
     assert_eq!((default.agent_args, default.session), (vec!["--standalone".to_string()], None));
 }
 
-/// A fake `opencode` whose `api session.create` logs its arguments and
-/// answers with `answer`.
-fn fake_opencode(dir: &Path, answer: &str) -> String {
+/// A fake `opencode` that logs its arguments, says whether its background
+/// service is `disabled`, and answers `api session.create` with `answer`.
+fn fake_opencode(dir: &Path, disabled: &str, answer: &str) -> String {
     let path = dir.join("opencode");
     let log = dir.join("opencode.log");
     crate::testing::write_executable(
         &path,
-        &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{answer}\n", log.display()),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n[ \"$1\" = service ] && {{ echo {disabled}; exit 0; }}\n{answer}\n",
+            log.display()
+        ),
     );
     path.display().to_string()
 }
@@ -823,12 +826,14 @@ fn an_opencode_2_launch_creates_the_session_then_opens_it() {
     let mut plan =
         plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
     plan.session.as_mut().unwrap().program =
-        fake_opencode(dir.path(), r#"echo '{"data":{"id":"ses_abc","model":{"id":"big-pickle"}}}'"#);
+        fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc","model":{"id":"big-pickle"}}}'"#);
     let (result, _, _) = execute_logged(&runner, plan);
     assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
-    let created = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    let (checked, created) = log.trim().split_once('\n').unwrap();
+    assert_eq!(checked, "service get disabled");
     assert!(created.starts_with("api session.create --data "), "{created}");
-    let body: Value = serde_json::from_str(created.trim().trim_start_matches("api session.create --data ")).unwrap();
+    let body: Value = serde_json::from_str(created.trim_start_matches("api session.create --data ")).unwrap();
     assert_eq!(body["location"]["directory"], "/h/wt/new");
     assert_eq!(body["model"], serde_json::json!({"providerID": "opencode", "id": "big-pickle"}));
     assert_eq!(
@@ -845,6 +850,7 @@ fn a_failed_opencode_session_stops_the_launch_before_the_agent_starts() {
         plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
     plan.session.as_mut().unwrap().program = fake_opencode(
         dir.path(),
+        "false",
         "printf '%s\\n' 'Error: background service unavailable' '    at cli.api (x.js:1:2)' '}' >&2; exit 1",
     );
     let (result, _, _) = execute_logged(&runner, plan);
@@ -855,4 +861,43 @@ fn a_failed_opencode_session_stops_the_launch_before_the_agent_starts() {
     );
     assert_eq!(record.failed_stage, Some(Stage::Starting));
     assert!(!calls(dir.path()).iter().any(|call| call.starts_with("agent start")));
+}
+
+#[test]
+fn a_disabled_opencode_service_stops_the_launch_before_any_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "true", "echo unreachable");
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, error }) = result else { panic!("{result:?}") };
+    assert!(error.contains("background service is disabled"), "{error}");
+    assert_eq!(record.failed_stage, Some(Stage::Creating));
+    assert!(calls(dir.path()).is_empty(), "no worktree was created");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert_eq!(log, "service get disabled\n", "no session was created");
+}
+
+#[test]
+fn a_named_server_skips_the_service_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut with_server = settings();
+    with_server.harness_args.insert("opencode".into(), vec!["--server=http://box:4096".into()]);
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "true", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
+    let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert!(log.starts_with("api session.create --server http://box:4096 --data "), "{log}");
+}
+
+#[test]
+fn opencode_sessions_use_the_configured_executable() {
+    let mut custom = settings();
+    custom.harness_executables.insert("opencode".into(), "opencode-dev".into());
+    let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &custom, Some(&opencode(true))).unwrap();
+    assert_eq!(plan.session.unwrap().program, "opencode-dev");
 }
