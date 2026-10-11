@@ -87,6 +87,11 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Fixed
 
+- Retrying a failed launch (`e`) no longer fails with "already exists" when
+  the launch had made its worktree: the retry reuses that worktree, keeps the
+  task, can use any preset, and retires the failed launch once sent. Failed
+  rows show `e retry`, the failure notice says how to retry, and dismissing
+  one points to the task in the composer history (`Ctrl+P`).
 - Read the theme from `HERDR_CONFIG_PATH` when set, matching Herdr instead of
   silently using the default config file.
 - Limit Herdr's configured accent to focus and selected items rather than
