@@ -493,10 +493,11 @@ fn sidebar(buf: &mut Buffer, app: &App, palette: &Palette, now: SystemTime) {
                 let is_open = app.focus != Focus::Composer && app.open.as_ref().is_some_and(|o| o.id == thread.id);
                 let confirming = app.confirm_archive.as_deref() == Some(thread.id.as_str());
                 let row_area = Rect::new(area.x, y, area.width, 1);
-                if is_highlighted {
-                    fill(buf, row_area, Style::new().bg(palette.active_row_bg).fg(palette.text));
+                if is_highlighted && let Some(bg) = palette.active_row() {
+                    fill(buf, row_area, Style::new().bg(bg).fg(palette.text));
                 }
-                thread_line(buf, row_area, thread, line, is_open, confirming, palette, now);
+                let thread_row = ThreadRow { line, is_open, is_highlighted, confirming };
+                thread_line(buf, row_area, thread, thread_row, palette, now);
             }
         }
     }
@@ -577,19 +578,24 @@ fn highlighted(app: &App) -> Option<&str> {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // One row of one thread needs all of these.
-fn thread_line(
-    buf: &mut Buffer,
-    area: Rect,
-    thread: &Thread,
+/// Which line of a thread's block is drawn, and how the thread stands.
+struct ThreadRow {
     line: u16,
     is_open: bool,
+    is_highlighted: bool,
     confirming: bool,
-    palette: &Palette,
-    now: SystemTime,
-) {
+}
+
+fn thread_line(buf: &mut Buffer, area: Rect, thread: &Thread, row: ThreadRow, palette: &Palette, now: SystemTime) {
+    let ThreadRow { line, is_open, is_highlighted, confirming } = row;
     let status = status_style(thread.status, palette);
-    buf.set_string(area.x, area.y, "▎", status);
+    // Without a fill the theme can read on, a thick accent edge marks the
+    // highlighted thread instead.
+    let edge = match is_highlighted && palette.active_row().is_none() {
+        true => ("▌", Style::new().fg(palette.accent)),
+        false => ("▎", status),
+    };
+    buf.set_string(area.x, area.y, edge.0, edge.1);
     let x = area.x + 1;
     let width = area.width.saturating_sub(2);
     let dim = Style::new().fg(palette.subtext0).add_modifier(Modifier::DIM);

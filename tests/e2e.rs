@@ -251,6 +251,15 @@ impl Inbox {
     }
 
     fn foreground(&self, needle: &str) -> vt100::Color {
+        self.cell(needle).fgcolor()
+    }
+
+    fn background(&self, needle: &str) -> vt100::Color {
+        self.cell(needle).bgcolor()
+    }
+
+    /// The first cell of `needle` on screen.
+    fn cell(&self, needle: &str) -> vt100::Cell {
         use unicode_width::UnicodeWidthStr;
         let screen = self.screen.lock().unwrap();
         let text = screen.screen().contents();
@@ -259,7 +268,7 @@ impl Inbox {
             .enumerate()
             .find_map(|(row, line)| line.find(needle).map(|byte| (row as u16, line[..byte].width() as u16)))
             .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{text}"));
-        screen.screen().cell(row, column).expect("text cell").fgcolor()
+        screen.screen().cell(row, column).expect("text cell").clone()
     }
 
     fn wait_for_text(&self, needle: &str) {
@@ -549,6 +558,32 @@ fn herdr_config_colours_neutral_labels_and_only_active_accents() {
             assert_eq!(inbox.foreground(label), vt100::Color::Rgb(170, 170, 170), "{label}");
         }
     }
+}
+
+#[test]
+fn the_plain_terminal_theme_marks_the_selected_thread_without_a_grey_fill() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    std::fs::write(sandbox.root.path().join("config/herdr/config.toml"), "[theme]\nname = \"terminal\"\n")
+        .expect("Herdr theme config");
+    let repo = git_repo(sandbox.root.path(), "contrast", "main");
+    let created =
+        sandbox.herdr(&["workspace", "create", "--cwd", repo.to_str().unwrap(), "--label", "contrast", "--no-focus"]);
+    let pane = created["result"]["root_pane"]["pane_id"].as_str().expect("pane id");
+    sandbox.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "pi", "--state", "idle", pane]);
+    sandbox.herdr(&["pane", "report-metadata", pane, "--source", "e2e", "--token", "thread=Readable title"]);
+
+    let inbox = Inbox::start(&sandbox, 110, 24);
+    inbox.wait_for_text("Readable title");
+    // ANSI bright black is the grey of dim text: filling the row with it hid
+    // the title and the harness. The row keeps the terminal's background and
+    // a thick accent edge marks it.
+    assert_eq!(inbox.cell("▌Readable title").fgcolor(), vt100::Color::Idx(4));
+    assert_eq!(inbox.foreground("Readable title"), vt100::Color::Idx(4));
+    assert_eq!(inbox.background("Readable title"), vt100::Color::Default);
+    assert_eq!(inbox.background("Pi"), vt100::Color::Default);
 }
 
 #[test]

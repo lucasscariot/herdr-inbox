@@ -192,6 +192,16 @@ impl Palette {
         }
     }
 
+    /// The fill under the highlighted row, when the theme defines it in RGB.
+    /// An ANSI grey is the colour terminals use for dim text, so text drawn
+    /// on it, the accent and faint metadata above all, becomes unreadable.
+    pub fn active_row(&self) -> Option<Color> {
+        match self.active_row_bg {
+            Color::Rgb(..) => Some(self.active_row_bg),
+            _ => None,
+        }
+    }
+
     fn apply(&mut self, custom: &toml::Table) {
         let tokens: [(&str, &mut Color); 19] = [
             ("accent", &mut self.accent),

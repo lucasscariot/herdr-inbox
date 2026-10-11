@@ -95,7 +95,7 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
     for (field, row) in &layout.fields {
         let enabled = enabled_fields.contains(field);
         let active = composer.field == *field;
-        let bg = if active { palette.active_row_bg } else { palette.panel_bg };
+        let bg = if active { palette.active_row().unwrap_or(palette.panel_bg) } else { palette.panel_bg };
         let style = base.bg(bg);
         fill(buf, *row, style);
         let marker = if active { "▸ " } else { "  " };
@@ -275,7 +275,7 @@ fn strip(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Palette
         return;
     }
     let focused = composer.field == Field::Preset && composer.picker.is_none();
-    let bg = if focused { palette.active_row_bg } else { palette.panel_bg };
+    let bg = if focused { palette.active_row().unwrap_or(palette.panel_bg) } else { palette.panel_bg };
     let base = Style::new().fg(palette.text).bg(bg);
     fill(buf, area, base);
     let marker = if focused { "▸ " } else { "  " };

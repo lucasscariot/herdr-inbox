@@ -291,6 +291,27 @@ fn the_selected_discussion_is_highlighted_and_accented_while_browsing() {
 }
 
 #[test]
+fn an_ansi_row_colour_marks_the_selection_with_an_edge_not_a_fill() {
+    // The plain terminal theme's row colour is ANSI bright black, the grey
+    // terminals use for dim text: a fill of it hides the title and metadata.
+    let palette = crate::theme::from_herdr_config("[theme]\nname = \"terminal\"");
+    assert_eq!(palette.active_row(), None);
+    let mut app = loaded(100, 24);
+    press(&mut app, KeyCode::Char('j'));
+    let terminal = render_with_palette(&app, at(0), &palette);
+    let buffer = terminal.backend().buffer();
+    let (x, y) = find(&terminal, "▌Review navigation");
+    for row in y - 1..=y + 1 {
+        assert_eq!(buffer[(x, row)].symbol(), "▌", "every line of the thread carries the edge");
+        assert_eq!(buffer[(x, row)].fg, palette.accent);
+        assert_eq!(buffer[(5, row)].bg, palette.sidebar_bg, "no grey fill");
+    }
+    assert_eq!(buffer[(x + 1, y)].fg, palette.accent, "the title keeps its accent, on the plain sidebar");
+    let (x, y) = find(&terminal, "Fix the login");
+    assert_eq!(buffer[(x - 1, y)].symbol(), "▎", "other threads keep their status edge");
+}
+
+#[test]
 fn with_the_agent_focused_the_open_thread_is_highlighted() {
     let mut app = loaded(100, 24);
     press(&mut app, KeyCode::Enter);
