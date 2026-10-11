@@ -67,6 +67,35 @@ pub struct Config {
     /// Dictation: a forced backend, a command, language, model, keys.
     #[serde(default)]
     pub speech: crate::speech::backends::SpeechConfig,
+    /// Subscription usage: whether it is read, and which provider's limits
+    /// apply to a harness the table does not know.
+    #[serde(default)]
+    pub usage: UsageConfig,
+}
+
+/// `[usage]`: every key optional.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct UsageConfig {
+    /// Read usage and offer the Auto harness at all.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// harness → `anthropic` or `openai`, for CLIs that run on one of those
+    /// subscriptions without being the `claude` or `codex` CLI.
+    #[serde(default)]
+    pub providers: BTreeMap<String, String>,
+    /// Give every Claude thread the status line wrapper that reports usage.
+    #[serde(default = "yes")]
+    pub claude_statusline: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for UsageConfig {
+    fn default() -> Self {
+        Self { enabled: true, providers: BTreeMap::new(), claude_statusline: true }
+    }
 }
 
 /// The effective settings for one machine.
@@ -115,6 +144,13 @@ impl Config {
         }
         if executables.flat_map(|map| map.values()).any(|exe| exe.trim().is_empty()) {
             return Err(invalid(path, "harness_executables cannot map a harness to an empty name"));
+        }
+        let known: Vec<&str> = crate::usage::PROVIDERS.iter().map(|(_, provider)| *provider).collect();
+        if let Some(unknown) = self.usage.providers.values().find(|p| !known.contains(&p.as_str())) {
+            return Err(invalid(
+                path,
+                &format!("usage.providers values must be one of {}, not {unknown}", known.join(", ")),
+            ));
         }
         Ok(self)
     }
@@ -253,6 +289,24 @@ mod tests {
         let studio = config.for_machine("b6f5", "Mac Studio", false).projects;
         assert_eq!(studio.len(), 1);
         assert_eq!(studio[0].name.as_deref(), Some("bee"));
+    }
+
+    #[test]
+    fn usage_settings_default_on_and_map_harnesses_to_known_providers() {
+        let config = Config::default();
+        assert!(config.usage.enabled);
+        assert!(config.usage.claude_statusline);
+        let config = toml(
+            "[usage]\nenabled = false\nclaude_statusline = false\nproviders = { opencode = \"anthropic\", pi = \"openai\" }\n",
+        );
+        assert!(!config.usage.enabled);
+        assert!(!config.usage.claude_statusline);
+        assert_eq!(config.usage.providers["opencode"], "anthropic");
+        let err = Config::parse_toml("[usage]\nproviders = { pi = \"gemini\" }", Path::new("c")).unwrap_err();
+        assert!(
+            err.to_string().contains("usage.providers values must be one of anthropic, openai, not gemini"),
+            "{err}"
+        );
     }
 
     #[test]

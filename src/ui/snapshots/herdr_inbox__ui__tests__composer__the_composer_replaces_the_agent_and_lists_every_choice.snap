@@ -20,9 +20,9 @@ expression: "text(&render(&app, at(1)))"
                                     │    Thinking   Default                                            F8  ›
  WORKING  1                         │    Workspace  New worktree  ⎇ fix-login-redirect-loop            F9  ›
 ▎api                      ◐ working │    Compare    Off · one agent                                   F12  ›
-▎Add invoice export                 │
-▎◆ Codex · ⎇ main                   │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
-                                    │
+▎Add invoice export                 │    Usage      ✻ Claude no data yet                                   …
+▎◆ Codex · ⎇ main                   │
+                                    │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets   F10 v…
  IDLE  1                            │
 ▎scratch                     ○ idle │
 ▎New Pi thread                      │

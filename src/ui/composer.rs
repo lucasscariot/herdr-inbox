@@ -122,6 +122,7 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
             &[(key, style.fg(palette.subtext0).add_modifier(Modifier::DIM))],
         );
     }
+    usage_row(buf, app, &layout, palette, now);
     if layout.send.height > 0 {
         let key = base.fg(palette.subtext0).add_modifier(Modifier::BOLD);
         let dictate = if app.config.speech.space_hold_enabled() { "hold ␣" } else { "⌃T" };
@@ -261,6 +262,73 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         }
     }
     Drawn { cursor }
+}
+
+/// The usage row: each provider's windows, in the tone of how spent they
+/// are, with the age of the newest read on the right.
+fn usage_row(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Palette, now: SystemTime) {
+    let area = layout.usage;
+    if area.height == 0 {
+        return;
+    }
+    let ctx = app.composer_context();
+    let base = Style::new().fg(palette.text).bg(palette.panel_bg);
+    let dim = base.fg(palette.overlay0);
+    fill(buf, area, base);
+    let mut left = vec![
+        ("  ".to_string(), base),
+        (format!("{:<width$}", "Usage", width = LABEL_WIDTH as usize), base.fg(palette.subtext0)),
+    ];
+    let Some(machine) = app.composer.machine.as_deref() else {
+        left.push(("no machine yet".into(), dim));
+        split_line(buf, area.x, area.y, area.width, &left, &[]);
+        return;
+    };
+    let report = app.usage.get(machine);
+    let harnesses = app.inventories.get(machine).map(|i| i.harnesses.clone()).unwrap_or_default();
+    let mut seen = Vec::new();
+    for harness in &harnesses {
+        let Some(provider) = ctx.provider(harness) else {
+            continue;
+        };
+        if seen.contains(&provider) {
+            continue;
+        }
+        seen.push(provider.clone());
+        if seen.len() > 1 {
+            left.push(("  ·  ".into(), dim));
+        }
+        let (mark, mark_style) = super::harness::label(harness, palette);
+        left.push((mark, mark_style.bg(palette.panel_bg)));
+        left.push((crate::threads::harness_label_for(harness), base.fg(palette.subtext0)));
+        match report.and_then(|r| r.usage(&provider)) {
+            Some(usage) if usage.reached => {
+                left.push((format!(" {}", usage.summary(now)), base.fg(palette.red)));
+            }
+            Some(usage) => {
+                for window in &usage.windows {
+                    let tone =
+                        if window.used_percent >= 80 { base.fg(palette.yellow) } else { base.fg(palette.subtext0) };
+                    left.push((format!(" {} ", window.label), dim));
+                    left.push((format!("{}%", window.used_percent), tone));
+                }
+            }
+            // The picker's detail says why; the row stays one line.
+            None => left.push((" no data yet".into(), dim)),
+        }
+    }
+    if seen.is_empty() {
+        left.push(("no provider reports usage here".into(), dim));
+    }
+    let right = if app.usage_reading.contains(machine) {
+        "…".to_string()
+    } else {
+        report
+            .filter(|r| r.read_at > 0)
+            .map(|r| super::age(std::time::UNIX_EPOCH + std::time::Duration::from_secs(r.read_at), now))
+            .unwrap_or_default()
+    };
+    split_line(buf, area.x, area.y, area.width, &left, &[(right, dim)]);
 }
 
 /// The preset strip: a label, then one chip per preset in the user's order

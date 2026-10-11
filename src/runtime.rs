@@ -33,6 +33,7 @@ use crate::speech::whisper;
 use crate::state::State;
 use crate::theme;
 use crate::threads;
+use crate::usage;
 
 mod redraw;
 use redraw::Redraw;
@@ -298,6 +299,11 @@ fn perform(
                 work.discover(machine, transport.clone(), include_models);
             }
         }
+        Effect::ReadUsage { machine, codex, claude } => {
+            if let Some((transport, _)) = fleet.get(&machine) {
+                work.read_usage(machine, transport.clone(), codex, claude);
+            }
+        }
         Effect::Launch { machine, plan } => {
             if let Some((transport, link)) = fleet.get(&machine) {
                 work.launch(transport.runner(), *plan, link.refresher());
@@ -531,6 +537,12 @@ impl Work {
                 app.update(Input::Inventory { machine: machine.clone(), result: Ok(cached) }, now);
             }
         }
+        for machine in self.labels.keys() {
+            let cached: Option<usage::Report> = self.state.read(&usage_file(machine));
+            if let Some(report) = cached {
+                app.update(Input::Usage { machine: machine.clone(), result: Ok(report) }, now);
+            }
+        }
         let cutoff = discovery::seconds(now).saturating_sub(JOURNAL_DAYS * 86_400);
         let mut records = Vec::new();
         for id in self.state.list("launches") {
@@ -573,6 +585,24 @@ impl Work {
         });
     }
 
+    /// Reads a machine's subscription usage through its CLIs' own channels.
+    fn read_usage(&self, machine: String, transport: Transport, codex: Option<String>, claude: bool) {
+        let state_dir = transport.is_local().then(|| self.state.dir().to_string_lossy().into_owned());
+        let state = self.state.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let settings = usage::settings(state_dir.as_deref(), codex.as_deref(), claude);
+            let result = transport
+                .probe(usage::PROBE, &settings, USAGE_TIMEOUT)
+                .map_err(|err| err.to_string())
+                .and_then(|output| usage::finish(&output, SystemTime::now()));
+            if let Ok(report) = &result {
+                let _ = state.write(&usage_file(&machine), report);
+            }
+            let _ = tx.send(Input::Usage { machine, result });
+        });
+    }
+
     fn launch(&self, runner: Runner, plan: Plan, refresh: impl Fn() + Send + 'static) {
         let state = self.state.clone();
         let tx = self.tx.clone();
@@ -604,12 +634,20 @@ impl Work {
 }
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
+const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long delivered launches are kept for re-sending.
 const JOURNAL_DAYS: u64 = 14;
 
 fn inventory_file(machine: &str) -> String {
-    let safe: String = machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-    format!("inventory/{safe}.json")
+    format!("inventory/{}.json", safe_name(machine))
+}
+
+fn usage_file(machine: &str) -> String {
+    format!("usage/{}.json", safe_name(machine))
+}
+
+fn safe_name(machine: &str) -> String {
+    machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
 }
 
 /// Starts `herdr server` detached, exactly as `herdr` itself would.

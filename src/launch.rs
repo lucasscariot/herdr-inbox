@@ -111,6 +111,10 @@ pub struct Record {
     pub project: String,
     pub repo: String,
     pub harness: String,
+    /// The inbox chose the harness for its usage left: the project
+    /// remembers the choosing, not the harness.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub harness_auto: bool,
     #[serde(default)]
     pub model: String,
     #[serde(default)]
@@ -153,6 +157,19 @@ pub struct Plan {
     pub base: Option<String>,
     /// For `herdr agent start --timeout`.
     pub start_timeout_ms: u64,
+}
+
+impl Plan {
+    /// Gives a Claude thread the status line wrapper that reports usage,
+    /// unless the user's own arguments already set `--settings`.
+    pub fn with_claude_statusline(&mut self, wrapper: &str) {
+        if self.record.harness != "claude"
+            || self.agent_args.iter().any(|a| a == "--settings" || a.starts_with("--settings="))
+        {
+            return;
+        }
+        self.agent_args.extend(["--settings".to_string(), crate::usage::statusline_settings(wrapper)]);
+    }
 }
 
 /// The task without its pasted images, for titles and branch names.
@@ -510,6 +527,7 @@ pub fn plan(
         project: request.project.name.clone(),
         repo: request.project.path.clone(),
         harness: request.harness.clone(),
+        harness_auto: false,
         model: model.unwrap_or_default(),
         thinking: thinking.unwrap_or_default(),
         title,

@@ -28,6 +28,7 @@ public interfaces.
 | `config` | `config.toml` (or the legacy plugin's `config.json`): roots, depth, branch prefix, harness arguments and executables, extra models, per-machine overrides. |
 | `state` | Remembered choices, cached inventories and launch journals under `$XDG_STATE_HOME/herdr-inbox`, written atomically and privately. |
 | `discovery` | An embedded Python 3.9+ probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs. Codex's cache supplies per-model reasoning levels, with `CODEX_HOME` respected. Models are cached 15 minutes; a capability revision expires older inventories once. |
+| `usage` | Subscription usage per provider (Anthropic behind `claude`, OpenAI behind `codex`, or as the config maps a harness), and the pick of the harness with the most headroom. An embedded Python probe asks Codex's own app server (`account/rateLimits/read`, session log as fallback) and reads the cache a status line wrapper, also embedded and installed by the probe, fills from the JSON Claude Code hands its status line. Reports are cached per machine; a project can remember `auto` instead of a harness. |
 | `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. A comparison is one plan per agent, each with its own worktree, planned together before any runs. |
 | `editor`, `fuzzy` | The composer's text box, cell-to-cursor placement using the same Unicode-aware wrapping as drawing, and its pickers' ranking. Model pickers match labels and ids. |
 | `images` | Pasted images: `[Image #N]` placeholders in the editor, their paths in the sent text, and the split that pastes each image on its own so agents attach it. Pure. |
@@ -177,6 +178,13 @@ assert the compiled version separately from the version-independent layout.
   never in its arguments, and a key being typed is drawn as dots.
 - **Discovery, launches and self-updates never block the UI.** They run on
   worker threads and report back as inputs.
+- **Usage comes from the CLIs' own channels.** Codex is asked through its
+  documented app server; Claude Code reports through the status line it runs,
+  so the inbox gives every Claude thread it launches a wrapper that caches
+  those numbers and still runs the user's own status line. The inbox never
+  reads or sends a provider token. The Auto harness is resolved on every
+  settle from the last report, so a send always has a concrete harness even
+  before any numbers exist.
 - **Updates are explicit and local.** Ctrl+G in the list or composer checks the
   latest stable GitHub release; Enter confirms the exact tag shown. The archive
   and SHA-256 must both be published for this platform. The installer verifies

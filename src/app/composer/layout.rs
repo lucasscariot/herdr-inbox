@@ -18,6 +18,8 @@ pub struct ComposerLayout {
     /// Every chip that fits, flowing left to right and wrapping.
     pub chips: Vec<(ChipView, Rect)>,
     pub fields: Vec<(Field, Rect)>,
+    /// The usage row under the fields, when usage is read at all.
+    pub usage: Rect,
     pub send: Rect,
     pub details_y: u16,
     pub picker: Option<PickerLayout>,
@@ -34,9 +36,9 @@ impl ComposerLayout {
     pub const LABEL_WIDTH: u16 = 11;
     /// Room kept for a row's key hint, `F7  ›`.
     const KEY_WIDTH: u16 = 7;
-    /// Rows under the strip that stay with the fields: a blank line and the
-    /// seven field rows.
-    const RESERVED_ROWS: u16 = 8;
+    /// Rows under the strip that stay with the fields: a blank line, the
+    /// seven field rows and the usage row.
+    const RESERVED_ROWS: u16 = 9;
 
     pub fn new(area: Rect, composer: &Composer, ctx: &Context) -> Option<Self> {
         if area.width < 20 || area.height < 8 {
@@ -102,6 +104,13 @@ impl ComposerLayout {
             fields.push((field, Rect::new(content.x, y, content.width, 1)));
             y += 1;
         }
+        let usage = if ctx.config.usage.enabled && y < limit {
+            let row = Rect::new(content.x, y, content.width, 1);
+            y += 1;
+            row
+        } else {
+            Rect::default()
+        };
         let send = if y + 1 < area.bottom() { Rect::new(content.x, y + 1, 8, 1) } else { Rect::default() };
         let picker = composer.picker.as_ref().map(|picker| {
             let anchor = match picker.field {
@@ -127,6 +136,7 @@ impl ComposerLayout {
             strip,
             chips,
             fields,
+            usage,
             send,
             details_y: y + 3,
             picker,
@@ -167,7 +177,7 @@ mod tests {
                     let Some(layout) = ComposerLayout::new(area, &app.composer, &app.composer_context()) else {
                         continue;
                     };
-                    let mut rects = vec![layout.content, layout.task_box, layout.task_inner, layout.send];
+                    let mut rects = vec![layout.content, layout.task_box, layout.task_inner, layout.send, layout.usage];
                     rects.extend(layout.fields.iter().map(|(_, rect)| *rect));
                     rects.push(layout.strip);
                     rects.extend(layout.chips.iter().map(|(_, rect)| *rect));

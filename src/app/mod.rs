@@ -24,6 +24,7 @@ use crate::launch::{self, Failure, Outcome, Plan, Record};
 use crate::screen::Screen;
 use crate::state::{Preferences, Remembered};
 use crate::threads::{self, Activity, Source, Thread, ThreadId};
+use crate::usage;
 
 pub use composer::layout::ComposerLayout;
 pub use composer::{COMPARE_LIMIT, Chip, ChipView, Choice, Composer, Contender, Field, Pick, Picker, WorkspaceSel};
@@ -179,6 +180,13 @@ pub enum Effect {
         machine: String,
         include_models: bool,
     },
+    /// Read a machine's subscription usage: Codex through its app server
+    /// when `codex` names its executable, Claude's cache when `claude`.
+    ReadUsage {
+        machine: String,
+        codex: Option<String>,
+        claude: bool,
+    },
     Launch {
         machine: String,
         plan: Box<Plan>,
@@ -262,6 +270,10 @@ pub enum Input {
         machine: String,
         result: Result<Inventory, String>,
     },
+    Usage {
+        machine: String,
+        result: Result<usage::Report, String>,
+    },
     LaunchProgress {
         id: String,
         text: String,
@@ -343,6 +355,14 @@ pub struct App {
     pub discovering: HashSet<String>,
     /// Why a machine's discovery failed, until it succeeds.
     pub discovery_errors: HashMap<String, String>,
+    /// Each machine's last subscription usage report.
+    pub usage: HashMap<String, usage::Report>,
+    /// Machines whose usage is being read right now.
+    pub usage_reading: HashSet<String>,
+    /// Reads the user asked for (F5): a failure is worth a notice.
+    usage_asked: HashSet<String>,
+    /// The time of the last input, for what the composer shows.
+    clock: SystemTime,
     /// The composer's draft, kept while it is closed.
     pub composer: Composer,
     pub launches: Vec<LaunchView>,
@@ -426,6 +446,10 @@ impl App {
             inventories: HashMap::new(),
             discovering: HashSet::new(),
             discovery_errors: HashMap::new(),
+            usage: HashMap::new(),
+            usage_reading: HashSet::new(),
+            usage_asked: HashSet::new(),
+            clock: std::time::UNIX_EPOCH,
             composer: Composer::default(),
             launches: Vec::new(),
             waiting: HashMap::new(),
@@ -474,6 +498,8 @@ impl App {
             preferences: &self.preferences,
             config: &self.config,
             presets: &self.presets,
+            usage: &self.usage,
+            now: self.clock,
         };
         f(&mut self.composer, &ctx)
     }
@@ -485,11 +511,14 @@ impl App {
             preferences: &self.preferences,
             config: &self.config,
             presets: &self.presets,
+            usage: &self.usage,
+            now: self.clock,
         }
     }
 
     pub fn update(&mut self, input: Input, now: SystemTime) -> Vec<Effect> {
         let mut effects = Vec::new();
+        self.clock = now;
         match input {
             Input::Snapshot { machine, snapshot, checkouts } => {
                 self.on_snapshot(&machine, snapshot, checkouts, now, &mut effects);
@@ -520,7 +549,8 @@ impl App {
                 Ok(()) => self.notify(format!("Archived “{title}”"), NoticeKind::Info, now),
                 Err(err) => self.notify(format!("Could not archive “{title}”: {err}"), NoticeKind::Error, now),
             },
-            Input::Inventory { machine, result } => self.on_inventory(&machine, result),
+            Input::Inventory { machine, result } => self.on_inventory(&machine, result, now, &mut effects),
+            Input::Usage { machine, result } => self.on_usage(&machine, result, now),
             Input::LaunchProgress { id, text } => self.set_launch(&id, LaunchState::Running(text)),
             Input::LaunchFinished { id, result } => self.on_launch_finished(&id, result, now, &mut effects),
             Input::Resumed { result } => self.on_resumed(result, now),
@@ -568,6 +598,9 @@ impl App {
                 if self.notice.as_ref().is_some_and(|n| n.until <= now) {
                     self.notice = None;
                 }
+                if self.focus == Focus::Composer {
+                    self.read_usage(false, now, &mut effects);
+                }
                 match self.hold.tick(now) {
                     Step::Type(spaces) => input::type_spaces(self, spaces, now, &mut effects),
                     Step::Release => self.release_space(now, &mut effects),
@@ -608,9 +641,69 @@ impl App {
             self.discovering.insert(machine.id.clone());
             effects.push(Effect::Discover { machine: machine.id.clone(), include_models: force_models || !fresh });
         }
+        self.read_usage(force_models, now, effects);
     }
 
-    fn on_inventory(&mut self, machine: &str, result: Result<Inventory, String>) {
+    /// Asks every live machine with a known provider for its usage, when
+    /// the last report is older than the TTL or when forced.
+    pub(crate) fn read_usage(&mut self, force: bool, now: SystemTime, effects: &mut Vec<Effect>) {
+        if !self.config.usage.enabled {
+            return;
+        }
+        for machine in &self.machines {
+            if !machine.connection.is_live() || self.usage_reading.contains(&machine.id) {
+                continue;
+            }
+            if !force && self.usage.get(&machine.id).is_some_and(|r| r.fresh(now)) {
+                continue;
+            }
+            let Some(inventory) = self.inventories.get(&machine.id) else {
+                continue;
+            };
+            let providers: Vec<String> = inventory
+                .harnesses
+                .iter()
+                .filter_map(|h| usage::provider_for(h, &self.config.usage.providers))
+                .collect();
+            let claude = providers.iter().any(|p| p == "anthropic");
+            let codex = (providers.iter().any(|p| p == "openai") && inventory.harnesses.iter().any(|h| h == "codex"))
+                .then(|| {
+                    let settings = self.config.for_machine(&machine.id, &machine.label, machine.is_local());
+                    settings.harness_executables.get("codex").cloned().unwrap_or_else(|| "codex".into())
+                });
+            if !claude && codex.is_none() {
+                continue;
+            }
+            self.usage_reading.insert(machine.id.clone());
+            if force {
+                self.usage_asked.insert(machine.id.clone());
+            }
+            effects.push(Effect::ReadUsage { machine: machine.id.clone(), codex, claude });
+        }
+    }
+
+    fn on_usage(&mut self, machine: &str, result: Result<usage::Report, String>, now: SystemTime) {
+        self.usage_reading.remove(machine);
+        let asked = self.usage_asked.remove(machine);
+        match result {
+            Ok(report) => {
+                self.usage.insert(machine.to_string(), report);
+            }
+            Err(error) if asked && self.focus == Focus::Composer => {
+                self.notify(format!("Could not read usage: {error}"), NoticeKind::Error, now);
+            }
+            Err(_) => {}
+        }
+        self.with_composer(|composer, ctx| composer.settle(ctx));
+    }
+
+    fn on_inventory(
+        &mut self,
+        machine: &str,
+        result: Result<Inventory, String>,
+        now: SystemTime,
+        effects: &mut Vec<Effect>,
+    ) {
         self.discovering.remove(machine);
         let fresh = result.is_ok();
         match result {
@@ -629,6 +722,9 @@ impl App {
             // is now the one applied, and stays until chosen otherwise. A
             // failed discovery leaves the default pending for the next one.
             self.composer.start_preset = false;
+        }
+        if self.focus == Focus::Composer {
+            self.read_usage(false, now, effects);
         }
     }
 
@@ -655,7 +751,18 @@ impl App {
             self.launch_counter += 1;
             let id = format!("{:08x}{:08x}", crate::discovery::seconds(now) as u32, self.launch_counter);
             match launch::plan(request, &settings, catalog, id, now) {
-                Ok(plan) => plans.push(plan),
+                Ok(mut plan) => {
+                    // The composer's own agent carries the auto choice; a
+                    // compared agent was named by hand.
+                    plan.record.harness_auto =
+                        self.composer.auto_harness && request.comparison.is_none_or(|c| c.index == 0);
+                    if self.config.usage.claude_statusline
+                        && let Some(wrapper) = self.usage.get(&request.machine_id).and_then(|r| r.statusline.as_deref())
+                    {
+                        plan.with_claude_statusline(wrapper);
+                    }
+                    plans.push(plan)
+                }
                 Err(error) => {
                     self.composer.error = Some(error);
                     return;
@@ -741,6 +848,7 @@ impl App {
         // A new thread opened and closed before discovery answered may still
         // be waiting for its first preset; the thread's choices win.
         composer.start_preset = false;
+        composer.auto_harness = false;
         composer.machine = Some(thread.machine_id.clone());
         composer.retry = failed.map(|r| r.id.clone());
         match &record {
@@ -899,6 +1007,7 @@ impl App {
                         project: record.project.clone(),
                         machine: record.machine_id.clone(),
                         harness: record.harness.clone(),
+                        auto: record.harness_auto,
                         workspace: workspace.into(),
                         model: record.model.clone(),
                         thinking: record.thinking.clone(),

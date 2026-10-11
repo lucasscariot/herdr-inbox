@@ -213,12 +213,13 @@ in the background and its progress shows under **Launches**.
 | `Tab`, `Shift+Tab` | Move between the task and the choices |
 | `F7`, then `1`-`9` | Presets: focus the strip, apply the nth preset |
 | `F2` `F6` `F3` `F4` `F8` `F9` | Project, machine, harness, model, thinking, workspace |
+| `F3`, then **Auto** | Let the inbox pick the harness with the most usage left |
 | `F12` | Compare: send the task to two or three agents at once |
 | `Ctrl+T` | Dictate the task |
 | `Ctrl+V`, the desktop's paste | Paste a screenshot as `[Image #1]` |
 | `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
 | `Ctrl+D` | Save the harness, model and thinking level as a preset |
-| `F5` | Rescan projects and model catalogs |
+| `F5` | Rescan projects, model catalogs and usage |
 | `Ctrl+G` | Check GitHub releases and update Inbox |
 | `Esc` | Close a list, then the composer (the draft stays) |
 
@@ -251,6 +252,40 @@ the list does not know can still be used: type its id and pick **Use …**.
   The name keeps up to four content words of the task's first sentence:
   "Please can you add a CSV export?" launches on `add-csv-export`. Herdr
   creates worktrees under `~/.herdr/worktrees/<repo>/<branch>`.
+
+**Usage and the Auto harness.** The **Usage** row under the choices shows
+how much of each subscription is spent, window by window: `✻ Claude 5h 38% ·
+week 29%  ·  ◆ Codex week 17%`, with the age of the reading on the right. A
+window over 80 % is yellow; a reached limit is red with its reset time. The
+**Harness** list (`F3`) starts with **Auto · most usage left**: pick it and the
+inbox chooses, at every send, the installed harness whose subscription has the
+most headroom before any of its limits (the tightest window counts), keeping
+the model and thinking level you last used with that harness. The row reads
+`Auto → Codex · 83% left`. Close calls (within five points) keep the harness
+in use, so the choice does not flap. Auto is remembered per project and
+outranks the first preset there; naming a harness or a preset turns it off.
+Without numbers, Auto falls back to your remembered harness and says so.
+
+The numbers come from the CLIs' own channels, never from a provider token:
+
+- **Codex** is asked through its own app server (`codex app-server`,
+  `account/rateLimits/read`), which answers in under a second and spends no
+  quota; its newest session log is the fallback. Codex "full reset" credits
+  show as `· 3 resets`.
+- **Claude Code** hands its usage to the status line it runs. Every Claude
+  thread the inbox launches gets `--settings` with a small wrapper as its
+  status line; the wrapper saves the numbers privately under
+  `~/.local/state/herdr-inbox/usage/` and then runs your own `statusLine`
+  command, if you have one, on the same input. Claude numbers appear once an
+  inbox-launched Claude thread has had its first reply, and follow the open
+  threads; before that the row says `no usage data yet`. Threads started by
+  plain `herdr` report too if you make the wrapper your status line in
+  `~/.claude/settings.json`:
+  `{"statusLine": {"type": "command", "command": "python3 ~/.local/state/herdr-inbox/usage/statusline.py ~/.local/state/herdr-inbox/usage/anthropic.json"}}`.
+
+Usage is read when the composer opens, every five minutes while it is open,
+and on `F5`, on every machine that has `claude` or `codex`. Other harnesses
+show no usage unless the config maps them to a provider (below).
 
 **Comparing agents.** Off by default, the **Compare** row (`F12`) sends the
 same task to two or three agents at once, to compare their results. Add a
@@ -308,6 +343,11 @@ machine = "Mac Studio"
 
 [machines."Mac Studio"]            # per machine: replaces, never merges
 harness_args = { codex = ["--no-daemon", "--fast"] }
+
+[usage]                            # subscription usage and the Auto harness
+enabled = true                     # false hides the row and the Auto choice
+claude_statusline = true           # give Claude threads the reporting status line
+providers = { opencode = "anthropic" }  # a CLI on the Claude or ChatGPT plan
 ```
 
 ### Dictation
