@@ -746,6 +746,11 @@ impl App {
     /// Validates the composer and starts a launch, or one per compared agent.
     /// `keep` leaves the task in place to send it again elsewhere.
     pub(crate) fn send(&mut self, keep: bool, now: SystemTime, effects: &mut Vec<Effect>) {
+        if self.composer.auto_harness {
+            // The numbers may have moved since the last settle (a window
+            // reset, a reading gone stale): what is sent is what is shown.
+            self.with_composer(|composer, ctx| composer.settle(ctx));
+        }
         let ctx = self.composer_context();
         let requests = match self.composer.requests(&ctx) {
             Ok(requests) => requests,

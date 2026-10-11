@@ -30,7 +30,6 @@ use super::{Connection, MachineState};
 
 /// Harnesses offered first when a project has no remembered one.
 const PREFERRED: &[&str] = &["claude", "codex", "opencode", "pi", "gemini"];
-pub use crate::state::AUTO;
 /// How many agents one task can go to at once.
 pub const COMPARE_LIMIT: usize = 3;
 
@@ -485,7 +484,7 @@ impl Composer {
             return;
         };
         let installed = ctx.installed(&machine);
-        if self.harness.is_none() && remembered.harness.as_deref() == Some(AUTO) && ctx.config.usage.enabled {
+        if self.harness.is_none() && remembered.auto && ctx.config.usage.enabled {
             // The project asked the inbox to choose.
             self.auto_harness = true;
         }

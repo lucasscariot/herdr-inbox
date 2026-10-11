@@ -16,9 +16,6 @@ pub const HISTORY_LIMIT: usize = 50;
 const MIGRATED: [&str; 4] = ["preferences.json", "presets.json", "history.json", "credentials.json"];
 const MIGRATION_MARKER: &str = ".migrated-from-plugin";
 
-/// The harness a project remembers when the inbox chooses it.
-pub const AUTO: &str = "auto";
-
 #[derive(Debug, Clone)]
 pub struct State {
     dir: PathBuf,
@@ -33,6 +30,10 @@ pub struct ProjectChoices {
     pub machine: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// The inbox chooses the harness for this project; `harness` is the
+    /// one that ran last.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// machine id → harness → model id
@@ -63,7 +64,8 @@ impl Preferences {
         self.last_project = Some(launch.project.clone());
         let entry = self.projects.entry(launch.project.clone()).or_default();
         entry.machine = Some(launch.machine.clone());
-        entry.harness = Some(if launch.auto { AUTO.to_string() } else { launch.harness.clone() });
+        entry.harness = Some(launch.harness.clone());
+        entry.auto = launch.auto;
         entry.workspace = Some(launch.workspace.clone());
         let set = |map: &mut BTreeMap<String, BTreeMap<String, String>>, value: &str| {
             let by_harness = map.entry(launch.machine.clone()).or_default();
@@ -84,8 +86,8 @@ pub struct Remembered {
     pub project: String,
     pub machine: String,
     pub harness: String,
-    /// The inbox chose the harness: the project remembers `auto`, the
-    /// model and thinking still go under the harness that ran.
+    /// The inbox chose the harness: the project remembers the choosing,
+    /// and the harness, model and thinking that ran.
     pub auto: bool,
     pub workspace: String,
     pub model: String,
@@ -254,10 +256,14 @@ mod tests {
         let mut preferences = Preferences::default();
         preferences.remember(&Remembered { auto: true, ..remembered("api", "local", "codex", "gpt-5") });
         let api = preferences.project("api");
-        assert_eq!(api.harness.as_deref(), Some(AUTO));
+        assert!(api.auto);
+        assert_eq!(api.harness.as_deref(), Some("codex"), "the harness that ran, never a sentinel");
         assert_eq!(api.models["local"]["codex"], "gpt-5");
+        let json = serde_json::to_string(&preferences).unwrap();
+        assert!(json.contains("\"auto\":true"));
         preferences.remember(&remembered("api", "local", "claude", "opus"));
-        assert_eq!(preferences.project("api").harness.as_deref(), Some("claude"), "a named harness replaces auto");
+        assert!(!preferences.project("api").auto, "a named harness ends the choosing");
+        assert!(!serde_json::to_string(&preferences).unwrap().contains("auto"), "false is not written");
     }
 
     #[test]

@@ -57,6 +57,16 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Added
 
+- A **Usage** row under the composer's choices shows each subscription's
+  windows (`✻ Claude 5h 38% · week 29%  ·  ◆ Codex week 17%`), yellow past
+  80 %, red when a limit is reached, faint with their age once stale. The
+  Harness list starts with **Auto · most usage left**, which picks the
+  installed harness with the most headroom before any limit, follows the
+  numbers, keeps the model last used with that harness, and is remembered
+  per project. Codex is asked through its own app server; Claude Code
+  reports through a status line wrapper that every Claude thread the inbox
+  launches gets, chained with the user's own status line. `[usage]` in the
+  config turns it off or maps other CLIs to a provider.
 - `PageUp` and `PageDown` reorder the highlighted preset one place earlier
   or later on the strip, saving immediately and keeping it highlighted.
   The strip's key hint shows these shortcuts; `Ctrl+←`/`Ctrl+→` still work.

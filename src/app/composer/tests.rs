@@ -710,7 +710,8 @@ mod usage {
             model: "sonnet".into(),
             thinking: String::new(),
         });
-        assert_eq!(world.preferences.project("cockpit").harness.as_deref(), Some(AUTO));
+        assert!(world.preferences.project("cockpit").auto);
+        assert_eq!(world.preferences.project("cockpit").harness.as_deref(), Some("claude"));
         assert_eq!(
             world.preferences.project("cockpit").models["local"]["claude"],
             "sonnet",

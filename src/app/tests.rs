@@ -1148,6 +1148,30 @@ mod composer_flow {
     }
 
     #[test]
+    fn regression_a_send_resolves_auto_on_the_numbers_of_that_moment() {
+        let mut app = composing();
+        let mut report = usage_report(&[("anthropic", "5h", 90), ("openai", "week", 50)]);
+        // Claude's 5-hour window resets at 100: before that Codex has more left.
+        if let Some(usage) = report.providers.get_mut("anthropic").and_then(|s| s.usage.as_mut()) {
+            usage.windows[0].resets_at = Some(100);
+        }
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(report) }, at(2));
+        app.update(press(KeyCode::F(3)), at(2));
+        app.update(press(KeyCode::Enter), at(2));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        type_text(&mut app, "Fix the login redirect loop");
+        // Time passes without any input that settles: the row would show
+        // Claude, and so must the launch.
+        app.update(Input::Tick, at(200));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"), "not settled by a tick");
+        assert!(app.composer.value(&app.composer_context(), Field::Harness).starts_with("Auto → Claude"));
+        let effects = app.update(press(KeyCode::Enter), at(200));
+        let record = launch_of(&effects).expect("a launch");
+        assert_eq!(record.harness, "claude", "what is shown is what is sent");
+        assert!(record.harness_auto);
+    }
+
+    #[test]
     fn an_auto_launch_carries_the_status_line_and_remembers_auto() {
         let mut app = composing();
         app.update(
@@ -1185,7 +1209,8 @@ mod composer_flow {
             .expect("remembered");
         assert!(remembered.auto);
         assert_eq!(remembered.harness, "codex");
-        assert_eq!(app.preferences.project("cockpit").harness.as_deref(), Some("auto"));
+        assert!(app.preferences.project("cockpit").auto);
+        assert_eq!(app.preferences.project("cockpit").harness.as_deref(), Some("codex"));
         assert!(app.composer.auto_harness, "the next task is still chosen by the inbox");
 
         // A Claude launch carries the wrapper, in its own settings, after the user's flags.
