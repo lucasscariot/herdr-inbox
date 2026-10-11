@@ -35,9 +35,10 @@ tasks are ready to review, and the others keep running.*
 
 ## Install
 
-You need [Herdr](https://herdr.dev) 0.9.2 or newer, Python 3 for project and
-agent discovery, and an installed coding agent CLI. Prebuilt binaries support
-Linux and macOS on x86_64 and arm64.
+You need [Herdr](https://herdr.dev) 0.9.2 or newer and an installed coding
+agent CLI. Project and agent discovery requires Python 3.9 or newer,
+available as `python3` locally and on any SSH machines you use. Prebuilt
+binaries support Linux and macOS on x86_64 and arm64.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lucasscariot/herdr-inbox/main/install.sh | sh
@@ -379,8 +380,9 @@ reaches it the same way.
 Herdr Inbox reaches a machine with your own SSH setup, one shared connection
 per host. On the remote side it needs `herdr` on the PATH of a login shell, or
 in `~/.local/bin`, `~/.cargo/bin`, Homebrew or mise. A machine that cannot be
-reached never blocks the others. Without a local Herdr server, the remote
-threads stay usable, and `s` starts the local server.
+reached never blocks the others. Project and agent discovery on that machine
+also needs Python 3.9 or newer available as `python3`. Without a local Herdr
+server, the remote threads stay usable, and `s` starts the local server.
 
 ### When another window has the thread
 
