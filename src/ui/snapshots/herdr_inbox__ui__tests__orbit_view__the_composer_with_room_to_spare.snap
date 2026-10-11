@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests.rs
+assertion_line: 1385
 expression: "text(&render(&app, at(7)))"
 ---
  herdr inbox                 1/4 │
@@ -8,7 +9,7 @@ expression: "text(&render(&app, at(7)))"
   +  New thread               n  │  What should we build?
   /  Filter threads           /  │  ╭────────────────────────────────────────────────────────────╮
  ─────────────────────────────── │  │ Describe the task. Enter sends, Shift+Enter adds a line.   │
- NEEDS INPUT  1                  │  │                                                            │
+ NEEDS INPUT  1                  │  │ Type $ to use a skill.                                     │
 ▎cockpit                 ● input │  │                                                            │
 ▎Fix the login redirect loop on… │  ╰────────────────────────────────────────────────────────────╯
 ▎✻ Claude · ⎇ fix-login-redirect │    Presets    + Save as preset…                           F7  ›

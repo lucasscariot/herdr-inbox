@@ -105,9 +105,13 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
     if app.composer.picker.is_some() {
         return picker_key(app, key, effects);
     }
+    if app.composer.field == Field::Task {
+        let skills = super::skills_of(&app.inventories, app.composer.machine.as_deref().unwrap_or_default());
+        if skill_menu_key(&mut app.composer.skill_menu, &mut app.composer.task, skills, key) {
+            return;
+        }
+    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         KeyCode::Esc => return close_composer(app),
         KeyCode::Char('c') if ctrl => {
@@ -151,6 +155,18 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
     if app.composer.field != Field::Task {
         return field_key(app, key);
     }
+    let before = (app.composer.task.text().len(), app.composer.task.cursor());
+    task_key(app, key, now, effects);
+    if before != (app.composer.task.text().len(), app.composer.task.cursor()) {
+        app.composer.skill_menu.edited();
+    }
+}
+
+/// Keys in the task box.
+fn task_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let editor = &mut app.composer.task;
     match key.code {
         KeyCode::Enter if shift || alt => editor.insert("\n"),
@@ -518,7 +534,56 @@ fn start_reply(app: &mut App, now: SystemTime) {
     app.reply = Some(super::Reply::new(thread.id));
 }
 
+/// The reply as sent to a thread on `machine`.
+fn reply_text(app: &App, machine: &str) -> String {
+    app.reply.as_ref().map(|r| r.message(app.skills_on(machine))).unwrap_or_default()
+}
+
 fn reply_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
+    let machine = app.reply.as_ref().and_then(|r| app.thread(&r.thread)).map(|t| t.machine_id.clone());
+    let skills = super::skills_of(&app.inventories, machine.as_deref().unwrap_or_default());
+    let Some(reply) = app.reply.as_mut() else {
+        return;
+    };
+    if skill_menu_key(&mut reply.skill_menu, &mut reply.editor, skills, key) {
+        return;
+    }
+    let before = (reply.editor.text().len(), reply.editor.cursor());
+    reply_editor_key(app, key, now, effects);
+    if let Some(reply) = app.reply.as_mut()
+        && before != (reply.editor.text().len(), reply.editor.cursor())
+    {
+        reply.skill_menu.edited();
+    }
+}
+
+/// Keys for the `$` skill menu while it shows over an editor. True when the
+/// menu used the key: moving, inserting the skill, or closing.
+fn skill_menu_key(
+    menu: &mut crate::skills::Menu,
+    editor: &mut crate::editor::Editor,
+    skills: &[crate::discovery::Skill],
+    key: KeyEvent,
+) -> bool {
+    let Some((_, offered)) = menu.offered(editor, skills) else {
+        return false;
+    };
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Up => menu.step(offered.len(), false),
+        KeyCode::Char('p') if ctrl => menu.step(offered.len(), false),
+        KeyCode::Down => menu.step(offered.len(), true),
+        KeyCode::Char('n') if ctrl => menu.step(offered.len(), true),
+        KeyCode::Tab | KeyCode::Enter if key.modifiers.is_empty() => {
+            menu.accept(editor, skills);
+        }
+        KeyCode::Esc => menu.dismiss(editor),
+        _ => return false,
+    }
+    true
+}
+
+fn reply_editor_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Effect>) {
     let Some(reply) = app.reply.as_mut() else {
         return;
     };
@@ -532,18 +597,20 @@ fn reply_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Ef
             if reply.editor.is_blank() {
                 return;
             }
-            let text = reply.message();
             let id = reply.thread.clone();
+            let Some(thread) = app.thread(&id).cloned() else {
+                app.reply = None;
+                return;
+            };
+            let text = reply_text(app, &thread.machine_id);
             app.reply = None;
-            if let Some(thread) = app.thread(&id).cloned() {
-                app.warn_if_images_stay_here(&thread.machine_id, &text, now);
-                effects.push(Effect::Prompt {
-                    machine: thread.machine_id,
-                    pane_id: thread.pane_id,
-                    title: thread.title,
-                    text,
-                });
-            }
+            app.warn_if_images_stay_here(&thread.machine_id, &text, now);
+            effects.push(Effect::Prompt {
+                machine: thread.machine_id,
+                pane_id: thread.pane_id,
+                title: thread.title,
+                text,
+            });
         }
         KeyCode::Char('w') if ctrl => reply.editor.delete_word(),
         KeyCode::Char('u') if ctrl => reply.editor.clear(),

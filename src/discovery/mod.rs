@@ -1,6 +1,7 @@
 //! What can be launched where: each machine's projects (git repositories and
-//! their worktrees), installed agent CLIs, and each CLI's models and thinking
-//! levels. A small Python probe gathers it on the machine itself.
+//! their worktrees), installed agent CLIs, each CLI's models and thinking
+//! levels, and the skills installed for the user. A small Python probe
+//! gathers it on the machine itself.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -123,6 +124,17 @@ impl Catalog {
     }
 }
 
+/// A skill installed for the user: a `SKILL.md` in one of the directories
+/// the harnesses read, `~/.agents/skills` first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Skill {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// The `SKILL.md` file, on its machine.
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Inventory {
     #[serde(default)]
@@ -136,6 +148,8 @@ pub struct Inventory {
     pub models_at: u64,
     #[serde(default)]
     pub models_revision: u8,
+    #[serde(default)]
+    pub skills: Vec<Skill>,
 }
 
 impl Inventory {
@@ -320,6 +334,55 @@ mod tests {
         assert!(catalog.thinking_levels(Some("no-reasoning")).is_empty());
         assert!(catalog.thinking_levels(Some("unknown-custom-model")).is_empty());
         assert_eq!(catalog.choices.len(), 3);
+    }
+
+    #[test]
+    fn the_real_probe_lists_skills_from_every_harness_directory_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let write = |path: &str, text: &str| {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(".agents/skills/arena/SKILL.md", "---\nname: arena\ndescription: \"Spawn candidates\"\n---\n# Arena\n");
+        write(".claude/skills/arena/SKILL.md", "---\nname: arena\ndescription: the Claude copy\n---\n");
+        write(
+            ".claude/skills/deslop/SKILL.md",
+            "---\nname: deslop\ndescription: >\n  Remove slop\n  from a diff.\nlicense: MIT\n---\n",
+        );
+        write(".codex/skills/no-header/SKILL.md", "# Just text\n");
+        write(".config/opencode/skills/odd/SKILL.md", "---\nname: has spaces\n---\n");
+        write(".pi/agent/skills/notes.md", "not a skill directory");
+        write(".agents/skills/.hidden/SKILL.md", "---\nname: hidden\n---\n");
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(PROBE)
+            .arg(
+                json!({"roots": [], "depth": 0, "projects": [], "executables": {}, "include_models": false})
+                    .to_string(),
+            )
+            .env("HOME", home)
+            .env_remove("CODEX_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let inventory = finish(&String::from_utf8_lossy(&output.stdout), None, false, &BTreeMap::new(), at(1)).unwrap();
+        let found: Vec<(&str, &str)> =
+            inventory.skills.iter().map(|s| (s.name.as_str(), s.description.as_str())).collect();
+        assert_eq!(
+            found,
+            [("arena", "Spawn candidates"), ("no-header", ""), ("deslop", "Remove slop from a diff."), ("odd", ""),],
+            "~/.agents first, then each harness; a name seen twice keeps its first place"
+        );
+        assert_eq!(inventory.skills[0].path, home.join(".agents/skills/arena/SKILL.md").display().to_string());
+    }
+
+    #[test]
+    fn older_inventories_have_no_skills() {
+        let inventory: Inventory = serde_json::from_str(r#"{"projects": [], "harnesses": []}"#).unwrap();
+        assert!(inventory.skills.is_empty());
     }
 
     #[test]

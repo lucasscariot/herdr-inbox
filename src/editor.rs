@@ -46,6 +46,18 @@ impl Editor {
         self.cursor += text.len();
     }
 
+    /// Replaces the text from `start` to the cursor, such as a word being
+    /// completed, and leaves the cursor after the replacement.
+    pub fn replace_before_cursor(&mut self, start: usize, text: &str) {
+        let start = start.min(self.cursor);
+        if !self.text.is_char_boundary(start) {
+            return;
+        }
+        self.text.replace_range(start..self.cursor, "");
+        self.cursor = start;
+        self.insert(text);
+    }
+
     pub fn backspace(&mut self) {
         if let Some(previous) = self.text[..self.cursor].chars().next_back() {
             self.cursor -= previous.len_utf8();

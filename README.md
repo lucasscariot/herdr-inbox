@@ -32,6 +32,8 @@ tasks are ready to review, and the others keep running.*
 - Bring your saved SSH machines into the same inbox. Local and remote
   threads share one list, with each machine's connection status in view.
 - Dictate with `Ctrl+T`, or paste a screenshot into a local task or reply.
+- Type `$` to use any skill installed on the machine, whichever agent runs
+  the task.
 
 ## Install
 
@@ -217,6 +219,7 @@ in the background and its progress shows under **Launches**.
 | `F12` | Compare: send the task to two or three agents at once |
 | `Ctrl+T` | Dictate the task |
 | `Ctrl+V`, the desktop's paste | Paste a screenshot as `[Image #1]` |
+| `$` | Name a skill: `↑` `↓` choose, `Tab` or `Enter` insert, `Esc` keeps a plain `$` |
 | `Ctrl+P`, `Ctrl+N` | Previous and next tasks from the history |
 | `Ctrl+D` | Save the harness, model and thinking level as a preset |
 | `F5` | Rescan projects, model catalogs and usage |
@@ -312,6 +315,19 @@ attach it, other agents get its path. In an open thread the agent reads the
 clipboard itself. Images work for threads on this machine; on a saved SSH
 machine the agent would get a path it cannot open. On Linux this needs
 `wl-clipboard` (Wayland) or `xclip` (X11).
+
+**Skills.** Type `$` in the task or a reply (`r`) to list the skills
+installed on the chosen machine, filtered as you type, and insert one as
+`$name`. Inbox finds them where the harnesses keep them: `~/.agents/skills`
+first, then `~/.codex/skills` (or `$CODEX_HOME/skills`), `~/.claude/skills`,
+`~/.config/opencode/skills`, `~/.pi/agent/skills`, `~/.gemini/skills` and
+`~/.copilot/skills`, each a folder with a `SKILL.md`. Harnesses invoke and
+look for skills differently, so the task keeps `$name` as you wrote it (Codex
+reads that natively), and the agent also gets a short list of each named
+skill's `SKILL.md` path at the end of the message. Any agent can read that
+file, so a skill installed for one harness works with every other. `$` before
+anything that is not an installed skill (`$HOME`, `$5`) stays plain text.
+`F5` rescans the skills.
 
 The composer remembers per project which machine, harness and workspace mode
 you used, and per machine and harness which model and thinking level, so

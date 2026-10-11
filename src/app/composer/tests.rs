@@ -86,6 +86,7 @@ fn world() -> World {
             models: BTreeMap::from([("claude".into(), claude()), ("codex".into(), codex())]),
             models_at: 1,
             models_revision: crate::discovery::MODELS_REVISION,
+            skills: Vec::new(),
         },
     );
     inventories.insert(
@@ -96,6 +97,7 @@ fn world() -> World {
             models: BTreeMap::from([("codex".into(), codex())]),
             models_at: 1,
             models_revision: crate::discovery::MODELS_REVISION,
+            skills: Vec::new(),
         },
     );
     inventories.insert(

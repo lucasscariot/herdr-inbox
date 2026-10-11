@@ -258,7 +258,7 @@ impl App {
                             machine: thread.machine_id.clone(),
                             pane_id: thread.pane_id.clone(),
                             title: thread.title.clone(),
-                            text: reply.message(),
+                            text: reply.message(self.skills_on(&thread.machine_id)),
                         });
                     }
                 }

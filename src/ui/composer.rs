@@ -74,13 +74,16 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         );
     }
     if composer.task.text().is_empty() {
-        buf.set_stringn(
-            layout.task_inner.x,
-            layout.task_inner.y,
-            "Describe the task. Enter sends, Shift+Enter adds a line.",
-            layout.task_inner.width as usize,
-            dim,
-        );
+        let placeholder = ["Describe the task. Enter sends, Shift+Enter adds a line.", "Type $ to use a skill."];
+        for (row, line) in placeholder.iter().enumerate().take(layout.task_inner.height as usize) {
+            buf.set_stringn(
+                layout.task_inner.x,
+                layout.task_inner.y + row as u16,
+                line,
+                layout.task_inner.width as usize,
+                dim,
+            );
+        }
     }
     let mut cursor = (focused && !dictating).then_some(layout.task_cursor);
     if let Some(error) = &composer.error
@@ -127,7 +130,11 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         let key = base.fg(palette.subtext0).add_modifier(Modifier::BOLD);
         let dictate = if app.config.speech.space_hold_enabled() { "hold ␣" } else { "⌃T" };
         let on_strip = composer.field == Field::Preset && composer.picker.is_none();
-        let hints: &[(&str, &str)] = if on_strip {
+        let skills = composer.machine.as_deref().map(|m| app.skills_on(m)).unwrap_or_default();
+        let menu = focused.then(|| composer.skill_menu.offered(&composer.task, skills)).flatten();
+        let hints: &[(&str, &str)] = if menu.is_some() {
+            &[("↑↓", "choose"), ("⇥/↵", "insert"), ("esc", "close")]
+        } else if on_strip {
             &[
                 ("←→", "choose"),
                 ("PgUp/PgDn", "reorder"),
@@ -193,6 +200,15 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
     // Decoration uses only spare room below the controls. It never shifts them.
     if y + 2 < area.bottom() {
         orbit_in(buf, app, Rect::new(area.x, y + 1, area.width, (area.bottom() - y - 2).min(14)), palette, now);
+    }
+
+    if focused
+        && let Some(machine) = composer.machine.as_deref()
+        && let Some((_, offered)) = composer.skill_menu.offered(&composer.task, app.skills_on(machine))
+    {
+        // Under the line being typed, over the strip and the fields.
+        let below = Rect::new(area.x, layout.task_cursor.1, area.width, area.bottom() - layout.task_cursor.1);
+        super::skill_menu(buf, below, layout.task_cursor, true, &offered, composer.skill_menu.selected, palette);
     }
 
     if let Some(picker) = &composer.picker

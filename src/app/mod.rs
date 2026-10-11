@@ -397,17 +397,35 @@ pub struct Reply {
     pub editor: crate::editor::Editor,
     /// Pasted images, shown as `[Image #N]`.
     pub images: Vec<String>,
+    /// The `$` skill menu over the reply.
+    pub skill_menu: crate::skills::Menu,
 }
 
 impl Reply {
     pub fn new(thread: ThreadId) -> Self {
-        Self { thread, editor: crate::editor::Editor::default(), images: Vec::new() }
+        Self {
+            thread,
+            editor: crate::editor::Editor::default(),
+            images: Vec::new(),
+            skill_menu: crate::skills::Menu::default(),
+        }
     }
 
-    /// The reply as it is sent: trimmed, pasted images as their paths.
-    pub fn message(&self) -> String {
-        crate::images::expand(self.editor.text(), &self.images).trim().to_string()
+    /// The reply as it is sent: trimmed, pasted images as their paths, and
+    /// where the `$skill` mentions live among the thread machine's `skills`.
+    pub fn message(&self, skills: &[crate::discovery::Skill]) -> String {
+        let text = crate::images::expand(self.editor.text(), &self.images);
+        crate::skills::expand(text.trim(), skills)
     }
+}
+
+/// The skills installed on a machine. A free function, so the menu can
+/// borrow them beside an editor.
+pub(crate) fn skills_of<'a>(
+    inventories: &'a HashMap<String, Inventory>,
+    machine: &str,
+) -> &'a [crate::discovery::Skill] {
+    inventories.get(machine).map(|i| i.skills.as_slice()).unwrap_or_default()
 }
 
 /// Synthetic threads for failed launches have ids under this prefix.
@@ -505,6 +523,11 @@ impl App {
             now: self.clock,
         };
         f(&mut self.composer, &ctx)
+    }
+
+    /// The skills installed on a machine, for `$` mentions.
+    pub fn skills_on(&self, machine: &str) -> &[crate::discovery::Skill] {
+        skills_of(&self.inventories, machine)
     }
 
     pub fn composer_context(&self) -> composer::Context<'_> {
