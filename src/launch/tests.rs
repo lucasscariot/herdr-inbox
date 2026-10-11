@@ -901,3 +901,27 @@ fn opencode_sessions_use_the_configured_executable() {
     let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &custom, Some(&opencode(true))).unwrap();
     assert_eq!(plan.session.unwrap().program, "opencode-dev");
 }
+
+#[test]
+fn every_spelling_of_standalone_is_recognised() {
+    let on = |args: &[&str]| standalone(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+    for args in
+        [&["--standalone"][..], &["--standalone=true"], &["--standalone=1"], &["--no-standalone", "--standalone"]]
+    {
+        assert!(on(args), "{args:?}");
+    }
+    for args in [
+        &[][..],
+        &["--standalone=false"],
+        &["--standalone=0"],
+        &["--no-standalone"],
+        &["--standalone", "--no-standalone"],
+    ] {
+        assert!(!on(args), "{args:?}");
+    }
+    let mut attached = settings();
+    attached.harness_args.insert("opencode".into(), vec!["--standalone=true".into()]);
+    let refused =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &attached, Some(&opencode(true))).unwrap_err();
+    assert!(refused.contains("--standalone"), "{refused}");
+}

@@ -185,7 +185,7 @@ impl Session {
             .split_once('/')
             .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
             .ok_or_else(|| format!("OpenCode models are provider/model, not {model}"))?;
-        if args.iter().any(|arg| arg == "--standalone") {
+        if standalone(args) {
             // Its private server never sees a session created beforehand.
             return Err("OpenCode with --standalone cannot start on a chosen model: pick Default".into());
         }
@@ -482,6 +482,20 @@ fn strip_flag(args: Vec<String>, names: &[&str]) -> Vec<String> {
         kept.push(arg);
     }
     kept
+}
+
+/// Whether OpenCode's arguments ask for a private server. Like its option
+/// parser, the last of `--standalone`, `--standalone=<bool>` and
+/// `--no-standalone` wins.
+fn standalone(args: &[String]) -> bool {
+    args.iter().fold(false, |on, arg| match arg.as_str() {
+        "--standalone" => true,
+        "--no-standalone" => false,
+        arg => match arg.strip_prefix("--standalone=") {
+            Some(value) => !matches!(value.to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off" | ""),
+            None => on,
+        },
+    })
 }
 
 /// The value of the last occurrence of a flag in `args`.
