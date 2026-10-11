@@ -692,7 +692,9 @@ fn text_without_saved_images_is_prompted_untouched() {
 fn the_claude_status_line_is_added_unless_the_user_set_their_own() {
     let request = request("Fix login", WorkspaceChoice::NewWorktree { branch: None });
     let mut plan = plan_for(&request, &settings(), None).unwrap();
+    assert!(plan.wants_claude_statusline());
     plan.with_claude_statusline("/s/usage/statusline.py");
+    assert!(!plan.wants_claude_statusline(), "settled: no probe needed at launch");
     assert_eq!(plan.agent_args[0], "--settings");
     assert!(plan.agent_args[1].contains("\"python3 \\\"/s/usage/statusline.py\\\" \\\"/s/usage/anthropic.json\\\"\""));
     assert_eq!(plan.agent_args.len(), 2);
@@ -700,11 +702,13 @@ fn the_claude_status_line_is_added_unless_the_user_set_their_own() {
     let mut pinned = settings();
     pinned.harness_args.insert("claude".into(), vec!["--settings".into(), "/me.json".into()]);
     let mut plan = plan_for(&request, &pinned, None).unwrap();
+    assert!(!plan.wants_claude_statusline(), "the user's own settings settle it");
     plan.with_claude_statusline("/s/usage/statusline.py");
     assert_eq!(plan.agent_args, ["--settings", "/me.json"], "the user's settings win");
 
     let codex = Request { harness: "codex".into(), ..request };
     let mut plan = plan_for(&codex, &settings(), None).unwrap();
+    assert!(!plan.wants_claude_statusline());
     plan.with_claude_statusline("/s/usage/statusline.py");
     assert!(plan.agent_args.is_empty(), "only Claude Code has a status line");
     assert!(!plan.record.harness_auto);

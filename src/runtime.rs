@@ -609,9 +609,10 @@ impl Work {
         let usage = self.config.usage.clone();
         thread::spawn(move || {
             let runner = transport.runner();
-            if plan.record.harness == "claude" && usage.enabled && usage.claude_statusline {
+            if usage.enabled && usage.claude_statusline && plan.wants_claude_statusline() {
                 // Before the first usage report, the wrapper may not be on
-                // the machine yet: the probe installs it, nothing else.
+                // the machine yet: the probe installs it, nothing else. A
+                // plan that already has its settings skips the round trip.
                 let state_dir = transport.is_local().then(|| state.dir().to_string_lossy().into_owned());
                 let settings = usage::settings(state_dir.as_deref(), None, false);
                 if let Some(wrapper) = transport

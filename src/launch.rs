@@ -160,12 +160,17 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Whether a Claude thread still lacks a status line: its own `--settings`,
+    /// the user's or the wrapper's, settles it.
+    pub fn wants_claude_statusline(&self) -> bool {
+        self.record.harness == "claude"
+            && !self.agent_args.iter().any(|a| a == "--settings" || a.starts_with("--settings="))
+    }
+
     /// Gives a Claude thread the status line wrapper that reports usage,
-    /// unless the user's own arguments already set `--settings`.
+    /// unless `--settings` is already set.
     pub fn with_claude_statusline(&mut self, wrapper: &str) {
-        if self.record.harness != "claude"
-            || self.agent_args.iter().any(|a| a == "--settings" || a.starts_with("--settings="))
-        {
+        if !self.wants_claude_statusline() {
             return;
         }
         self.agent_args.extend(["--settings".to_string(), crate::usage::statusline_settings(wrapper)]);
