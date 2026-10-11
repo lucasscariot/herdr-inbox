@@ -230,6 +230,8 @@ pub struct Composer {
     /// afresh or the user picks a harness, model, thinking or preset by
     /// hand. A cached inventory alone never settles the choice.
     pub start_preset: bool,
+    /// The failed launch this task retries: sending it retires that launch.
+    pub retry: Option<String>,
 }
 
 impl Default for Composer {
@@ -252,6 +254,7 @@ impl Default for Composer {
             preset_cursor: 0,
             strip_return: Field::Preset,
             start_preset: false,
+            retry: None,
         }
     }
 }

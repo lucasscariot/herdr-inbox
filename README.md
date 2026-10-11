@@ -85,10 +85,10 @@ If no Herdr server is running, Herdr Inbox offers to start one. That runs
 | | `Enter`, `o`, click | Focus the selected agent |
 | | `n`, click **+ New thread** | Open the composer |
 | | `r` | Reply to the agent without opening it |
-| | `e` | Send the thread's task again, from the composer |
+| | `e` | Send the thread's task again, from the composer. On a failed launch it retries: same task, any preset, in the worktree it already made |
 | | `/`, click **Filter threads** | Filter by title, project, branch, harness or machine; `Esc` clears |
 | | `x`, `Delete`, `Backspace` twice | Archive: closes the thread's workspace, keeps its worktree on disk. The second press (or `Enter`, `y`) confirms; `Esc` cancels |
-| | `d` | Dismiss a failed launch |
+| | `d` | Dismiss a failed launch; its task stays in the composer history (`Ctrl+P`) |
 | | `Ctrl+T` | Dictate to the thread under the cursor |
 | | `F10` | Dictation settings |
 | | `Ctrl+G` | Check GitHub releases and update Inbox |

@@ -998,6 +998,18 @@ mod conveniences {
     }
 
     #[test]
+    fn a_failed_launch_under_the_cursor_offers_a_retry() {
+        let mut app = loaded(110, 40);
+        app.update(Input::Journals(vec![record("f", None, Stage::NeedsAttention, false)]), at(1));
+        app.cursor = Some("launch/f".into());
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("e retry"), "{screen}");
+        app.cursor = app.threads.iter().find(|t| t.note.is_none()).map(|t| t.id.clone());
+        let screen = text(&render(&app, at(1)));
+        assert!(!screen.contains("e retry"), "{screen}");
+    }
+
+    #[test]
     fn the_reply_box_floats_over_the_terminal_with_its_cursor() {
         let mut app = loaded(110, 30);
         key(&mut app, KeyCode::Char('j'));

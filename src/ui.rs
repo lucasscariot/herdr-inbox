@@ -906,6 +906,12 @@ fn machine_strip(app: &App, palette: &Palette) -> Vec<(String, Style)> {
     parts
 }
 
+/// Whether the cursor is on a launch that failed, which `e` retries.
+fn cursor_failed(app: &App) -> bool {
+    let thread = app.cursor.as_deref().and_then(|id| app.thread(id));
+    thread.is_some_and(|t| matches!(t.note, Some(crate::threads::LaunchNote::Failed(_))))
+}
+
 fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
     let area = app.layout.bar;
     if area.width == 0 || area.height == 0 {
@@ -922,6 +928,10 @@ fn status_bar(buf: &mut Buffer, app: &App, palette: &Palette) {
         (_, _) if app.confirm_archive.is_some() => ("THREADS", vec![("⌫/↵", "archive"), ("esc", "cancel")]),
         (_, _) if app.reply.is_some() => ("REPLY", vec![("↵", "send"), ("esc", "cancel")]),
         (_, Focus::List) if app.filtering => ("FILTER", vec![("↵", "keep"), ("esc", "clear")]),
+        (_, Focus::List) if cursor_failed(app) => (
+            "THREADS",
+            vec![("e", "retry"), ("j/k", "move"), ("n", "new"), ("x", "archive"), ("⌃G", "updates"), ("q", "quit")],
+        ),
         (_, Focus::List) => (
             "THREADS",
             vec![

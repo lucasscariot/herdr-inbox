@@ -332,6 +332,10 @@ pub struct App {
     resume: Option<ThreadId>,
     /// Threads the user asked to archive, so their disappearance is expected.
     archiving: HashSet<ThreadId>,
+    /// Failed launches whose retry is running, by the retry's launch id. The
+    /// failed journal stays on disk until the retry ends, so that a crash
+    /// before then still shows the failed launch on restart.
+    retiring: HashMap<String, String>,
     pub config: Config,
     pub preferences: Preferences,
     pub inventories: HashMap<String, Inventory>,
@@ -416,6 +420,7 @@ impl App {
             auto_opened: false,
             resume: None,
             archiving: HashSet::new(),
+            retiring: HashMap::new(),
             config: Config::default(),
             preferences: Preferences::default(),
             inventories: HashMap::new(),
@@ -578,6 +583,7 @@ impl App {
     /// preset, discovering every reachable machine again.
     pub(crate) fn open_composer(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
         self.composer.start_preset = true;
+        self.composer.retry = None;
         self.show_composer(now, effects);
     }
 
@@ -616,6 +622,7 @@ impl App {
                 self.discovery_errors.insert(machine.to_string(), error);
             }
         }
+        self.keep_retry_worktree();
         self.with_composer(|composer, ctx| composer.settle(ctx));
         if fresh && self.composer.machine.as_deref() == Some(machine) {
             // Fresh word from the thread's machine: the first preset it has
@@ -658,6 +665,7 @@ impl App {
         let Some(first) = requests.first() else {
             return;
         };
+        let retired = self.composer.retry.take().and_then(|record| self.retire(&record, effects));
         for plan in &plans {
             let record = &plan.record;
             let mut harness = crate::threads::harness_label_for(&record.harness);
@@ -695,6 +703,9 @@ impl App {
         // A comparison is an experiment on one task, never a default.
         self.composer.compare.clear();
         let machine = first.machine_id.clone();
+        if let (Some(old), Some(plan)) = (retired, plans.first()) {
+            self.retiring.insert(plan.record.id.clone(), old);
+        }
         effects.extend(plans.into_iter().map(|plan| Effect::Launch { machine: machine.clone(), plan: Box::new(plan) }));
         self.rebuild();
     }
@@ -721,6 +732,8 @@ impl App {
             return;
         };
         let record = self.record_for(&thread).cloned();
+        let failed = record.as_ref().filter(|r| r.stage == launch::Stage::NeedsAttention);
+        let worktree = failed.and_then(|r| self.offer_worktree(r));
         let composer = &mut self.composer;
         composer.picker = None;
         composer.error = None;
@@ -729,18 +742,21 @@ impl App {
         // be waiting for its first preset; the thread's choices win.
         composer.start_preset = false;
         composer.machine = Some(thread.machine_id.clone());
+        composer.retry = failed.map(|r| r.id.clone());
         match &record {
             Some(record) => {
                 composer.project = Some(record.project.clone());
                 composer.harness = Some(record.harness.clone());
                 composer.model = Some(record.model.clone()).filter(|m| !m.is_empty());
                 composer.thinking = Some(record.thinking.clone()).filter(|t| !t.is_empty());
-                // A launch that failed keeps its branch: retrying reuses it.
-                composer.workspace = match (&thread.note, record.workspace.as_str()) {
-                    (Some(threads::LaunchNote::Failed(_)), "worktree") if !record.branch.is_empty() => {
+                composer.workspace = match record.workspace.as_str() {
+                    // A failed launch's worktree is reused when it was made,
+                    // and its branch name otherwise.
+                    "worktree" if let Some(worktree) = &worktree => WorkspaceSel::Checkout(worktree.clone()),
+                    "worktree" if failed.is_some() && !record.branch.is_empty() => {
                         WorkspaceSel::Named(record.branch.clone())
                     }
-                    (_, "checkout") if !record.cwd.is_empty() => WorkspaceSel::Checkout(record.cwd.clone()),
+                    "checkout" if !record.cwd.is_empty() => WorkspaceSel::Checkout(record.cwd.clone()),
                     _ => WorkspaceSel::New,
                 };
                 composer.set_task(&record.task);
@@ -770,15 +786,85 @@ impl App {
             .max_by_key(|r| r.created_at)
     }
 
-    /// Forgets a failed launch's row.
-    pub(crate) fn dismiss(&mut self, id: &str, effects: &mut Vec<Effect>) {
+    /// The failed launch's worktree as its project lists it: found by branch,
+    /// since the path Herdr reported can differ from git's (macOS `/var` is
+    /// `/private/var`), or added to the checkouts until discovery sees it.
+    fn offer_worktree(&mut self, record: &Record) -> Option<String> {
+        if record.workspace != "worktree" || !worktree_made(record) {
+            return None;
+        }
+        let project = self
+            .inventories
+            .get_mut(&record.machine_id)
+            .and_then(|i| i.projects.iter_mut().find(|p| p.name == record.project));
+        let Some(project) = project else {
+            return Some(record.cwd.clone());
+        };
+        let listed = project
+            .checkouts
+            .iter()
+            .find(|c| (!record.branch.is_empty() && c.branch == record.branch) || c.path == record.cwd);
+        if let Some(checkout) = listed {
+            return Some(checkout.path.clone());
+        }
+        project.checkouts.push(crate::discovery::CheckoutEntry {
+            path: record.cwd.clone(),
+            branch: record.branch.clone(),
+            linked: true,
+        });
+        Some(record.cwd.clone())
+    }
+
+    /// Keeps a retry on its worktree when fresh discovery lists it under
+    /// another path, or does not list it yet.
+    fn keep_retry_worktree(&mut self) {
+        let Some(record) = self.composer.retry.as_ref().and_then(|id| self.records.get(id)).cloned() else {
+            return;
+        };
+        let WorkspaceSel::Checkout(path) = self.composer.workspace.clone() else {
+            return;
+        };
+        let listed = self.with_composer(|composer, ctx| {
+            ctx.project(composer).is_some_and(|p| p.checkouts.iter().any(|c| c.path == path) || p.path == path)
+        });
+        if !listed && let Some(worktree) = self.offer_worktree(&record) {
+            self.composer.workspace = WorkspaceSel::Checkout(worktree);
+        }
+    }
+
+    /// Forgets a failed launch once its retry is sent, and closes the
+    /// workspace it left behind. Its worktree stays on disk for the retry.
+    /// Returns its journal, for the retry to remove once its own is written.
+    fn retire(&mut self, record_id: &str, effects: &mut Vec<Effect>) -> Option<String> {
+        let record = self.records.remove(record_id)?;
+        let journal = record.id.clone();
+        if let Some(workspace_id) = record.workspace_id.clone() {
+            let thread = match &record.pane_id {
+                Some(pane) => threads::thread_id(&record.machine_id, pane),
+                None => format!("{LAUNCH_PREFIX}{}", record.id),
+            };
+            self.archiving.insert(thread.clone());
+            effects.push(Effect::Archive { machine: record.machine_id, thread, workspace_id, title: record.title });
+        }
+        self.rebuild();
+        self.fix_cursor();
+        Some(journal)
+    }
+
+    /// Forgets a failed launch's row. Its task stays in the history.
+    pub(crate) fn dismiss(&mut self, id: &str, now: SystemTime, effects: &mut Vec<Effect>) {
         let Some(record_id) = id.strip_prefix(LAUNCH_PREFIX) else {
             return;
         };
-        if self.records.remove(record_id).is_some() {
+        if let Some(record) = self.records.remove(record_id) {
             effects.push(Effect::Dismiss { record: record_id.to_string() });
             self.rebuild();
             self.fix_cursor();
+            self.notify(
+                format!("Dismissed “{}”. Its task stays in the history: ⌃P in a new thread.", record.title),
+                NoticeKind::Info,
+                now,
+            );
         }
     }
 
@@ -795,6 +881,10 @@ impl App {
         now: SystemTime,
         effects: &mut Vec<Effect>,
     ) {
+        // The retry's own journal now says how it ended.
+        if let Some(old) = self.retiring.remove(id) {
+            effects.push(Effect::Dismiss { record: old });
+        }
         match result {
             Ok(outcome) => {
                 let record = match &outcome {
@@ -832,7 +922,11 @@ impl App {
                 self.records.insert(record.id.clone(), (*record).clone());
                 self.rebuild();
                 self.set_launch(id, LaunchState::Failed(first_line.clone()));
-                self.notify(format!("Could not start “{}”: {first_line}", record.title), NoticeKind::Error, now);
+                self.notify(
+                    format!("Could not start “{}”: {first_line}. Press e on it to retry.", record.title),
+                    NoticeKind::Error,
+                    now,
+                );
             }
         }
     }
@@ -1262,6 +1356,11 @@ impl App {
         self.notice = None;
         effects.push(Effect::StartServer);
     }
+}
+
+/// Whether a launch got as far as making its worktree.
+fn worktree_made(record: &Record) -> bool {
+    record.workspace_id.is_some() && !record.cwd.is_empty()
 }
 
 fn first_line(record: &Record) -> String {

@@ -160,6 +160,14 @@ assert the compiled version separately from the version-independent layout.
   the user answers, the inbox waits until Herdr reports the agent idle and
   ready twice in a row (an agent can look idle while it is still starting)
   and only then sends it. Another dialog sends it back to waiting.
+- **Tasks are never lost.** Every sent task goes to the history (`Ctrl+P` in
+  the composer) before it launches. A launch that fails stays as a row until
+  it is retried or dismissed; `e` brings its task back into the composer with
+  its choices, any of which can change. A retry reuses the worktree the
+  failed launch made, as a checkout, since its branch already has one, and
+  sending it retires the failed launch: its workspace closes, leaving the
+  worktree to the retry, and its journal stays on disk until the retry ends,
+  so a crash mid-retry still shows the failed launch on restart.
 - **Dictated words are never lost.** Recording refuses to start without a
   way to transcribe; a delivery that fails keeps the transcript in its
   notice; while the microphone is open no key reaches an agent.

@@ -420,7 +420,7 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
             effects.extend(effect);
             if failed_launch {
                 // Archiving a failed launch also forgets it.
-                app.dismiss(&id, effects);
+                app.dismiss(&id, now, effects);
             }
         }
         return;
@@ -467,7 +467,7 @@ fn list_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Eff
         }
         KeyCode::Char('d') => {
             if let Some(id) = app.cursor.clone() {
-                app.dismiss(&id, effects);
+                app.dismiss(&id, now, effects);
             }
         }
         // With saved machines the list stays up without a local server; `s`

@@ -910,6 +910,39 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
     assert_eq!(journal["stage"], "needs_attention");
     assert_eq!(journal["failed_stage"], "starting");
     assert_eq!(journal["branch"], "fix-login-loop");
+
+    // Retrying brings the task back and reuses the worktree it made, rather
+    // than failing on a branch that already has one.
+    inbox.keys("\x1b");
+    inbox.wait_for_text("e retry");
+    inbox.keys("e");
+    inbox.wait_for_text("Fix the login loop");
+    inbox.wait_for_text("Checkout · fix-login-loop");
+    inbox.keys("\r");
+    inbox.wait_for_text("Archived “Fix the login loop”");
+    let journals = || -> Vec<serde_json::Value> {
+        // Atomic writes leave a `.inbox-*` temporary file for a moment.
+        std::fs::read_dir(root.join("state/herdr-inbox/launches"))
+            .expect("journals")
+            .map(|e| e.expect("entry").path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .filter_map(|p| serde_json::from_slice(&std::fs::read(p).ok()?).ok())
+            .collect()
+    };
+    sandbox.wait_for(
+        || {
+            let journals = journals();
+            journals.len() == 1 && journals[0]["stage"] == "needs_attention" && journals[0]["workspace"] == "checkout"
+        },
+        "the retry to stop and replace the failed launch",
+    );
+    let journals = journals();
+    assert_eq!(journals.len(), 1, "the retry replaced the failed launch: {journals:?}");
+    assert_eq!(journals[0]["workspace"], "checkout");
+    let cwd = std::fs::canonicalize(journals[0]["cwd"].as_str().expect("cwd")).expect("the retry's checkout");
+    assert_eq!(cwd, std::fs::canonicalize(&worktree).expect("worktree"), "the same worktree");
+    assert_eq!(journals[0]["task"], "Fix the login loop");
+    assert_eq!(journals[0]["failed_stage"], "starting", "it got past the worktree this time");
 }
 
 #[test]
