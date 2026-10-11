@@ -60,6 +60,10 @@ pub struct Usage {
     /// reading can lift it.
     #[serde(default)]
     pub refused: bool,
+    /// The provider's own verdict, when it gave one: `Some(true)` permits
+    /// ordinary use even while a window reads 100 %.
+    #[serde(default)]
+    pub allowed: Option<bool>,
     /// Codex "full reset" credits the user can spend from Codex itself.
     #[serde(default)]
     pub resets_available: u32,
@@ -93,7 +97,9 @@ impl Usage {
         if self.refused {
             return 0;
         }
-        100u32.saturating_sub(self.tightest(now).map(|w| w.used_percent).unwrap_or(0))
+        let left = 100u32.saturating_sub(self.tightest(now).map(|w| w.used_percent).unwrap_or(0));
+        // The provider permits use: a window that reads spent lags behind.
+        if self.allowed == Some(true) { left.max(1) } else { left }
     }
 
     /// `5h 38% · week 29%`, or why nothing can run, with the reading's age
@@ -258,6 +264,12 @@ mod tests {
             "reached without a spent window or a verdict is only history"
         );
         assert_eq!(usage(&[("week", 120)]).headroom(at(0)), 0);
+        assert_eq!(
+            Usage { allowed: Some(true), ..usage(&[("week", 100)]) }.headroom(at(0)),
+            1,
+            "the provider permits use: a spent window is only a lagging number"
+        );
+        assert_eq!(Usage { allowed: Some(true), ..usage(&[("week", 40)]) }.headroom(at(0)), 60);
         // A window past its reset has started over and no longer counts.
         let reset = Usage {
             windows: vec![
@@ -400,7 +412,7 @@ mod tests {
             &codex,
             "#!/bin/sh\n[ \"$1\" = app-server ] || exit 1\nread first\nread second\nread third\n\
              printf '%s\\n' '{\"id\":0,\"result\":{}}' '{\"method\":\"account/updated\"}' \
-             '{\"id\":1,\"result\":{\"ordinaryUsageAllowed\":'\"${FAKE_ALLOWED:-true}\"',\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":{\"usedPercent\":4,\"windowDurationMins\":300,\"resetsAt\":null},\"planType\":\"prolite\",\"rateLimitReachedType\":'\"${FAKE_REACHED:-null}\"'},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n",
+             '{\"id\":1,\"result\":{\"ordinaryUsageAllowed\":'\"${FAKE_ALLOWED:-true}\"',\"rateLimits\":{\"primary\":{\"usedPercent\":'\"${FAKE_USED:-17}\"',\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":{\"usedPercent\":4,\"windowDurationMins\":300,\"resetsAt\":null},\"planType\":\"prolite\",\"rateLimitReachedType\":'\"${FAKE_REACHED:-null}\"'},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n",
         )
         .unwrap();
         std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -454,6 +466,22 @@ mod tests {
         let allowed = finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap();
         assert!(!allowed.usage("openai").unwrap().refused, "allowed is the verdict");
         assert!(!allowed.usage("openai").unwrap().reached);
+        assert_eq!(allowed.usage("openai").unwrap().allowed, Some(true));
+        assert_eq!(openai.allowed, Some(true), "the first run carried the verdict too");
+        // ...and a window reading 100 % while the verdict permits use still
+        // leaves Codex a candidate.
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(PROBE)
+            .arg(settings(state.to_str(), codex.to_str(), false))
+            .env("HOME", dir.path())
+            .env("FAKE_ALLOWED", "true")
+            .env("FAKE_USED", "100")
+            .output()
+            .unwrap();
+        let lagging = finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap();
+        assert_eq!(lagging.usage("openai").unwrap().headroom(at(1)), 1);
+        assert!(!lagging.usage("openai").unwrap().reached);
 
         // Claude Code runs the wrapper with its status line JSON; the user's
         // own status line still gets the same input.

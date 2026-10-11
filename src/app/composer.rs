@@ -601,6 +601,8 @@ impl Composer {
         match pick {
             Pick::Project(name) => {
                 if self.project.as_deref() != Some(&name) {
+                    // Auto is a per-project choice, like the harness.
+                    self.auto_harness = ctx.preferences.project(&name).auto && ctx.config.usage.enabled;
                     self.project = Some(name);
                     self.machine = None;
                     self.harness = None;

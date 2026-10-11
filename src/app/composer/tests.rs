@@ -801,6 +801,32 @@ mod usage {
     }
 
     #[test]
+    fn auto_follows_the_project_being_switched_to() {
+        let mut world = world_with_usage();
+        world.preferences.remember(&Remembered {
+            auto: true,
+            project: "cockpit".into(),
+            machine: "local".into(),
+            harness: "codex".into(),
+            workspace: "worktree".into(),
+            model: String::new(),
+            thinking: String::new(),
+        });
+        remember(&mut world, "api", "local", "claude", "sonnet", "", "worktree");
+        let mut composer = settled(&world);
+        assert_eq!(composer.project.as_deref(), Some("api"), "the last project");
+        assert!(!composer.auto_harness);
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        composer.apply(&world.ctx(), Pick::Project("cockpit".into()));
+        assert!(composer.auto_harness, "cockpit asked the inbox to choose");
+        assert_eq!(composer.harness.as_deref(), Some("codex"));
+        composer.apply(&world.ctx(), Pick::Project("api".into()));
+        assert!(!composer.auto_harness, "api remembers a harness of its own");
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        assert_eq!(composer.model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
     fn a_configured_provider_lends_its_usage_to_another_harness() {
         let mut world = world_with_usage();
         world.config.usage.providers.insert("codex".into(), "anthropic".into());
