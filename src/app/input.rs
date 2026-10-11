@@ -212,9 +212,11 @@ fn strip_key(app: &mut App, key: KeyEvent, effects: &mut Vec<Effect>) {
     match key.code {
         KeyCode::Up => app.with_composer(|c, ctx| c.next_field(ctx, false)),
         KeyCode::Down => app.with_composer(|c, ctx| c.next_field(ctx, true)),
-        KeyCode::Left | KeyCode::Right if ctrl => {
+        KeyCode::PageUp | KeyCode::PageDown | KeyCode::Left | KeyCode::Right
+            if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) || ctrl =>
+        {
             if let Some(preset) = preset {
-                let forward = key.code == KeyCode::Right;
+                let forward = matches!(key.code, KeyCode::PageDown | KeyCode::Right);
                 let next = crate::presets::shift(&app.presets, &preset.name, forward);
                 if next != app.presets {
                     app.composer.preset_cursor = if forward { chip_index(&chip) + 1 } else { chip_index(&chip) - 1 };

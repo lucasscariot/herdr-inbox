@@ -998,9 +998,10 @@ fn presets_lead_the_composer_in_the_real_terminal() {
     inbox.wait_for_text("Thinking   Default");
     inbox.keys("Fix it");
     inbox.wait_for_text("Fix it");
-    // Ctrl+← on the strip moves the preset in use to the front and persists.
+    // PageUp on the strip moves the preset in use to the front and persists.
     inbox.keys("\x1b[18~");
-    inbox.keys("\x1b[1;5D");
+    inbox.wait_for_text("PgUp/PgDn reorder");
+    inbox.keys("\x1b[5~");
     let first_on_disk = || {
         let saved: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&presets).unwrap_or_default()).unwrap_or_default();
@@ -1010,6 +1011,23 @@ fn presets_lead_the_composer_in_the_real_terminal() {
     let text = inbox.text();
     let strip = text.lines().find(|l| l.contains("Presets")).expect("the strip");
     assert!(strip.find("Quick") < strip.find("Deep"), "{strip}");
+    inbox.keys("\x1b[6~");
+    sandbox.wait_for(|| first_on_disk() == "Deep", "PageDown saving the moved preset");
+    let text = inbox.text();
+    let strip = text.lines().find(|l| l.contains("Presets")).expect("the strip");
+    assert!(strip.find("Deep") < strip.find("Quick"), "{strip}");
+    inbox.wait_for_text("Claude · haiku");
+    inbox.keys("\x1b[5~");
+    sandbox.wait_for(|| first_on_disk() == "Quick", "PageUp keeping the same preset highlighted");
+    // Reopening Inbox reads the saved order and starts on the new first preset.
+    drop(inbox);
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("Model      Haiku");
+    inbox.keys("Fix it");
+    inbox.keys("\x1b[18~");
+    inbox.wait_for_text("Claude · haiku");
     // The save chip asks for a name; Esc leaves it.
     inbox.keys("\x1b[C\x1b[C\x1b[C");
     inbox.wait_for_text("the current harness, model and thinking, as a new chip");

@@ -885,9 +885,18 @@ mod composer {
         let (cx, _) = find(&terminal, "✻ Deep");
         assert_eq!(dx, cx, "aligned with the chips");
         assert!(screen.contains("1-9 quick pick") && !screen.contains("send & keep"), "strip hints: {screen}");
+        assert!(screen.contains("PgUp/PgDn reorder"), "reorder keys are visible on the strip: {screen}");
         key(&mut app, KeyCode::Right);
         let screen = text(&render(&app, at(1)));
         assert!(screen.contains("not installed on this machine"), "{screen}");
+    }
+
+    #[test]
+    fn preset_reorder_keys_are_visible_in_a_narrow_composer() {
+        let mut app = composing_with(90, 30, vec![preset("Deep", "claude", "opus", "high")]);
+        key(&mut app, KeyCode::F(7));
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("PgUp/PgDn reorder"), "{screen}");
     }
 
     #[test]

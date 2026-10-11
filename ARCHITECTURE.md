@@ -125,7 +125,9 @@ assert the compiled version separately from the version-independent layout.
   separated by hairline rules. `app::layout` names each header row.
 - **Presets lead the composer.** The strip under the task shows every preset
   as a chip, in the order kept in `presets.json`, which is the user's order
-  of preference: `Ctrl+←`/`Ctrl+→` reorder it. Opening the composer for a new
+  of preference: `PageUp`/`PageDown` move the focused chip one place earlier
+  or later, keeping the cursor on it and emitting `SavePresets` immediately.
+  `Ctrl+←`/`Ctrl+→` also reorder. Opening the composer for a new
   thread, and sending a task, set `start_preset`; every `settle` that knows
   what the machine has installed applies the first preset whose CLI is there,
   and the flag stays until a fresh inventory arrives from that machine or the
