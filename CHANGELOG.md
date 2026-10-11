@@ -49,6 +49,11 @@ All notable changes to Herdr Inbox. The format follows
 
 ## [Unreleased]
 
+### Documentation
+
+- Rework the README with example inbox and composer screenshots, a clearer
+  product pitch, a first-task walkthrough and links to star the project.
+
 ### Added
 
 - A preset strip right under the task: every preset is a chip in the user's
