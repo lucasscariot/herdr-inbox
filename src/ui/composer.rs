@@ -129,12 +129,12 @@ pub fn draw(buf: &mut Buffer, app: &App, area: Rect, palette: &Palette, now: Sys
         let hints: &[(&str, &str)] = if on_strip {
             &[
                 ("←→", "choose"),
+                ("PgUp/PgDn", "reorder"),
                 ("↵", "apply"),
                 ("1-9", "quick pick"),
                 ("⌃D", "save"),
                 ("⌃R", "rename"),
                 ("⌦", "remove"),
-                ("⌃←→", "reorder"),
             ]
         } else {
             &[

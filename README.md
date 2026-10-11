@@ -190,8 +190,10 @@ in the background and its progress shows under **Launches**.
 
 **Presets.** On the strip (`F7`, or `Tab` from the task), `←` and `→` move
 between chips, `Enter` applies one, `1`-`9` applies the nth preset directly,
-`Ctrl+←` and `Ctrl+→` reorder them (the first preset is the one every new
-thread starts on), `Ctrl+R` renames and `Delete` removes. A preset whose CLI
+`PageUp` moves the highlighted preset one place earlier and `PageDown` one
+place later, saving the order immediately and keeping that preset highlighted.
+`Ctrl+←` and `Ctrl+→` also reorder. The first preset is the one every new
+thread starts on. `Ctrl+R` renames and `Delete` removes. A preset whose CLI
 is not installed on the chosen machine is shown dimmed and skipped as the
 starting preset. After a send, the composer goes back to the first preset;
 `Ctrl+S` keeps the task and the chosen preset.

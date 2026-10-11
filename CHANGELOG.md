@@ -51,6 +51,9 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Added
 
+- `PageUp` and `PageDown` reorder the highlighted preset one place earlier
+  or later on the strip, saving immediately and keeping it highlighted.
+  The strip's key hint shows these shortcuts; `Ctrl+←`/`Ctrl+→` still work.
 - A preset strip right under the task: every preset is a chip in the user's
   order of preference, the chip in use is highlighted, and a "+ Save as
   preset…" chip (or `Ctrl+D`) saves the current choices. `F7` focuses the

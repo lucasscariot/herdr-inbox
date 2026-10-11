@@ -1998,6 +1998,70 @@ mod conveniences {
     }
 
     #[test]
+    fn page_keys_reorder_presets_and_keep_the_highlight_on_the_moved_preset() {
+        let mut presets = two_presets();
+        presets.push(preset("Pi", "pi", "x", ""));
+        let mut app = composing(presets.clone(), vec![]);
+        type_text(&mut app, "draft");
+        app.update(press(KeyCode::F(7)), at(1));
+        app.update(press(KeyCode::Right), at(1));
+
+        let later = vec![presets[0].clone(), presets[2].clone(), presets[1].clone()];
+        assert_eq!(app.update(press(KeyCode::PageDown), at(1)), vec![Effect::SavePresets(later.clone())]);
+        assert_eq!(app.presets, later);
+        assert_eq!(app.composer.preset_cursor, 2);
+        assert!(app.update(press(KeyCode::PageDown), at(1)).is_empty(), "already last");
+        assert_eq!(app.composer.preset_cursor, 2);
+
+        assert_eq!(app.update(press(KeyCode::PageUp), at(1)), vec![Effect::SavePresets(presets.clone())]);
+        assert_eq!(app.composer.preset_cursor, 1);
+        let earlier = vec![presets[1].clone(), presets[0].clone(), presets[2].clone()];
+        assert_eq!(app.update(press(KeyCode::PageUp), at(1)), vec![Effect::SavePresets(earlier.clone())]);
+        assert_eq!(app.presets, earlier);
+        assert_eq!(app.composer.preset_cursor, 0);
+        assert!(app.update(press(KeyCode::PageUp), at(1)).is_empty(), "already first");
+        assert_eq!(app.composer.preset_cursor, 0);
+        assert_eq!(app.composer.chip_at_cursor(&app.composer_context()).label, "Fast");
+        assert_eq!(app.composer.field, Field::Preset);
+        assert_eq!(app.composer.task.text(), "draft");
+        assert_eq!(app.composer.matching_preset(&app.presets).map(|p| p.name.as_str()), Some("Deep"));
+    }
+
+    #[test]
+    fn page_keys_do_nothing_without_a_movable_preset_chip() {
+        for presets in [vec![], vec![preset("Deep", "claude", "opus", "high")]] {
+            let mut app = composing(presets.clone(), vec![]);
+            app.update(press(KeyCode::F(7)), at(1));
+            for key in [KeyCode::PageUp, KeyCode::PageDown] {
+                assert!(app.update(press(key), at(1)).is_empty(), "empty or single preset");
+                assert_eq!(app.presets, presets);
+            }
+            app.update(press(KeyCode::Left), at(1));
+            assert_eq!(app.composer.chip_at_cursor(&app.composer_context()).chip, Chip::Save);
+            for key in [KeyCode::PageUp, KeyCode::PageDown] {
+                assert!(app.update(press(key), at(1)).is_empty(), "the save chip cannot be reordered");
+                assert_eq!(app.presets, presets);
+            }
+        }
+
+        let mut app = composing(two_presets(), vec![]);
+        for field in [Field::Task, Field::Project] {
+            app.composer.field = field;
+            for key in [KeyCode::PageUp, KeyCode::PageDown] {
+                assert!(app.update(press(key), at(1)).is_empty(), "only the strip reorders");
+            }
+        }
+        app.update(press(KeyCode::F(7)), at(1));
+        ctrl(&mut app, 'r');
+        let query = app.composer.picker.as_ref().unwrap().query.clone();
+        for key in [KeyCode::PageUp, KeyCode::PageDown] {
+            assert!(app.update(press(key), at(1)).is_empty(), "the rename prompt cannot reorder");
+            assert_eq!(app.composer.picker.as_ref().unwrap().query, query);
+        }
+        assert_eq!(app.presets, two_presets());
+    }
+
+    #[test]
     fn clicking_a_chip_applies_it_and_the_save_chip_opens_the_prompt() {
         let mut app = composing(two_presets(), vec![]);
         let chips = geometry(&app).chips;
