@@ -302,11 +302,15 @@ fn usage_row(buf: &mut Buffer, app: &App, layout: &ComposerLayout, palette: &Pal
         left.push((mark, mark_style.bg(palette.panel_bg)));
         left.push((crate::threads::harness_label_for(harness), base.fg(palette.subtext0)));
         match report.and_then(|r| r.usage(&provider)) {
-            Some(usage) if usage.reached => {
+            Some(usage) if usage.is_stale(now) => {
+                // Old numbers never decide: shown faint, with their age.
+                left.push((format!(" {}", usage.summary(now)), dim));
+            }
+            Some(usage) if usage.headroom(now) == 0 => {
                 left.push((format!(" {}", usage.summary(now)), base.fg(palette.red)));
             }
             Some(usage) => {
-                for window in &usage.windows {
+                for window in usage.live_windows(now) {
                     let tone =
                         if window.used_percent >= 80 { base.fg(palette.yellow) } else { base.fg(palette.subtext0) };
                     left.push((format!(" {} ", window.label), dim));

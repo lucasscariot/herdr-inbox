@@ -548,7 +548,7 @@ impl Composer {
     fn auto_choice(&self, ctx: &Context, machine: &str, installed: &[String]) -> Option<String> {
         let candidates: Vec<(&str, Option<&usage::Usage>)> =
             installed.iter().map(|h| (h.as_str(), ctx.usage_for(machine, h))).collect();
-        usage::pick(&candidates, self.harness.as_deref(), PREFERRED).map(str::to_string)
+        usage::pick(&candidates, self.harness.as_deref(), PREFERRED, ctx.now).map(str::to_string)
     }
 
     /// How the auto choice reads: `→ Claude · 62% left`, or why it waits.
@@ -559,11 +559,19 @@ impl Composer {
         let installed = ctx.installed(machine);
         match self.auto_choice(ctx, machine, &installed) {
             Some(chosen) => {
-                let left = ctx.usage_for(machine, &chosen).map(|u| u.left()).unwrap_or_default();
+                let left = ctx.usage_for(machine, &chosen).map(|u| u.left(ctx.now)).unwrap_or_default();
                 format!("→ {} · {left}", harness_label_for(&chosen))
             }
-            None if installed.iter().any(|h| ctx.usage_for(machine, h).is_some()) => "every limit reached".into(),
-            None => "no usage data yet".into(),
+            None => {
+                let readings: Vec<&usage::Usage> = installed.iter().filter_map(|h| ctx.usage_for(machine, h)).collect();
+                if readings.is_empty() {
+                    "no usage data yet".into()
+                } else if readings.iter().all(|u| u.is_stale(ctx.now)) {
+                    "no current usage data".into()
+                } else {
+                    "every limit reached".into()
+                }
+            }
         }
     }
 
@@ -1126,7 +1134,7 @@ impl Composer {
                     (true, _) => format!("Auto {}", self.auto_reason(ctx)),
                     (false, Some(label)) => {
                         let left = self.machine.as_deref().and_then(|m| {
-                            ctx.usage_for(m, self.harness.as_deref()?).map(|u| format!(" · {}", u.left()))
+                            ctx.usage_for(m, self.harness.as_deref()?).map(|u| format!(" · {}", u.left(ctx.now)))
                         });
                         format!("{label}{}", left.unwrap_or_default())
                     }

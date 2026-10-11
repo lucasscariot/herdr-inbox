@@ -19,6 +19,9 @@ pub const PROBE: &str = include_str!("usage/probe.py");
 pub const STATUSLINE: &str = include_str!("usage/statusline.py");
 /// A report older than this is read again when the composer looks at it.
 pub const TTL: Duration = Duration::from_secs(5 * 60);
+/// A provider's numbers older than this say nothing about today: Claude's
+/// cache keeps its last reading after the last thread closes.
+pub const STALE: Duration = Duration::from_secs(24 * 60 * 60);
 /// Candidates within this many points of headroom are a tie, settled by the
 /// harness in use, then the preferred order, so the choice does not flap.
 const TIE: u32 = 5;
@@ -63,36 +66,65 @@ pub struct Usage {
 }
 
 impl Usage {
-    /// Points left before the tightest window is spent.
-    pub fn headroom(&self) -> u32 {
-        if self.reached {
-            return 0;
-        }
-        100u32.saturating_sub(self.windows.iter().map(|w| w.used_percent).max().unwrap_or(0))
+    /// Older than [`STALE`]: shown with its age, never chosen on.
+    pub fn is_stale(&self, now: SystemTime) -> bool {
+        crate::discovery::seconds(now).saturating_sub(self.read_at) > STALE.as_secs()
     }
 
-    /// `5h 38% · week 29%`, or why nothing can run.
+    /// The windows still running: one past its reset has started over.
+    pub fn live_windows(&self, now: SystemTime) -> Vec<&Window> {
+        let now = crate::discovery::seconds(now);
+        self.windows.iter().filter(|w| w.resets_at.is_none_or(|at| at > now)).collect()
+    }
+
+    /// The window that binds: the most spent, the sooner reset on a tie.
+    fn tightest(&self, now: SystemTime) -> Option<&Window> {
+        self.live_windows(now).into_iter().max_by_key(|w| (w.used_percent, std::cmp::Reverse(w.resets_at)))
+    }
+
+    /// Points left before the tightest window is spent.
+    pub fn headroom(&self, now: SystemTime) -> u32 {
+        if self.reached && self.tightest(now).is_some_and(|w| w.used_percent >= 100) {
+            return 0;
+        }
+        if self.reached && self.live_windows(now).len() == self.windows.len() {
+            // Refused by the provider's own verdict, not by a window that
+            // has since started over.
+            return 0;
+        }
+        100u32.saturating_sub(self.tightest(now).map(|w| w.used_percent).unwrap_or(0))
+    }
+
+    /// `5h 38% · week 29%`, or why nothing can run, with the reading's age
+    /// when it is stale.
     pub fn summary(&self, now: SystemTime) -> String {
-        if self.reached {
-            let tightest = self.windows.iter().filter_map(|w| w.resets_at).min();
-            return match tightest.map(|at| resets_in(at, now)) {
-                Some(when) => format!("limit reached · resets {when}"),
-                None => "limit reached".into(),
+        let age = if self.is_stale(now) {
+            format!(" · {} old", crate::ui::age(std::time::UNIX_EPOCH + Duration::from_secs(self.read_at), now))
+        } else {
+            String::new()
+        };
+        if self.headroom(now) == 0 {
+            // The reset that frees ordinary use: the exhausted window's.
+            let binding = self.tightest(now).and_then(|w| w.resets_at);
+            return match binding.map(|at| resets_in(at, now)) {
+                Some(when) => format!("limit reached · resets {when}{age}"),
+                None => format!("limit reached{age}"),
             };
         }
-        let mut parts: Vec<String> = self.windows.iter().map(|w| format!("{} {}%", w.label, w.used_percent)).collect();
+        let mut parts: Vec<String> =
+            self.live_windows(now).iter().map(|w| format!("{} {}%", w.label, w.used_percent)).collect();
         if parts.is_empty() {
-            return "no usage windows".into();
+            return format!("every window reset{age}");
         }
         if self.resets_available > 0 {
             parts.push(format!("{} resets", self.resets_available));
         }
-        parts.join(" · ")
+        format!("{}{age}", parts.join(" · "))
     }
 
     /// `62% left`, the one number the auto choice is made on.
-    pub fn left(&self) -> String {
-        format!("{}% left", self.headroom())
+    pub fn left(&self, now: SystemTime) -> String {
+        format!("{}% left", self.headroom(now))
     }
 }
 
@@ -146,16 +178,17 @@ impl Report {
 }
 
 /// The harness with the most headroom among `candidates` (harness, its
-/// provider's usage). None when no candidate has usage, or every one is
-/// spent: the composer then picks as it would without usage.
+/// provider's usage). None when no candidate has current usage, or every
+/// one is spent: the composer then picks as it would without usage.
 pub fn pick<'a>(
     candidates: &[(&'a str, Option<&Usage>)],
     current: Option<&str>,
     preferred: &[&str],
+    now: SystemTime,
 ) -> Option<&'a str> {
     let usable: Vec<(&str, u32)> = candidates
         .iter()
-        .filter_map(|(harness, usage)| usage.map(|u| (*harness, u.headroom())))
+        .filter_map(|(harness, usage)| usage.filter(|u| !u.is_stale(now)).map(|u| (*harness, u.headroom(now))))
         .filter(|(_, headroom)| *headroom > 0)
         .collect();
     let best = usable.iter().map(|(_, h)| *h).max()?;
@@ -214,17 +247,31 @@ mod tests {
 
     #[test]
     fn headroom_is_what_the_tightest_window_leaves() {
-        assert_eq!(usage(&[("5h", 38), ("week", 71)]).headroom(), 29);
-        assert_eq!(usage(&[]).headroom(), 100);
-        assert_eq!(Usage { reached: true, ..usage(&[("5h", 10)]) }.headroom(), 0);
-        assert_eq!(usage(&[("week", 120)]).headroom(), 0);
+        assert_eq!(usage(&[("5h", 38), ("week", 71)]).headroom(at(0)), 29);
+        assert_eq!(usage(&[]).headroom(at(0)), 100);
+        assert_eq!(Usage { reached: true, ..usage(&[("5h", 10)]) }.headroom(at(0)), 0, "the provider's verdict");
+        assert_eq!(usage(&[("week", 120)]).headroom(at(0)), 0);
+        // A window past its reset has started over and no longer counts.
+        let reset = Usage {
+            windows: vec![
+                Window { label: "5h".into(), used_percent: 100, resets_at: Some(500) },
+                Window { label: "week".into(), used_percent: 40, resets_at: Some(9000) },
+            ],
+            reached: true,
+            ..Usage::default()
+        };
+        assert_eq!(reset.headroom(at(400)), 0);
+        assert_eq!(reset.headroom(at(600)), 60, "the 5h window reset: only the week binds");
+        assert_eq!(reset.summary(at(600)), "week 40%");
+        assert!(!usage(&[]).is_stale(at(STALE.as_secs())));
+        assert!(usage(&[]).is_stale(at(STALE.as_secs() + 1)));
     }
 
     #[test]
     fn summaries_read_as_windows_or_a_reached_limit() {
         assert_eq!(usage(&[("5h", 38), ("week", 29)]).summary(at(0)), "5h 38% · week 29%");
         assert_eq!(Usage { resets_available: 2, ..usage(&[("week", 17)]) }.summary(at(0)), "week 17% · 2 resets");
-        assert_eq!(usage(&[("5h", 38)]).left(), "62% left");
+        assert_eq!(usage(&[("5h", 38)]).left(at(0)), "62% left");
         let reached = Usage {
             reached: true,
             windows: vec![Window { label: "5h".into(), used_percent: 100, resets_at: Some(1000 + 7200) }],
@@ -232,6 +279,18 @@ mod tests {
         };
         assert_eq!(reached.summary(at(1000)), "limit reached · resets in 2h");
         assert_eq!(Usage { reached: true, ..Usage::default() }.summary(at(0)), "limit reached");
+        // The exhausted window's reset is the one that matters, not the soonest.
+        let weekly = Usage {
+            reached: true,
+            windows: vec![
+                Window { label: "5h".into(), used_percent: 30, resets_at: Some(1000 + 3600) },
+                Window { label: "week".into(), used_percent: 100, resets_at: Some(1000 + 2 * 86_400) },
+            ],
+            ..Usage::default()
+        };
+        assert_eq!(weekly.summary(at(1000)), "limit reached · resets in 2d");
+        let old = Usage { read_at: 100, ..usage(&[("week", 29)]) };
+        assert_eq!(old.summary(at(100 + 3 * 86_400)), "week 29% · 3d old");
         assert_eq!(resets_in(100, at(100)), "now");
         assert_eq!(resets_in(100 + 30, at(100)), "in under a minute");
         assert_eq!(resets_in(100 + 35 * 60, at(100)), "in 35m");
@@ -242,23 +301,35 @@ mod tests {
     fn the_pick_takes_the_most_headroom_and_sticks_on_ties() {
         let claude = usage(&[("5h", 38), ("week", 29)]);
         let codex = usage(&[("week", 17)]);
+        let now = at(0);
         let candidates = [("claude", Some(&claude)), ("codex", Some(&codex)), ("pi", None)];
-        assert_eq!(pick(&candidates, Some("claude"), &["claude"]), Some("codex"), "83 left beats 62");
+        assert_eq!(pick(&candidates, Some("claude"), &["claude"], now), Some("codex"), "83 left beats 62");
         let close = usage(&[("week", 40)]);
         let candidates = [("claude", Some(&claude)), ("codex", Some(&close))];
         assert_eq!(
-            pick(&candidates, Some("claude"), &["codex"]),
+            pick(&candidates, Some("claude"), &["codex"], now),
             Some("claude"),
             "within 5 points, the current one stays"
         );
-        assert_eq!(pick(&candidates, None, &["codex"]), Some("codex"), "else the preferred order");
-        assert_eq!(pick(&candidates, Some("pi"), &[]), Some("claude"), "else the first candidate");
+        assert_eq!(pick(&candidates, None, &["codex"], now), Some("codex"), "else the preferred order");
+        assert_eq!(pick(&candidates, Some("pi"), &[], now), Some("claude"), "else the first candidate");
         let spent = Usage { reached: true, ..usage(&[("5h", 100)]) };
         let candidates = [("claude", Some(&spent)), ("codex", Some(&codex))];
-        assert_eq!(pick(&candidates, Some("claude"), &["claude"]), Some("codex"), "a reached limit is never picked");
+        assert_eq!(
+            pick(&candidates, Some("claude"), &["claude"], now),
+            Some("codex"),
+            "a reached limit is never picked"
+        );
         let candidates = [("claude", Some(&spent)), ("codex", None)];
-        assert_eq!(pick(&candidates, None, &[]), None, "nothing usable: the composer falls back");
-        assert_eq!(pick(&[], None, &[]), None);
+        assert_eq!(pick(&candidates, None, &[], now), None, "nothing usable: the composer falls back");
+        assert_eq!(pick(&[], None, &[], now), None);
+        // A days-old reading says nothing about today: it is no candidate.
+        let candidates = [("claude", Some(&claude)), ("codex", Some(&codex))];
+        let later = at(STALE.as_secs() + 1);
+        assert_eq!(pick(&candidates, Some("codex"), &[], later), None, "both stale");
+        let fresh = Usage { read_at: STALE.as_secs(), ..claude.clone() };
+        let candidates = [("claude", Some(&fresh)), ("codex", Some(&codex))];
+        assert_eq!(pick(&candidates, Some("codex"), &[], later), Some("claude"), "only the current reading counts");
     }
 
     #[test]

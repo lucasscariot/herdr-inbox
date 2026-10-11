@@ -306,7 +306,7 @@ fn perform(
         }
         Effect::Launch { machine, plan } => {
             if let Some((transport, link)) = fleet.get(&machine) {
-                work.launch(transport.runner(), *plan, link.refresher());
+                work.launch(transport.clone(), *plan, link.refresher());
             }
         }
         Effect::Resume { machine, record } => {
@@ -603,10 +603,26 @@ impl Work {
         });
     }
 
-    fn launch(&self, runner: Runner, plan: Plan, refresh: impl Fn() + Send + 'static) {
+    fn launch(&self, transport: Transport, mut plan: Plan, refresh: impl Fn() + Send + 'static) {
         let state = self.state.clone();
         let tx = self.tx.clone();
+        let usage = self.config.usage.clone();
         thread::spawn(move || {
+            let runner = transport.runner();
+            if plan.record.harness == "claude" && usage.enabled && usage.claude_statusline {
+                // Before the first usage report, the wrapper may not be on
+                // the machine yet: the probe installs it, nothing else.
+                let state_dir = transport.is_local().then(|| state.dir().to_string_lossy().into_owned());
+                let settings = usage::settings(state_dir.as_deref(), None, false);
+                if let Some(wrapper) = transport
+                    .probe(usage::PROBE, &settings, STATUSLINE_TIMEOUT)
+                    .ok()
+                    .and_then(|output| usage::finish(&output, SystemTime::now()).ok())
+                    .and_then(|report| report.statusline)
+                {
+                    plan.with_claude_statusline(&wrapper);
+                }
+            }
             let id = plan.record.id.clone();
             let journal = |record: &Record| {
                 let _ = state.write(&format!("launches/{}.json", record.id), record);
@@ -635,6 +651,8 @@ impl Work {
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
 const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Installing the status line wrapper is one file write on the machine.
+const STATUSLINE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long delivered launches are kept for re-sending.
 const JOURNAL_DAYS: u64 = 14;
 

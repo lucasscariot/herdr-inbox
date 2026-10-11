@@ -1307,8 +1307,11 @@ fn the_composer_shows_codex_usage_and_lets_the_inbox_pick_the_harness() {
         "#!/bin/sh\ncase \"$1\" in\n  --help) printf '%s\\n' '--model <MODEL>'; exit 0;;\n  app-server) read a; read b; read c\n    printf '%s\\n' '{\"id\":0,\"result\":{}}' \
 '{\"id\":1,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":null,\"planType\":\"prolite\"},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n    exit 0;;\nesac\nexit 3\n",
     );
-    write_executable(&root.join("bin/claude"), "#!/bin/sh\necho 'not really claude'\nexit 3\n");
-    let config = format!("roots = [\"{}\"]\ndepth = 1\n", root.join("work").display());
+    write_executable(
+        &root.join("bin/claude"),
+        &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}/claude-args'\nexit 3\n", root.display()),
+    );
+    let config = format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display());
     std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
     std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
 
@@ -1316,8 +1319,15 @@ fn the_composer_shows_codex_usage_and_lets_the_inbox_pick_the_harness() {
     inbox.wait_for_text("No agent threads yet.");
     inbox.keys("n");
     inbox.wait_for_text("Harness    Claude");
-    inbox.wait_for_text("✻ Claude no data yet  ·  ◆ Codex week 17%");
+    // A Claude task sent at once, before any usage report, still gets the
+    // status line wrapper: the launch installs it itself.
+    inbox.keys("Fix the login loop\r");
+    inbox.wait_for_text("✗ cockpit · Claude");
+    let args = std::fs::read_to_string(root.join("claude-args")).expect("claude was started");
     let wrapper = root.join("state/herdr-inbox/usage/statusline.py");
+    assert!(args.contains("--settings\n"), "{args}");
+    assert!(args.contains(&format!("python3 \\\"{}\\\"", wrapper.display())), "{args}");
+    inbox.wait_for_text("✻ Claude no data yet  ·  ◆ Codex week 17%");
     assert!(wrapper.is_file(), "the status line wrapper is installed for Claude threads");
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("state/herdr-inbox/usage/local.json")).expect("cache"))

@@ -744,6 +744,41 @@ mod usage {
     }
 
     #[test]
+    fn a_stale_reading_never_decides_the_auto_choice() {
+        let mut world = world_with_usage();
+        let mut composer = settled(&world);
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "Codex has more left");
+        // Codex's reading is days old: only Claude's current numbers count.
+        let mut old = usage(&[("week", 17)], false);
+        old.read_at = 0;
+        let mut current = usage(&[("5h", 38), ("week", 29)], false);
+        current.read_at = crate::usage::STALE.as_secs() + 500;
+        world.usage.insert("local".into(), report(&[("anthropic", Some(current)), ("openai", Some(old.clone()))]));
+        let later = World { ..world };
+        let mut ctx = later.ctx();
+        ctx.now = std::time::UNIX_EPOCH + crate::usage::STALE + std::time::Duration::from_secs(1000);
+        composer.settle(&ctx);
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        assert_eq!(composer.value(&ctx, Field::Harness), "Auto → Claude · 62% left");
+        let choices = composer.choices(&ctx, Field::Harness, "");
+        assert_eq!(choices[1].detail, "week 17% · 1d old", "Codex's row says how old its numbers are");
+        let mut both_old = usage(&[("5h", 38), ("week", 29)], false);
+        both_old.read_at = 0;
+        let world = World {
+            usage: HashMap::from([(
+                "local".to_string(),
+                report(&[("anthropic", Some(both_old)), ("openai", Some(old))]),
+            )]),
+            ..later
+        };
+        let mut ctx = world.ctx();
+        ctx.now = std::time::UNIX_EPOCH + crate::usage::STALE + std::time::Duration::from_secs(1000);
+        composer.settle(&ctx);
+        assert_eq!(composer.value(&ctx, Field::Harness), "Auto no current usage data");
+    }
+
+    #[test]
     fn regression_the_next_task_keeps_auto_over_the_first_preset() {
         let mut world = world_with_usage();
         world.presets.push(Preset {
