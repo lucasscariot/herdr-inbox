@@ -111,6 +111,10 @@ pub struct Record {
     pub project: String,
     pub repo: String,
     pub harness: String,
+    /// The inbox chose the harness for its usage left: the project
+    /// remembers the choosing, not the harness.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub harness_auto: bool,
     #[serde(default)]
     pub model: String,
     #[serde(default)]
@@ -153,6 +157,31 @@ pub struct Plan {
     pub base: Option<String>,
     /// For `herdr agent start --timeout`.
     pub start_timeout_ms: u64,
+}
+
+impl Plan {
+    /// Whether a Claude thread still lacks a status line: its own `--settings`,
+    /// the user's or the wrapper's, settles it.
+    pub fn wants_claude_statusline(&self) -> bool {
+        self.record.harness == "claude"
+            && !self.agent_args.iter().any(|a| a == "--settings" || a.starts_with("--settings="))
+    }
+
+    /// Gives a Claude thread the status line wrapper that reports usage,
+    /// keeping the user's own status line options, unless `--settings` is
+    /// already set.
+    pub fn with_claude_statusline(&mut self, wrapper: &str, options: &serde_json::Map<String, Value>) {
+        if !self.wants_claude_statusline() {
+            return;
+        }
+        self.agent_args.extend(["--settings".to_string(), crate::usage::statusline_settings(wrapper, options)]);
+    }
+
+    /// The checkout whose `.claude` settings the agent will read: the
+    /// existing checkout, or the repository a new worktree comes from.
+    pub fn project_dir(&self) -> &str {
+        if self.record.cwd.is_empty() { &self.record.repo } else { &self.record.cwd }
+    }
 }
 
 /// The task without its pasted images, for titles and branch names.
@@ -510,6 +539,7 @@ pub fn plan(
         project: request.project.name.clone(),
         repo: request.project.path.clone(),
         harness: request.harness.clone(),
+        harness_auto: false,
         model: model.unwrap_or_default(),
         thinking: thinking.unwrap_or_default(),
         title,

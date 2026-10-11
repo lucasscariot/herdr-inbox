@@ -54,6 +54,7 @@ struct World {
     preferences: Preferences,
     config: Config,
     presets: Vec<Preset>,
+    usage: HashMap<String, crate::usage::Report>,
 }
 
 impl World {
@@ -64,6 +65,8 @@ impl World {
             preferences: &self.preferences,
             config: &self.config,
             presets: &self.presets,
+            usage: &self.usage,
+            now: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000),
         }
     }
 }
@@ -113,6 +116,7 @@ fn world() -> World {
         preferences: Preferences::default(),
         config: Config::default(),
         presets: Vec::new(),
+        usage: HashMap::new(),
     }
 }
 
@@ -132,6 +136,7 @@ fn remember(
     workspace: &str,
 ) {
     world.preferences.remember(&Remembered {
+        auto: false,
         project: project.into(),
         machine: machine.into(),
         harness: harness.into(),
@@ -406,6 +411,7 @@ fn with_nothing_discovered_the_composer_says_so_and_refuses_to_send() {
         preferences: Preferences::default(),
         config: Config::default(),
         presets: Vec::new(),
+        usage: HashMap::new(),
     };
     let mut composer = settled(&world);
     assert_eq!(composer.project, None);
@@ -536,4 +542,299 @@ fn a_compared_agent_the_machine_lacks_is_dropped_when_the_machine_changes() {
         "Claude is not installed on Mac Studio.",
         "nothing launches when one agent cannot"
     );
+}
+
+mod usage {
+    use super::*;
+    use crate::usage::{Report, Slot, Usage, Window};
+
+    fn usage(windows: &[(&str, u32)], reached: bool) -> Usage {
+        Usage {
+            windows: windows
+                .iter()
+                .map(|(l, u)| Window { label: l.to_string(), used_percent: *u, resets_at: None })
+                .collect(),
+            reached,
+            read_at: 900,
+            ..Usage::default()
+        }
+    }
+
+    fn report(entries: &[(&str, Option<Usage>)]) -> Report {
+        Report {
+            providers: entries
+                .iter()
+                .map(|(provider, usage)| {
+                    let slot = match usage {
+                        Some(usage) => Slot { usage: Some(usage.clone()), error: None },
+                        None => Slot { usage: None, error: Some("no Claude thread has reported yet".into()) },
+                    };
+                    (provider.to_string(), slot)
+                })
+                .collect(),
+            statusline: Some("/s/usage/statusline.py".into()),
+            statusline_options: Default::default(),
+            read_at: 900,
+        }
+    }
+
+    /// Claude at 62 % left, Codex at 83 % left on the local machine.
+    fn world_with_usage() -> World {
+        let mut world = world();
+        world.usage.insert(
+            "local".into(),
+            report(&[
+                ("anthropic", Some(usage(&[("5h", 38), ("week", 29)], false))),
+                ("openai", Some(usage(&[("week", 17)], false))),
+            ]),
+        );
+        world
+    }
+
+    #[test]
+    fn auto_picks_the_harness_with_the_most_usage_left_and_its_remembered_model() {
+        let mut world = world_with_usage();
+        remember(&mut world, "cockpit", "local", "claude", "sonnet", "high", "worktree");
+        remember(&mut world, "cockpit", "local", "codex", "gpt-5", "", "worktree");
+        let mut composer = settled(&world);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "the last launch");
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert!(composer.auto_harness);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "83 % left beats 62 %");
+        assert_eq!(composer.model.as_deref(), Some("gpt-5"));
+        assert_eq!(composer.value(&world.ctx(), Field::Harness), "Auto → Codex · 83% left");
+        // The numbers change: Codex is nearly spent, Claude takes over with its own model.
+        world.usage.insert(
+            "local".into(),
+            report(&[
+                ("anthropic", Some(usage(&[("5h", 38), ("week", 29)], false))),
+                ("openai", Some(usage(&[("week", 97)], false))),
+            ]),
+        );
+        composer.settle(&world.ctx());
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        assert_eq!(composer.model.as_deref(), Some("sonnet"));
+        assert_eq!(composer.thinking.as_deref(), Some("high"));
+        assert_eq!(composer.value(&world.ctx(), Field::Harness), "Auto → Claude · 62% left");
+        // A limit reached is never picked, whatever the other window says.
+        world.usage.insert(
+            "local".into(),
+            report(&[
+                ("anthropic", Some(usage(&[("5h", 100)], true))),
+                ("openai", Some(usage(&[("week", 97)], false))),
+            ]),
+        );
+        composer.settle(&world.ctx());
+        assert_eq!(composer.harness.as_deref(), Some("codex"));
+        assert_eq!(composer.value(&world.ctx(), Field::Harness), "Auto → Codex · 3% left");
+    }
+
+    #[test]
+    fn auto_waits_for_numbers_and_says_so() {
+        let world = world();
+        let mut composer = settled(&world);
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert_eq!(composer.harness.as_deref(), Some("claude"), "the preferred harness until usage is known");
+        assert_eq!(composer.value(&world.ctx(), Field::Harness), "Auto no usage data yet");
+        composer.task.set("Fix it");
+        let request = &composer.requests(&world.ctx()).unwrap()[0];
+        assert_eq!(request.harness, "claude", "sending never waits for usage");
+        let mut spent = world;
+        spent.usage.insert(
+            "local".into(),
+            report(&[
+                ("anthropic", Some(usage(&[("5h", 100)], true))),
+                ("openai", Some(usage(&[("week", 100)], true))),
+            ]),
+        );
+        composer.settle(&spent.ctx());
+        assert_eq!(composer.value(&spent.ctx(), Field::Harness), "Auto every limit reached");
+        assert_eq!(composer.harness.as_deref(), Some("claude"), "still sendable: the provider decides");
+    }
+
+    #[test]
+    fn the_harness_picker_offers_auto_first_and_shows_each_usage() {
+        let world = world_with_usage();
+        let composer = settled(&world);
+        let choices = composer.choices(&world.ctx(), Field::Harness, "");
+        let rows: Vec<(String, String)> = choices.iter().map(|c| (c.label.clone(), c.detail.clone())).collect();
+        assert_eq!(
+            rows,
+            [
+                ("Auto · most usage left".to_string(), "→ Codex · 83% left".to_string()),
+                ("Codex".to_string(), "week 17%".to_string()),
+                ("Claude".to_string(), "5h 38% · week 29%".to_string()),
+            ]
+        );
+        assert_eq!(choices[0].pick, Pick::AutoHarness);
+        assert_eq!(
+            composer.value(&world.ctx(), Field::Harness),
+            "Claude · 62% left",
+            "a named harness shows its headroom"
+        );
+        let mut without = world_with_usage();
+        without
+            .usage
+            .insert("local".into(), report(&[("anthropic", None), ("openai", Some(usage(&[("week", 17)], false)))]));
+        let choices = composer.choices(&without.ctx(), Field::Harness, "");
+        assert_eq!(choices[2].detail, "no Claude thread has reported yet");
+        let mut off = world_with_usage();
+        off.config.usage.enabled = false;
+        let choices = composer.choices(&off.ctx(), Field::Harness, "");
+        assert!(choices.iter().all(|c| c.pick != Pick::AutoHarness), "no Auto when usage is off");
+        assert_eq!(choices[0].detail, "codex", "the raw kind, as before");
+        assert_eq!(composer.value(&off.ctx(), Field::Harness), "Claude");
+        let mut studio = world_with_usage();
+        studio.usage.remove("local");
+        let mut composer = settled(&studio);
+        composer.apply(&studio.ctx(), Pick::Machine("studio".into()));
+        let choices = composer.choices(&studio.ctx(), Field::Harness, "");
+        assert_eq!(choices[0].detail, "no usage data yet", "nothing read on the studio yet");
+        assert_eq!(choices[1].detail, "no usage data yet");
+    }
+
+    #[test]
+    fn a_project_that_remembers_auto_starts_on_auto_and_skips_the_first_preset() {
+        let mut world = world_with_usage();
+        world.presets.push(Preset {
+            name: "Opus".into(),
+            harness: "claude".into(),
+            model: "opus".into(),
+            thinking: String::new(),
+        });
+        world.preferences.remember(&Remembered {
+            auto: true,
+            project: "cockpit".into(),
+            machine: "local".into(),
+            harness: "claude".into(),
+            workspace: "worktree".into(),
+            model: "sonnet".into(),
+            thinking: String::new(),
+        });
+        assert!(world.preferences.project("cockpit").auto);
+        assert_eq!(world.preferences.project("cockpit").harness.as_deref(), Some("claude"));
+        assert_eq!(
+            world.preferences.project("cockpit").models["local"]["claude"],
+            "sonnet",
+            "under the harness that ran"
+        );
+        let mut composer = Composer { start_preset: true, ..Composer::default() };
+        composer.settle(&world.ctx());
+        assert!(composer.auto_harness, "the project asked the inbox to choose");
+        assert!(!composer.start_preset);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "not the first preset's Claude");
+        // Naming a harness or a preset ends the choosing.
+        composer.apply(&world.ctx(), Pick::Preset("Opus".into()));
+        assert!(!composer.auto_harness);
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert!(composer.auto_harness);
+        composer.apply(&world.ctx(), Pick::Harness("claude".into()));
+        assert!(!composer.auto_harness);
+        assert_eq!(composer.value(&world.ctx(), Field::Harness), "Claude · 62% left");
+        // A machine without usage is settled as before.
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        composer.apply(&world.ctx(), Pick::Machine("studio".into()));
+        assert!(composer.auto_harness, "auto survives a machine change");
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "the only harness there");
+        let mut off = world_with_usage();
+        off.config.usage.enabled = false;
+        let mut composer = Composer { start_preset: true, ..Composer::default() };
+        composer.settle(&off.ctx());
+        assert!(!composer.auto_harness, "usage off: the remembered auto is ignored");
+        assert_eq!(composer.harness.as_deref(), Some("claude"), "the first preset, as before");
+    }
+
+    #[test]
+    fn a_stale_reading_never_decides_the_auto_choice() {
+        let mut world = world_with_usage();
+        let mut composer = settled(&world);
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "Codex has more left");
+        // Codex's reading is days old: only Claude's current numbers count.
+        let mut old = usage(&[("week", 17)], false);
+        old.read_at = 0;
+        let mut current = usage(&[("5h", 38), ("week", 29)], false);
+        current.read_at = crate::usage::STALE.as_secs() + 500;
+        world.usage.insert("local".into(), report(&[("anthropic", Some(current)), ("openai", Some(old.clone()))]));
+        let later = World { ..world };
+        let mut ctx = later.ctx();
+        ctx.now = std::time::UNIX_EPOCH + crate::usage::STALE + std::time::Duration::from_secs(1000);
+        composer.settle(&ctx);
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        assert_eq!(composer.value(&ctx, Field::Harness), "Auto → Claude · 62% left");
+        let choices = composer.choices(&ctx, Field::Harness, "");
+        assert_eq!(choices[1].detail, "week 17% · 1d old", "Codex's row says how old its numbers are");
+        let mut both_old = usage(&[("5h", 38), ("week", 29)], false);
+        both_old.read_at = 0;
+        let world = World {
+            usage: HashMap::from([(
+                "local".to_string(),
+                report(&[("anthropic", Some(both_old)), ("openai", Some(old))]),
+            )]),
+            ..later
+        };
+        let mut ctx = world.ctx();
+        ctx.now = std::time::UNIX_EPOCH + crate::usage::STALE + std::time::Duration::from_secs(1000);
+        composer.settle(&ctx);
+        assert_eq!(composer.value(&ctx, Field::Harness), "Auto no current usage data");
+    }
+
+    #[test]
+    fn regression_the_next_task_keeps_auto_over_the_first_preset() {
+        let mut world = world_with_usage();
+        world.presets.push(Preset {
+            name: "Opus".into(),
+            harness: "claude".into(),
+            model: "opus".into(),
+            thinking: String::new(),
+        });
+        let mut composer = settled(&world);
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert_eq!(composer.harness.as_deref(), Some("codex"));
+        // A send asks for the first preset on the next task; Auto still wins.
+        composer.start_preset = true;
+        composer.settle(&world.ctx());
+        assert!(composer.auto_harness);
+        assert!(!composer.start_preset);
+        assert_eq!(composer.harness.as_deref(), Some("codex"), "the harness shown is the one sent");
+        assert_eq!(composer.model, None, "not the preset's model either");
+    }
+
+    #[test]
+    fn auto_follows_the_project_being_switched_to() {
+        let mut world = world_with_usage();
+        world.preferences.remember(&Remembered {
+            auto: true,
+            project: "cockpit".into(),
+            machine: "local".into(),
+            harness: "codex".into(),
+            workspace: "worktree".into(),
+            model: String::new(),
+            thinking: String::new(),
+        });
+        remember(&mut world, "api", "local", "claude", "sonnet", "", "worktree");
+        let mut composer = settled(&world);
+        assert_eq!(composer.project.as_deref(), Some("api"), "the last project");
+        assert!(!composer.auto_harness);
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        composer.apply(&world.ctx(), Pick::Project("cockpit".into()));
+        assert!(composer.auto_harness, "cockpit asked the inbox to choose");
+        assert_eq!(composer.harness.as_deref(), Some("codex"));
+        composer.apply(&world.ctx(), Pick::Project("api".into()));
+        assert!(!composer.auto_harness, "api remembers a harness of its own");
+        assert_eq!(composer.harness.as_deref(), Some("claude"));
+        assert_eq!(composer.model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn a_configured_provider_lends_its_usage_to_another_harness() {
+        let mut world = world_with_usage();
+        world.config.usage.providers.insert("codex".into(), "anthropic".into());
+        let mut composer = settled(&world);
+        composer.apply(&world.ctx(), Pick::AutoHarness);
+        assert_eq!(composer.harness.as_deref(), Some("claude"), "both at 62 %: the preferred order");
+        let choices = composer.choices(&world.ctx(), Field::Harness, "");
+        assert_eq!(choices[1].detail, "5h 38% · week 29%", "Codex shows the Anthropic numbers");
+    }
 }

@@ -1074,6 +1074,173 @@ mod composer_flow {
         assert!(effects.is_empty(), "no second discovery while one runs");
     }
 
+    fn usage_report(windows: &[(&str, &str, u32)]) -> crate::usage::Report {
+        let mut providers = std::collections::BTreeMap::new();
+        for (provider, label, used) in windows {
+            let entry = providers.entry(provider.to_string()).or_insert_with(|| crate::usage::Slot {
+                usage: Some(crate::usage::Usage { read_at: 1, ..Default::default() }),
+                error: None,
+            });
+            if let Some(usage) = &mut entry.usage {
+                usage.windows.push(crate::usage::Window {
+                    label: label.to_string(),
+                    used_percent: *used,
+                    resets_at: None,
+                });
+            }
+        }
+        crate::usage::Report {
+            providers,
+            statusline: Some("/s/usage/statusline.py".into()),
+            statusline_options: Default::default(),
+            read_at: 1,
+        }
+    }
+
+    #[test]
+    fn usage_is_read_once_the_harnesses_are_known_and_again_when_stale_or_asked() {
+        let (mut app, _) = loaded();
+        let effects = app.update(press(KeyCode::Char('n')), at(1));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ReadUsage { .. })), "no harness known yet");
+        let effects = app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(1));
+        assert_eq!(
+            effects,
+            vec![Effect::ReadUsage { machine: LOCAL.into(), codex: Some("codex".into()), claude: true }],
+            "both CLIs are installed: both providers are read"
+        );
+        assert!(app.usage_reading.contains(LOCAL));
+        assert!(app.update(Input::Tick, at(2)).is_empty(), "one read at a time");
+        let effects = app.update(
+            Input::Usage {
+                machine: LOCAL.into(),
+                result: Ok(usage_report(&[("anthropic", "5h", 38), ("openai", "week", 17)])),
+            },
+            at(2),
+        );
+        assert!(effects.is_empty());
+        assert!(!app.usage_reading.contains(LOCAL));
+        assert_eq!(app.usage[LOCAL].usage("openai").unwrap().windows[0].used_percent, 17);
+        assert!(app.update(Input::Tick, at(100)).is_empty(), "fresh for five minutes");
+        let effects = app.update(Input::Tick, at(2 + 300));
+        assert!(matches!(effects[..], [Effect::ReadUsage { .. }]), "stale while the composer is open: {effects:?}");
+        app.update(Input::Usage { machine: LOCAL.into(), result: Err("python3: not found".into()) }, at(303));
+        assert!(app.notice.is_none(), "a quiet refresh fails quietly");
+        assert!(app.update(Input::Tick, at(304)).is_empty(), "a failure is not retried on the next tick");
+        assert!(app.update(Input::Tick, at(303 + 299)).is_empty());
+        let effects = app.update(Input::Tick, at(303 + 300));
+        assert!(matches!(effects[..], [Effect::ReadUsage { .. }]), "retried after the TTL: {effects:?}");
+        app.update(Input::Usage { machine: LOCAL.into(), result: Err("python3: not found".into()) }, at(603));
+        let effects = app.update(press(KeyCode::F(5)), at(604));
+        assert!(effects.iter().any(|e| matches!(e, Effect::ReadUsage { .. })), "F5 reads again at once: {effects:?}");
+        app.update(Input::Usage { machine: LOCAL.into(), result: Err("python3: not found".into()) }, at(604));
+        assert_eq!(app.notice.as_ref().unwrap().text, "Could not read usage: python3: not found", "asked for: say so");
+        app.update(press(KeyCode::Esc), at(605));
+        assert!(app.update(Input::Tick, at(2000)).is_empty(), "nothing is read while the composer is closed");
+        let mut only_codex = inventory();
+        only_codex.harnesses = vec!["codex".into()];
+        app.config.usage.providers.insert("codex".into(), "anthropic".into());
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(only_codex) }, at(2001));
+        app.update(press(KeyCode::Tab), at(2002));
+        let effects = app.update(press(KeyCode::Char('n')), at(2002));
+        assert!(
+            effects.contains(&Effect::ReadUsage { machine: LOCAL.into(), codex: None, claude: true }),
+            "a harness mapped to Anthropic reads Claude's cache, and no codex to ask: {effects:?}"
+        );
+        app.update(Input::Usage { machine: LOCAL.into(), result: Err("x".into()) }, at(2003));
+        app.config.usage.enabled = false;
+        let effects = app.update(press(KeyCode::F(5)), at(2004));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ReadUsage { .. })), "usage off: never read");
+    }
+
+    #[test]
+    fn regression_a_send_resolves_auto_on_the_numbers_of_that_moment() {
+        let mut app = composing();
+        let mut report = usage_report(&[("anthropic", "5h", 90), ("openai", "week", 50)]);
+        // Claude's 5-hour window resets at 100: before that Codex has more left.
+        if let Some(usage) = report.providers.get_mut("anthropic").and_then(|s| s.usage.as_mut()) {
+            usage.windows[0].resets_at = Some(100);
+        }
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(report) }, at(2));
+        app.update(press(KeyCode::F(3)), at(2));
+        app.update(press(KeyCode::Enter), at(2));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        type_text(&mut app, "Fix the login redirect loop");
+        // Time passes without any input that settles: the row would show
+        // Claude, and so must the launch.
+        app.update(Input::Tick, at(200));
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"), "not settled by a tick");
+        assert!(app.composer.value(&app.composer_context(), Field::Harness).starts_with("Auto → Claude"));
+        let effects = app.update(press(KeyCode::Enter), at(200));
+        let record = launch_of(&effects).expect("a launch");
+        assert_eq!(record.harness, "claude", "what is shown is what is sent");
+        assert!(record.harness_auto);
+    }
+
+    #[test]
+    fn an_auto_launch_carries_the_status_line_and_remembers_auto() {
+        let mut app = composing();
+        app.update(
+            Input::Usage {
+                machine: LOCAL.into(),
+                result: Ok(usage_report(&[("anthropic", "5h", 38), ("openai", "week", 17)])),
+            },
+            at(2),
+        );
+        app.update(press(KeyCode::F(3)), at(2));
+        app.update(press(KeyCode::Enter), at(2));
+        assert!(app.composer.auto_harness);
+        assert_eq!(app.composer.harness.as_deref(), Some("codex"));
+        type_text(&mut app, "Fix the login redirect loop");
+        let effects = app.update(press(KeyCode::Enter), at(3));
+        let plan = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Launch { plan, .. } => Some(plan),
+                _ => None,
+            })
+            .expect("a launch");
+        assert_eq!(plan.record.harness, "codex");
+        assert!(plan.record.harness_auto);
+        assert!(plan.agent_args.is_empty(), "Codex gets no Claude status line");
+        let record = Record { stage: Stage::Submitted, pane_id: Some("p9".into()), ..plan.record.clone() };
+        let effects =
+            app.update(Input::LaunchFinished { id: record.id.clone(), result: Ok(Outcome::Sent(record)) }, at(4));
+        let remembered = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Remember(r) => Some(r),
+                _ => None,
+            })
+            .expect("remembered");
+        assert!(remembered.auto);
+        assert_eq!(remembered.harness, "codex");
+        assert!(app.preferences.project("cockpit").auto);
+        assert_eq!(app.preferences.project("cockpit").harness.as_deref(), Some("codex"));
+        assert!(app.composer.auto_harness, "the next task is still chosen by the inbox");
+
+        // A Claude launch keeps the user's flags; the status line wrapper is
+        // the launch's business, where the project's own options are known.
+        app.config.global.harness_args =
+            Some(std::collections::BTreeMap::from([("claude".to_string(), vec!["--verbose".to_string()])]));
+        app.update(press(KeyCode::F(3)), at(5));
+        app.update(press(KeyCode::Down), at(5));
+        app.update(press(KeyCode::Enter), at(5));
+        assert!(!app.composer.auto_harness);
+        assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+        type_text(&mut app, "Add the invoice export");
+        let effects = app.update(press(KeyCode::Enter), at(6));
+        let plan = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Launch { plan, .. } => Some(plan),
+                _ => None,
+            })
+            .expect("a launch");
+        assert_eq!(plan.agent_args, ["--verbose"]);
+        assert!(plan.wants_claude_statusline(), "the launch adds the wrapper");
+        assert!(!plan.record.harness_auto);
+    }
+
     #[test]
     fn fresh_models_are_not_read_again_unless_asked() {
         let mut app = composing();
@@ -1277,10 +1444,10 @@ mod composer_flow {
         assert_eq!(app.composer.harness.as_deref(), Some("codex"));
         assert!(app.composer.picker.is_none());
         app.update(press(KeyCode::F(3)), at(1));
-        app.update(press(KeyCode::Down), at(1));
-        app.update(press(KeyCode::Down), at(1));
-        app.update(press(KeyCode::Down), at(1));
-        assert_eq!(app.composer.picker.as_ref().unwrap().selected, 1, "the selection stays on the list");
+        for _ in 0..4 {
+            app.update(press(KeyCode::Down), at(1));
+        }
+        assert_eq!(app.composer.picker.as_ref().unwrap().selected, 2, "the selection stays on the list");
         app.update(press(KeyCode::Esc), at(1));
         assert!(app.composer.picker.is_none());
         assert_eq!(app.focus, Focus::Composer, "Esc closes the picker first");
@@ -1422,6 +1589,7 @@ mod composer_flow {
             project: "cockpit".into(),
             repo: "/w/cockpit".into(),
             harness: "claude".into(),
+            harness_auto: false,
             model: String::new(),
             thinking: String::new(),
             title: "Old task".into(),
@@ -1533,6 +1701,7 @@ mod conveniences {
             project: "cockpit".into(),
             repo: "/w/cockpit".into(),
             harness: "claude".into(),
+            harness_auto: false,
             model: "opus".into(),
             thinking: "high".into(),
             title: format!("Task {id}"),

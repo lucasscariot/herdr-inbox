@@ -33,6 +33,7 @@ use crate::speech::whisper;
 use crate::state::State;
 use crate::theme;
 use crate::threads;
+use crate::usage;
 
 mod redraw;
 use redraw::Redraw;
@@ -298,9 +299,14 @@ fn perform(
                 work.discover(machine, transport.clone(), include_models);
             }
         }
+        Effect::ReadUsage { machine, codex, claude } => {
+            if let Some((transport, _)) = fleet.get(&machine) {
+                work.read_usage(machine, transport.clone(), codex, claude);
+            }
+        }
         Effect::Launch { machine, plan } => {
             if let Some((transport, link)) = fleet.get(&machine) {
-                work.launch(transport.runner(), *plan, link.refresher());
+                work.launch(transport.clone(), *plan, link.refresher());
             }
         }
         Effect::Resume { machine, record } => {
@@ -531,6 +537,12 @@ impl Work {
                 app.update(Input::Inventory { machine: machine.clone(), result: Ok(cached) }, now);
             }
         }
+        for machine in self.labels.keys() {
+            let cached: Option<usage::Report> = self.state.read(&usage_file(machine));
+            if let Some(report) = cached {
+                app.update(Input::Usage { machine: machine.clone(), result: Ok(report) }, now);
+            }
+        }
         let cutoff = discovery::seconds(now).saturating_sub(JOURNAL_DAYS * 86_400);
         let mut records = Vec::new();
         for id in self.state.list("launches") {
@@ -573,10 +585,45 @@ impl Work {
         });
     }
 
-    fn launch(&self, runner: Runner, plan: Plan, refresh: impl Fn() + Send + 'static) {
+    /// Reads a machine's subscription usage through its CLIs' own channels.
+    fn read_usage(&self, machine: String, transport: Transport, codex: Option<String>, claude: bool) {
+        let state_dir = transport.is_local().then(|| self.state.dir().to_string_lossy().into_owned());
         let state = self.state.clone();
         let tx = self.tx.clone();
         thread::spawn(move || {
+            let settings = usage::settings(state_dir.as_deref(), codex.as_deref(), claude, None);
+            let result = transport
+                .probe(usage::PROBE, &settings, USAGE_TIMEOUT)
+                .map_err(|err| err.to_string())
+                .and_then(|output| usage::finish(&output, SystemTime::now()));
+            if let Ok(report) = &result {
+                let _ = state.write(&usage_file(&machine), report);
+            }
+            let _ = tx.send(Input::Usage { machine, result });
+        });
+    }
+
+    fn launch(&self, transport: Transport, mut plan: Plan, refresh: impl Fn() + Send + 'static) {
+        let state = self.state.clone();
+        let tx = self.tx.clone();
+        let usage = self.config.usage.clone();
+        thread::spawn(move || {
+            let runner = transport.runner();
+            if usage.enabled && usage.claude_statusline && plan.wants_claude_statusline() {
+                // Before the first usage report, the wrapper may not be on
+                // the machine yet: the probe installs it, nothing else. A
+                // plan that already has its settings skips the round trip.
+                let state_dir = transport.is_local().then(|| state.dir().to_string_lossy().into_owned());
+                let settings = usage::settings(state_dir.as_deref(), None, false, Some(plan.project_dir()));
+                if let Some(report) = transport
+                    .probe(usage::PROBE, &settings, STATUSLINE_TIMEOUT)
+                    .ok()
+                    .and_then(|output| usage::finish(&output, SystemTime::now()).ok())
+                    && let Some(wrapper) = &report.statusline
+                {
+                    plan.with_claude_statusline(wrapper, &report.statusline_options);
+                }
+            }
             let id = plan.record.id.clone();
             let journal = |record: &Record| {
                 let _ = state.write(&format!("launches/{}.json", record.id), record);
@@ -604,12 +651,22 @@ impl Work {
 }
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
+const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Installing the status line wrapper is one file write on the machine.
+const STATUSLINE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long delivered launches are kept for re-sending.
 const JOURNAL_DAYS: u64 = 14;
 
 fn inventory_file(machine: &str) -> String {
-    let safe: String = machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-    format!("inventory/{safe}.json")
+    format!("inventory/{}.json", safe_name(machine))
+}
+
+fn usage_file(machine: &str) -> String {
+    format!("usage/{}.json", safe_name(machine))
+}
+
+fn safe_name(machine: &str) -> String {
+    machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
 }
 
 /// Starts `herdr server` detached, exactly as `herdr` itself would.

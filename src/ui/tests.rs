@@ -706,6 +706,71 @@ mod composer {
     }
 
     #[test]
+    fn the_usage_row_shows_each_provider_in_the_tone_of_its_windows() {
+        let mut app = composing(110, 30);
+        let mut inventory = app.inventories[LOCAL].clone();
+        inventory.harnesses.push("codex".into());
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        let terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        assert!(screen.contains("Usage      ✻ Claude no data yet  ·  ◆ Codex no data yet"), "{screen}");
+        let (x, y) = find(&terminal, "no data yet");
+        assert_eq!(terminal.backend().buffer()[(x, y)].fg, Palette::default().overlay0);
+        let mut providers = std::collections::BTreeMap::new();
+        let usage = |label: &str, used: u32, reached: bool| crate::usage::Slot {
+            usage: Some(crate::usage::Usage {
+                windows: vec![crate::usage::Window { label: label.into(), used_percent: used, resets_at: Some(4600) }],
+                reached,
+                resets_available: 3,
+                read_at: 1,
+                ..Default::default()
+            }),
+            error: None,
+        };
+        providers.insert("anthropic".to_string(), usage("5h", 85, false));
+        providers.insert("openai".to_string(), usage("week", 17, false));
+        let report =
+            crate::usage::Report { providers, statusline: None, statusline_options: Default::default(), read_at: 1 };
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(report.clone()) }, at(1));
+        let terminal = render(&app, at(1 + 240));
+        let screen = text(&terminal);
+        assert!(screen.contains("Usage      ✻ Claude 5h 85%  ·  ◆ Codex week 17%"), "{screen}");
+        assert_eq!(find(&terminal, "4m").1, find(&terminal, "Usage").1, "the age of the read: {screen}");
+        let palette = Palette::default();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[find(&terminal, "85%")].fg, palette.yellow, "a window nearly spent");
+        assert_eq!(buffer[find(&terminal, "17%")].fg, palette.subtext0);
+        assert!(screen.contains("Harness    Claude · 15% left"), "{screen}");
+        key(&mut app, KeyCode::F(3));
+        key(&mut app, KeyCode::Enter);
+        let terminal = render(&app, at(300));
+        let screen = text(&terminal);
+        assert!(screen.contains("Harness    Auto → Codex · 83% left"), "{screen}");
+        let mut spent = report.clone();
+        spent.providers.insert("openai".to_string(), usage("week", 100, true));
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(spent) }, at(1000));
+        let terminal = render(&app, at(1000));
+        let screen = text(&terminal);
+        assert!(screen.contains("◆ Codex limit reached"), "{screen}");
+        assert_eq!(terminal.backend().buffer()[find(&terminal, "limit reached")].fg, palette.red);
+        assert!(screen.contains("Harness    Auto → Claude · 15% left"), "{screen}");
+        // Days later the numbers are only history: faint, with their age.
+        app.update(Input::Tick, at(1 + 3 * 86_400));
+        let terminal = render(&app, at(1 + 3 * 86_400));
+        let screen = text(&terminal);
+        assert!(screen.contains("✻ Claude every window reset · 3d old"), "{screen}");
+        assert_eq!(
+            terminal.backend().buffer()[find(&terminal, "every window")].fg,
+            palette.overlay0,
+            "faint, not a warning"
+        );
+        assert!(screen.contains("Harness    Auto no current usage data"), "{screen}");
+        app.config.usage.enabled = false;
+        let screen = text(&render(&app, at(1000)));
+        assert!(!screen.contains("Usage "), "the row goes away with the feature: {screen}");
+    }
+
+    #[test]
     fn the_cursor_sits_at_the_end_of_the_task() {
         let app = composing(110, 30);
         let mut terminal = render(&app, at(1));
@@ -963,6 +1028,7 @@ mod conveniences {
             project: "cockpit".into(),
             repo: "/w/cockpit".into(),
             harness: "claude".into(),
+            harness_auto: false,
             model: String::new(),
             thinking: String::new(),
             title: "Ship the release notes".into(),

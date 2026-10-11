@@ -24,6 +24,7 @@ use crate::launch::{self, Comparison, Request, WorkspaceChoice};
 use crate::presets::{self, Preset};
 use crate::state::Preferences;
 use crate::threads::harness_label_for;
+use crate::usage;
 
 use super::{Connection, MachineState};
 
@@ -118,6 +119,9 @@ pub enum Pick {
     Project(String),
     Machine(String),
     Harness(String),
+    /// The harness whose subscription has the most usage left, chosen again
+    /// whenever the numbers change.
+    AutoHarness,
     Model(Option<String>),
     Thinking(Option<String>),
     Workspace(WorkspaceSel),
@@ -217,6 +221,9 @@ pub struct Composer {
     pub history_draft: String,
     /// Pasted images, shown in the task as `[Image #N]`.
     pub images: Vec<String>,
+    /// The inbox picks the harness: `harness` holds the one with the most
+    /// usage left and follows the numbers.
+    pub auto_harness: bool,
     /// Other agents the task also goes to, for comparison. Empty: one agent.
     pub compare: Vec<Contender>,
     /// The chip under the cursor while the preset strip has focus.
@@ -250,6 +257,7 @@ impl Default for Composer {
             history_index: None,
             history_draft: String::new(),
             images: Vec::new(),
+            auto_harness: false,
             compare: Vec::new(),
             preset_cursor: 0,
             strip_return: Field::Preset,
@@ -266,6 +274,10 @@ pub struct Context<'a> {
     pub preferences: &'a Preferences,
     pub config: &'a Config,
     pub presets: &'a [Preset],
+    /// Each machine's last usage report.
+    pub usage: &'a HashMap<String, usage::Report>,
+    /// For ages and reset times in usage details.
+    pub now: std::time::SystemTime,
 }
 
 impl Context<'_> {
@@ -305,6 +317,28 @@ impl Context<'_> {
 
     fn installed(&self, machine: &str) -> Vec<String> {
         self.inventory(machine).map(|i| i.harnesses.clone()).unwrap_or_default()
+    }
+
+    /// The provider whose limits apply to a harness, when usage is on.
+    pub fn provider(&self, harness: &str) -> Option<String> {
+        if !self.config.usage.enabled {
+            return None;
+        }
+        usage::provider_for(harness, &self.config.usage.providers)
+    }
+
+    /// The usage behind a harness on a machine, when it was read.
+    pub fn usage_for(&self, machine: &str, harness: &str) -> Option<&usage::Usage> {
+        self.usage.get(machine)?.usage(&self.provider(harness)?)
+    }
+
+    /// Why a harness has no usage, when it could have some.
+    fn usage_error(&self, machine: &str, harness: &str) -> Option<String> {
+        let provider = self.provider(harness)?;
+        Some(match self.usage.get(machine) {
+            Some(report) => report.error(&provider).map(str::to_string).unwrap_or_else(|| "no usage data".into()),
+            None => "no usage data yet".into(),
+        })
     }
 }
 
@@ -450,6 +484,23 @@ impl Composer {
             return;
         };
         let installed = ctx.installed(&machine);
+        if self.harness.is_none() && remembered.auto && ctx.config.usage.enabled {
+            // The project asked the inbox to choose.
+            self.auto_harness = true;
+        }
+        if self.auto_harness {
+            // The inbox's choice outranks the first preset, which would
+            // otherwise undo it on every new thread.
+            self.start_preset = false;
+        }
+        if self.auto_harness
+            && let Some(chosen) = self.auto_choice(ctx, &machine, &installed)
+            && self.harness.as_deref() != Some(chosen.as_str())
+        {
+            self.model = remembered.models.get(&machine).and_then(|m| m.get(&chosen)).cloned();
+            self.thinking = remembered.thinking.get(&machine).and_then(|m| m.get(&chosen)).cloned();
+            self.harness = Some(chosen);
+        }
         if self.harness.as_ref().is_none_or(|h| !installed.contains(h)) {
             self.harness = remembered
                 .harness
@@ -492,6 +543,37 @@ impl Composer {
         }
     }
 
+    /// The installed harness with the most usage left, if any has usage.
+    fn auto_choice(&self, ctx: &Context, machine: &str, installed: &[String]) -> Option<String> {
+        let candidates: Vec<(&str, Option<&usage::Usage>)> =
+            installed.iter().map(|h| (h.as_str(), ctx.usage_for(machine, h))).collect();
+        usage::pick(&candidates, self.harness.as_deref(), PREFERRED, ctx.now).map(str::to_string)
+    }
+
+    /// How the auto choice reads: `→ Claude · 62% left`, or why it waits.
+    pub fn auto_reason(&self, ctx: &Context) -> String {
+        let Some(machine) = self.machine.as_deref() else {
+            return "no usage data yet".into();
+        };
+        let installed = ctx.installed(machine);
+        match self.auto_choice(ctx, machine, &installed) {
+            Some(chosen) => {
+                let left = ctx.usage_for(machine, &chosen).map(|u| u.left(ctx.now)).unwrap_or_default();
+                format!("→ {} · {left}", harness_label_for(&chosen))
+            }
+            None => {
+                let readings: Vec<&usage::Usage> = installed.iter().filter_map(|h| ctx.usage_for(machine, h)).collect();
+                if readings.is_empty() {
+                    "no usage data yet".into()
+                } else if readings.iter().all(|u| u.is_stale(ctx.now)) {
+                    "no current usage data".into()
+                } else {
+                    "every limit reached".into()
+                }
+            }
+        }
+    }
+
     fn default_workspace(&self, ctx: &Context) -> WorkspaceSel {
         let remembered = self.project.as_deref().and_then(|p| ctx.preferences.project(p).workspace);
         let mode = match remembered.as_deref() {
@@ -507,14 +589,20 @@ impl Composer {
 
     /// Applies a picked choice and re-settles everything after it.
     pub fn apply(&mut self, ctx: &Context, pick: Pick) {
-        if matches!(pick, Pick::Harness(_) | Pick::Model(_) | Pick::Thinking(_)) {
+        if matches!(pick, Pick::Harness(_) | Pick::AutoHarness | Pick::Model(_) | Pick::Thinking(_)) {
             // A choice made by hand outranks the first-preset default. A
             // preset counts once it has been applied, below.
             self.start_preset = false;
         }
+        if matches!(pick, Pick::Harness(_) | Pick::Preset(_)) {
+            // A harness named by hand ends the inbox's choosing.
+            self.auto_harness = false;
+        }
         match pick {
             Pick::Project(name) => {
                 if self.project.as_deref() != Some(&name) {
+                    // Auto is a per-project choice, like the harness.
+                    self.auto_harness = ctx.preferences.project(&name).auto && ctx.config.usage.enabled;
                     self.project = Some(name);
                     self.machine = None;
                     self.harness = None;
@@ -529,6 +617,10 @@ impl Composer {
                     self.harness = None;
                     self.settle(ctx);
                 }
+            }
+            Pick::AutoHarness => {
+                self.auto_harness = true;
+                self.settle(ctx);
             }
             Pick::Harness(kind) => {
                 if self.harness.as_deref() != Some(&kind) {
@@ -772,14 +864,22 @@ impl Composer {
                     })
                     .collect()
             }
-            Field::Harness => self
-                .machine
-                .as_deref()
-                .map(|m| ctx.installed(m))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|kind| choice(harness_label_for(&kind), kind.clone(), Pick::Harness(kind)))
-                .collect(),
+            Field::Harness => {
+                let machine = self.machine.clone().unwrap_or_default();
+                let installed = ctx.installed(&machine);
+                let mut choices = Vec::new();
+                if ctx.config.usage.enabled && installed.iter().any(|h| ctx.provider(h).is_some()) {
+                    choices.push(choice("Auto · most usage left".into(), self.auto_reason(ctx), Pick::AutoHarness));
+                }
+                choices.extend(installed.into_iter().map(|kind| {
+                    let detail = match ctx.usage_for(&machine, &kind) {
+                        Some(usage) => usage.summary(ctx.now),
+                        None => ctx.usage_error(&machine, &kind).unwrap_or_else(|| kind.clone()),
+                    };
+                    choice(harness_label_for(&kind), detail, Pick::Harness(kind))
+                }));
+                choices
+            }
             Field::Model => {
                 let catalog = ctx.catalog(self).cloned().unwrap_or_default();
                 let default_detail = if catalog.default.is_empty() { String::new() } else { catalog.default.clone() };
@@ -1029,7 +1129,19 @@ impl Composer {
                 .and_then(|m| ctx.machine(m))
                 .map(|m| m.label.clone())
                 .unwrap_or_else(|| "—".into()),
-            Field::Harness => self.harness.as_deref().map(harness_label_for).unwrap_or_else(|| "none installed".into()),
+            Field::Harness => {
+                let harness = self.harness.as_deref().map(harness_label_for);
+                match (self.auto_harness, harness) {
+                    (true, _) => format!("Auto {}", self.auto_reason(ctx)),
+                    (false, Some(label)) => {
+                        let left = self.machine.as_deref().and_then(|m| {
+                            ctx.usage_for(m, self.harness.as_deref()?).map(|u| format!(" · {}", u.left(ctx.now)))
+                        });
+                        format!("{label}{}", left.unwrap_or_default())
+                    }
+                    (false, None) => "none installed".into(),
+                }
+            }
             Field::Model => match (&self.model, ctx.catalog(self)) {
                 (Some(model), Some(catalog)) => catalog
                     .choices

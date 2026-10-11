@@ -687,3 +687,34 @@ fn text_without_saved_images_is_prompted_untouched() {
         ["agent prompt w2:p1 read /tmp/shot.png --wait --until working --until blocked --timeout 8000"]
     );
 }
+
+#[test]
+fn the_claude_status_line_is_added_unless_the_user_set_their_own() {
+    let request = request("Fix login", WorkspaceChoice::NewWorktree { branch: None });
+    let mut plan = plan_for(&request, &settings(), None).unwrap();
+    assert!(plan.wants_claude_statusline());
+    assert_eq!(plan.project_dir(), "/w/cockpit", "a new worktree reads the repository's settings");
+    let options = serde_json::json!({"padding": 0});
+    plan.with_claude_statusline("/s/usage/statusline.py", options.as_object().unwrap());
+    assert!(!plan.wants_claude_statusline(), "settled: no probe needed at launch");
+    assert_eq!(plan.agent_args[0], "--settings");
+    assert!(plan.agent_args[1].contains("\"python3 \\\"/s/usage/statusline.py\\\" \\\"/s/usage/anthropic.json\\\"\""));
+    assert!(plan.agent_args[1].contains("\"padding\":0"), "the user's options travel along");
+    assert_eq!(plan.agent_args.len(), 2);
+
+    let mut pinned = settings();
+    pinned.harness_args.insert("claude".into(), vec!["--settings".into(), "/me.json".into()]);
+    let mut plan = plan_for(&request, &pinned, None).unwrap();
+    assert!(!plan.wants_claude_statusline(), "the user's own settings settle it");
+    plan.with_claude_statusline("/s/usage/statusline.py", &serde_json::Map::new());
+    assert_eq!(plan.agent_args, ["--settings", "/me.json"], "the user's settings win");
+
+    let codex = Request { harness: "codex".into(), ..request };
+    let mut plan = plan_for(&codex, &settings(), None).unwrap();
+    assert!(!plan.wants_claude_statusline());
+    plan.with_claude_statusline("/s/usage/statusline.py", &serde_json::Map::new());
+    assert!(plan.agent_args.is_empty(), "only Claude Code has a status line");
+    assert!(!plan.record.harness_auto);
+    let json = serde_json::to_string(&plan.record).unwrap();
+    assert!(!json.contains("harness_auto"), "false is not written, so older journals read the same");
+}

@@ -1291,3 +1291,63 @@ finally:
     inbox.press("\x03");
     inbox.wait_for_text("$");
 }
+
+#[test]
+fn the_composer_shows_codex_usage_and_lets_the_inbox_pick_the_harness() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    let repo = real_repo(&root.join("work"), "cockpit");
+    // The project's own status line options travel with the wrapper.
+    std::fs::create_dir_all(repo.join(".claude")).expect("mkdir .claude");
+    std::fs::write(
+        repo.join(".claude/settings.json"),
+        r#"{"statusLine": {"type": "command", "command": "echo mine", "padding": 0}}"#,
+    )
+    .expect("write project settings");
+    // Codex answers its app server the way the real one does; Claude has
+    // not reported yet, so Codex is the only provider with numbers.
+    write_executable(
+        &root.join("bin/codex"),
+        "#!/bin/sh\ncase \"$1\" in\n  --help) printf '%s\\n' '--model <MODEL>'; exit 0;;\n  app-server) read a; read b; read c\n    printf '%s\\n' '{\"id\":0,\"result\":{}}' \
+'{\"id\":1,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":null,\"planType\":\"prolite\"},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n    exit 0;;\nesac\nexit 3\n",
+    );
+    write_executable(
+        &root.join("bin/claude"),
+        &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}/claude-args'\nexit 3\n", root.display()),
+    );
+    let config = format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display());
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
+    std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("Harness    Claude");
+    // A Claude task sent at once, before any usage report, still gets the
+    // status line wrapper: the launch installs it itself.
+    inbox.keys("Fix the login loop\r");
+    inbox.wait_for_text("✗ cockpit · Claude");
+    let args = std::fs::read_to_string(root.join("claude-args")).expect("claude was started");
+    let wrapper = root.join("state/herdr-inbox/usage/statusline.py");
+    assert!(args.contains("--settings\n"), "{args}");
+    assert!(args.contains(&format!("python3 \\\"{}\\\"", wrapper.display())), "{args}");
+    assert!(args.contains("\"padding\":0"), "the project's own option is kept: {args}");
+    assert!(!args.contains("echo mine"), "the wrapper chains the command itself: {args}");
+    inbox.wait_for_text("✻ Claude no data yet  ·  ◆ Codex week 17%");
+    assert!(wrapper.is_file(), "the status line wrapper is installed for Claude threads");
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("state/herdr-inbox/usage/local.json")).expect("cache"))
+            .expect("json");
+    assert_eq!(report["openai"]["usage"]["plan"], "prolite");
+    assert_eq!(report["openai"]["usage"]["resets_available"], 3);
+    assert_eq!(report["statusline"].as_str(), wrapper.to_str());
+    inbox.keys("\x1b[13~");
+    inbox.wait_for_text("Auto · most usage left");
+    inbox.wait_for_text("→ Codex · 83% left");
+    inbox.wait_for_text("week 17% · 3 resets");
+    inbox.keys("\r");
+    inbox.wait_for_text("Harness    Auto → Codex · 83% left");
+}

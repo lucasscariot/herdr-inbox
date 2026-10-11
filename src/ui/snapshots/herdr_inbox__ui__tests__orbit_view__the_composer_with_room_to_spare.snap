@@ -20,13 +20,14 @@ expression: "text(&render(&app, at(7)))"
                                  │    Thinking   No levels reported
  WORKING  1                      │    Workspace  New worktree                                F9  ›
 ▎api                   ◐ working │    Compare    Off · one agent                            F12  ›
-▎Add invoice export              │
-▎◆ Codex · ⎇ main                │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
-                                 │
+▎Add invoice export              │    Usage      no machine yet
+▎◆ Codex · ⎇ main                │
+                                 │  ↵ send   ⌃S send & keep   ⌃T dictate   ⇥ fields   F7 presets …
  IDLE  1                         │
 ▎scratch                  ○ idle │
 ▎New Pi thread                   │
 ▎π Pi                            │
+                                 │
                                  │
                                  │                      ⣤⠤⠤⢤⣀⣀ ⡀
                                  │                     ⠐⢿⢷⡀  ⠈⠉⠛⠒⠤⣄⣀
@@ -34,7 +35,6 @@ expression: "text(&render(&app, at(7)))"
                                  │                           ⠈⠙⠲⠤⣟⣟⠟⠁⠁  ⠉⠒⢦⣀
                                  │                                ⠉⠑⠲⠤⣤⣄   ⠈⢳⣶
                                  │                                    ⠉⠁⠉⠉⠒⠒⠒⠚
-                                 │
                                  │
                                  │
                                  │

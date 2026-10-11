@@ -26,6 +26,7 @@ pub mod theme;
 pub mod threads;
 pub mod ui;
 pub mod update;
+pub mod usage;
 
 #[cfg(test)]
 pub(crate) mod testing;
