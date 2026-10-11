@@ -390,6 +390,12 @@ pub struct App {
     pub updates: Updates,
 }
 
+/// Whether the reply box fits in the terminal area: below this, it is not
+/// drawn, and neither is its skill menu.
+pub fn reply_fits(area: ratatui::layout::Rect) -> bool {
+    area.width >= 12 && area.height >= 6
+}
+
 /// Text for an agent, written from the thread list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reply {

@@ -2447,6 +2447,27 @@ mod conveniences {
     }
 
     #[test]
+    fn a_reply_too_small_to_draw_leaves_enter_to_send() {
+        let (mut app, _) = loaded();
+        let skill = crate::discovery::Skill {
+            name: "deslop".into(),
+            description: String::new(),
+            path: "/home/me/.claude/skills/deslop/SKILL.md".into(),
+        };
+        let inventory = crate::discovery::Inventory { skills: vec![skill], ..Default::default() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        app.update(Input::Resize { width: 80, height: 5 }, at(1));
+        assert!(!crate::app::reply_fits(app.layout.terminal));
+        type_text(&mut app, "now $de");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        let [Effect::Prompt { text, .. }] = &effects[..] else { panic!("{effects:?}") };
+        assert_eq!(text, "now $de", "no hidden menu took Enter");
+    }
+
+    #[test]
     fn a_blocked_agent_cannot_be_replied_to_from_the_list() {
         let (mut app, _) = loaded();
         app.update(press(KeyCode::Char('r')), at(1));

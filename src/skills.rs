@@ -50,44 +50,63 @@ pub fn accept(editor: &mut Editor, start: usize, name: &str) {
 /// while the cursor ends a `$` word, unless that word was dismissed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Menu {
-    pub selected: usize,
-    /// The `$` the user closed the menu on with Esc, and the text it was in
-    /// (see [`Editor::replaced`]).
-    dismissed: Option<(usize, u64)>,
+    /// The highlighted row and the query it was chosen for: another query,
+    /// however the text or the cursor changed, starts at the top again.
+    highlight: Option<(Mention, usize)>,
+    /// The mention the user closed the menu on with Esc.
+    dismissed: Option<Mention>,
+}
+
+/// A `$` word being typed: where its `$` is, what follows it, and which
+/// text it is in (see [`Editor::replaced`]).
+type Mention = (usize, String, u64);
+
+fn mention(editor: &Editor) -> Option<Mention> {
+    query(editor).map(|(start, query)| (start, query.to_string(), editor.replaced()))
 }
 
 impl Menu {
     /// The skills offered right now, with the mention's start.
     pub fn offered<'a>(&self, editor: &Editor, skills: &'a [Skill]) -> Option<(usize, Vec<&'a Skill>)> {
         let (start, query) = query(editor)?;
-        if self.dismissed == Some((start, editor.replaced())) {
+        if self.dismissed.as_ref().is_some_and(|d| d.0 == start && d.2 == editor.replaced()) {
             return None;
         }
         let found = matching(skills, query);
         (!found.is_empty()).then_some((start, found))
     }
 
+    /// The highlighted row for the query being typed.
+    pub fn selected(&self, editor: &Editor) -> usize {
+        match (&self.highlight, mention(editor)) {
+            (Some((at, row)), Some(now)) if *at == now => *row,
+            _ => 0,
+        }
+    }
+
     /// Forgets a dismissal once the cursor is no longer in its mention: it
     /// moved away, the `$` was deleted, or the text was replaced. A `$`
     /// typed or pasted later, even at the same offset, opens the menu again.
     pub fn follow(&mut self, editor: &Editor) {
-        let current = query(editor).map(|(start, _)| (start, editor.replaced()));
-        if self.dismissed.is_some() && self.dismissed != current {
+        let current = mention(editor);
+        if self.dismissed.as_ref().is_some_and(|d| current.as_ref().is_none_or(|c| (c.0, c.2) != (d.0, d.2))) {
             self.dismissed = None;
         }
     }
 
     pub fn dismiss(&mut self, editor: &Editor) {
-        self.dismissed = query(editor).map(|(start, _)| (start, editor.replaced()));
-        self.selected = 0;
+        self.dismissed = mention(editor);
+        self.highlight = None;
     }
 
     /// Moves the highlight, wrapping around the ends.
-    pub fn step(&mut self, count: usize, forward: bool) {
-        if count > 0 {
-            let current = self.selected.min(count - 1);
-            self.selected = if forward { (current + 1) % count } else { (current + count - 1) % count };
-        }
+    pub fn step(&mut self, editor: &Editor, count: usize, forward: bool) {
+        let Some(now) = mention(editor).filter(|_| count > 0) else {
+            return;
+        };
+        let current = self.selected(editor).min(count - 1);
+        let row = if forward { (current + 1) % count } else { (current + count - 1) % count };
+        self.highlight = Some((now, row));
     }
 
     /// Writes the highlighted skill. False when the menu is not showing.
@@ -95,15 +114,10 @@ impl Menu {
         let Some((start, found)) = self.offered(editor, skills) else {
             return false;
         };
-        let name = found[self.selected.min(found.len() - 1)].name.clone();
+        let name = found[self.selected(editor).min(found.len() - 1)].name.clone();
         accept(editor, start, &name);
-        self.selected = 0;
+        self.highlight = None;
         true
-    }
-
-    /// After an edit: a new query starts at the top of the list.
-    pub fn edited(&mut self) {
-        self.selected = 0;
     }
 }
 
@@ -196,11 +210,28 @@ mod tests {
         assert_eq!(start, 7);
         let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["arena", "architect"]);
-        menu.step(found.len(), true);
+        menu.step(&text, found.len(), true);
         assert!(menu.accept(&mut text, &skills));
         assert_eq!(text.text(), "please $architect ");
         assert_eq!(text.cursor(), text.text().len());
         assert!(menu.offered(&text, &skills).is_none(), "a space ends the mention");
+    }
+
+    #[test]
+    fn the_highlight_belongs_to_its_query() {
+        let skills = skills();
+        let mut text = editor("$a");
+        let mut menu = Menu::default();
+        menu.step(&text, 3, true);
+        assert_eq!(menu.selected(&text), 1);
+        text.insert("r");
+        assert_eq!(menu.selected(&text), 0, "a new query, however it was typed");
+        text.set("$a");
+        assert_eq!(menu.selected(&text), 0, "another text");
+        let mut other = editor("$de and $a");
+        other.home();
+        assert_eq!(menu.selected(&other), 0, "the cursor left the mention");
+        assert!(menu.offered(&text, &skills).is_some());
     }
 
     #[test]
@@ -248,8 +279,8 @@ mod tests {
         let mut menu = Menu::default();
         assert!(menu.offered(&editor("$ar"), &[]).is_none());
         assert!(menu.offered(&editor("$zzz"), &skills()).is_none());
-        menu.step(0, true);
-        assert_eq!(menu.selected, 0);
+        menu.step(&editor("$"), 0, true);
+        assert_eq!(menu.selected(&editor("$")), 0);
     }
 
     #[test]

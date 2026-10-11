@@ -737,7 +737,7 @@ fn note_line(thread: &Thread) -> Option<(String, NoteColor)> {
 /// The reply box, over the bottom of the terminal area. Returns the cursor.
 fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &Palette) -> Option<(u16, u16)> {
     let area = app.layout.terminal;
-    if area.width < 12 || area.height < 6 {
+    if !crate::app::reply_fits(area) {
         return None;
     }
     let inner_width = area.width.saturating_sub(6);
@@ -782,7 +782,16 @@ fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &P
     if let Some((_, offered)) = reply.skill_menu.offered(&reply.editor, app.skills_on(machine)) {
         // Above the box, over the agent's screen.
         let above = Rect::new(area.x, area.y, area.width, rect.y.saturating_sub(area.y));
-        skill_menu(buf, area, above, (cursor.0, rect.y), false, &offered, reply.skill_menu.selected, palette);
+        skill_menu(
+            buf,
+            area,
+            above,
+            (cursor.0, rect.y),
+            false,
+            &offered,
+            reply.skill_menu.selected(&reply.editor),
+            palette,
+        );
     }
     Some(cursor)
 }

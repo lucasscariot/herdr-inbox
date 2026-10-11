@@ -105,7 +105,10 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
     if app.composer.picker.is_some() {
         return picker_key(app, key, effects);
     }
-    if app.composer.field == Field::Task {
+    let shown =
+        super::composer::layout::ComposerLayout::new(app.layout.terminal, &app.composer, &app.composer_context())
+            .is_some();
+    if app.composer.field == Field::Task && shown {
         let skills = super::skills_of(&app.inventories, app.composer.machine.as_deref().unwrap_or_default());
         if skill_menu_key(&mut app.composer.skill_menu, &mut app.composer.task, skills, key) {
             return;
@@ -155,11 +158,7 @@ fn composer_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec
     if app.composer.field != Field::Task {
         return field_key(app, key);
     }
-    let before = (app.composer.task.text().len(), app.composer.task.cursor());
     task_key(app, key, now, effects);
-    if before != (app.composer.task.text().len(), app.composer.task.cursor()) {
-        app.composer.skill_menu.edited();
-    }
 }
 
 /// Keys in the task box.
@@ -545,16 +544,12 @@ fn reply_key(app: &mut App, key: KeyEvent, now: SystemTime, effects: &mut Vec<Ef
     let Some(reply) = app.reply.as_mut() else {
         return;
     };
-    if skill_menu_key(&mut reply.skill_menu, &mut reply.editor, skills, key) {
+    // The menu takes keys only where it can be drawn.
+    let shown = super::reply_fits(app.layout.terminal);
+    if shown && skill_menu_key(&mut reply.skill_menu, &mut reply.editor, skills, key) {
         return;
     }
-    let before = (reply.editor.text().len(), reply.editor.cursor());
     reply_editor_key(app, key, now, effects);
-    if let Some(reply) = app.reply.as_mut()
-        && before != (reply.editor.text().len(), reply.editor.cursor())
-    {
-        reply.skill_menu.edited();
-    }
 }
 
 /// Keys for the `$` skill menu while it shows over an editor. True when the
@@ -571,10 +566,10 @@ fn skill_menu_key(
     };
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
-        KeyCode::Up => menu.step(offered.len(), false),
-        KeyCode::Char('p') if ctrl => menu.step(offered.len(), false),
-        KeyCode::Down => menu.step(offered.len(), true),
-        KeyCode::Char('n') if ctrl => menu.step(offered.len(), true),
+        KeyCode::Up => menu.step(editor, offered.len(), false),
+        KeyCode::Char('p') if ctrl => menu.step(editor, offered.len(), false),
+        KeyCode::Down => menu.step(editor, offered.len(), true),
+        KeyCode::Char('n') if ctrl => menu.step(editor, offered.len(), true),
         KeyCode::Tab | KeyCode::Enter if key.modifiers.is_empty() => {
             menu.accept(editor, skills);
         }
@@ -672,7 +667,6 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
     if let Some(reply) = app.reply.as_mut() {
         reply.skill_menu.follow(&reply.editor);
         reply.editor.insert(text);
-        reply.skill_menu.edited();
         return;
     }
     if app.filtering {
@@ -686,7 +680,6 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
             None if app.composer.field == Field::Task => {
                 app.composer.skill_menu.follow(&app.composer.task);
                 app.composer.task.insert(text);
-                app.composer.skill_menu.edited();
             }
             None => {}
         }
