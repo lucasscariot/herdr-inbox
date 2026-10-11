@@ -2275,7 +2275,85 @@ mod conveniences {
             at(6),
         );
         assert!(app.thread(&format!("launch/{}", failed.id)).is_some());
+        let notice = &app.notice.as_ref().unwrap().text;
+        assert!(notice.contains("boom") && notice.contains("Press e on it to retry"), "{notice}");
         let _ = Outcome::Sent(failed);
+    }
+
+    /// A launch whose agent timed out at startup, after its worktree was made.
+    fn timed_out(id: &str) -> Record {
+        let mut failed = record(id, Some("w9:p1"), Stage::NeedsAttention);
+        failed.harness = "codex".into();
+        failed.model = String::new();
+        failed.thinking = String::new();
+        failed.cwd = format!("/h/wt/branch-{id}");
+        failed.failed_stage = Some(Stage::Starting);
+        failed.error = Some("timed out waiting for agent startup".into());
+        failed
+    }
+
+    #[test]
+    fn retrying_a_failed_launch_reuses_its_worktree_and_retires_it() {
+        let mut app = composing(vec![], vec![]);
+        app.update(press(KeyCode::Esc), at(1));
+        app.update(Input::Journals(vec![timed_out("t1")]), at(1));
+        let row = app.threads.iter().find(|t| matches!(t.note, Some(LaunchNote::Failed(_)))).unwrap().id.clone();
+        app.focus = Focus::List;
+        app.cursor = Some(row.clone());
+        app.update(press(KeyCode::Char('e')), at(1));
+        assert_eq!(app.composer.task.text(), "Task t1\nwith details", "the task comes back");
+        assert_eq!(app.composer.retry.as_deref(), Some("t1"));
+        assert_eq!(
+            app.composer.workspace,
+            WorkspaceSel::Checkout("/h/wt/branch-t1".into()),
+            "the worktree it made, not a new one on the same branch"
+        );
+        // Another agent this time.
+        app.composer.harness = Some("claude".into());
+        let effects = app.update(press(KeyCode::Enter), at(2));
+        let plan = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Launch { plan, .. } => Some(plan),
+                _ => None,
+            })
+            .expect("the retry launches");
+        assert_eq!(plan.record.harness, "claude");
+        assert_eq!(plan.record.workspace, "checkout");
+        assert_eq!(plan.record.cwd, "/h/wt/branch-t1");
+        assert_eq!(plan.record.task, "Task t1\nwith details");
+        assert!(effects.contains(&Effect::Dismiss { record: "t1".into() }), "the failed launch is retired");
+        assert!(effects.iter().any(|e| matches!(e, Effect::Archive { workspace_id, .. } if workspace_id == "w9")));
+        assert!(app.thread(&row).is_none_or(|t| t.note.is_none()));
+        assert!(app.composer.retry.is_none());
+        assert_eq!(app.history.first().map(String::as_str), Some("Task t1\nwith details"));
+    }
+
+    #[test]
+    fn a_new_thread_is_not_a_retry() {
+        let mut app = composing(vec![], vec![]);
+        app.update(press(KeyCode::Esc), at(1));
+        app.update(Input::Journals(vec![timed_out("t2")]), at(1));
+        app.focus = Focus::List;
+        app.cursor = app.threads.iter().find(|t| t.note.is_some()).map(|t| t.id.clone());
+        app.update(press(KeyCode::Char('e')), at(1));
+        app.update(press(KeyCode::Esc), at(1));
+        app.focus = Focus::List;
+        app.update(press(KeyCode::Char('n')), at(1));
+        assert!(app.composer.retry.is_none());
+        type_text(&mut app, "Other task");
+        let effects = app.update(press(KeyCode::Enter), at(2));
+        assert!(!effects.contains(&Effect::Dismiss { record: "t2".into() }), "the failed launch stays");
+        assert!(app.records.contains_key("t2"));
+    }
+
+    #[test]
+    fn dismissing_a_failed_launch_points_to_its_task_in_the_history() {
+        let (mut app, _) = loaded();
+        app.update(Input::Journals(vec![record("f1", None, Stage::NeedsAttention)]), at(1));
+        app.cursor = Some("launch/f1".into());
+        app.update(press(KeyCode::Char('d')), at(1));
+        assert!(app.notice.as_ref().unwrap().text.contains("⌃P"));
     }
 }
 

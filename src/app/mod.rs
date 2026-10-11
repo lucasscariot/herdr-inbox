@@ -578,6 +578,7 @@ impl App {
     /// preset, discovering every reachable machine again.
     pub(crate) fn open_composer(&mut self, now: SystemTime, effects: &mut Vec<Effect>) {
         self.composer.start_preset = true;
+        self.composer.retry = None;
         self.show_composer(now, effects);
     }
 
@@ -658,6 +659,9 @@ impl App {
         let Some(first) = requests.first() else {
             return;
         };
+        if let Some(record) = self.composer.retry.take() {
+            self.retire(&record, effects);
+        }
         for plan in &plans {
             let record = &plan.record;
             let mut harness = crate::threads::harness_label_for(&record.harness);
@@ -721,6 +725,10 @@ impl App {
             return;
         };
         let record = self.record_for(&thread).cloned();
+        let failed = record.as_ref().filter(|r| r.stage == launch::Stage::NeedsAttention);
+        if let Some(record) = failed {
+            self.offer_worktree(record);
+        }
         let composer = &mut self.composer;
         composer.picker = None;
         composer.error = None;
@@ -729,18 +737,23 @@ impl App {
         // be waiting for its first preset; the thread's choices win.
         composer.start_preset = false;
         composer.machine = Some(thread.machine_id.clone());
+        composer.retry = failed.map(|r| r.id.clone());
         match &record {
             Some(record) => {
                 composer.project = Some(record.project.clone());
                 composer.harness = Some(record.harness.clone());
                 composer.model = Some(record.model.clone()).filter(|m| !m.is_empty());
                 composer.thinking = Some(record.thinking.clone()).filter(|t| !t.is_empty());
-                // A launch that failed keeps its branch: retrying reuses it.
-                composer.workspace = match (&thread.note, record.workspace.as_str()) {
-                    (Some(threads::LaunchNote::Failed(_)), "worktree") if !record.branch.is_empty() => {
+                composer.workspace = match record.workspace.as_str() {
+                    // A failed launch's worktree is reused when it was made,
+                    // and its branch name otherwise.
+                    "worktree" if failed.is_some() && worktree_made(record) => {
+                        WorkspaceSel::Checkout(record.cwd.clone())
+                    }
+                    "worktree" if failed.is_some() && !record.branch.is_empty() => {
                         WorkspaceSel::Named(record.branch.clone())
                     }
-                    (_, "checkout") if !record.cwd.is_empty() => WorkspaceSel::Checkout(record.cwd.clone()),
+                    "checkout" if !record.cwd.is_empty() => WorkspaceSel::Checkout(record.cwd.clone()),
                     _ => WorkspaceSel::New,
                 };
                 composer.set_task(&record.task);
@@ -770,15 +783,60 @@ impl App {
             .max_by_key(|r| r.created_at)
     }
 
-    /// Forgets a failed launch's row.
-    pub(crate) fn dismiss(&mut self, id: &str, effects: &mut Vec<Effect>) {
+    /// Lists a failed launch's worktree among its project's checkouts until
+    /// discovery sees it, so that a retry can be sent to it.
+    fn offer_worktree(&mut self, record: &Record) {
+        if record.workspace != "worktree" || !worktree_made(record) {
+            return;
+        }
+        let project = self
+            .inventories
+            .get_mut(&record.machine_id)
+            .and_then(|i| i.projects.iter_mut().find(|p| p.name == record.project));
+        if let Some(project) = project
+            && !project.checkouts.iter().any(|c| c.path == record.cwd)
+        {
+            project.checkouts.push(crate::discovery::CheckoutEntry {
+                path: record.cwd.clone(),
+                branch: record.branch.clone(),
+                linked: true,
+            });
+        }
+    }
+
+    /// Forgets a failed launch once its retry is sent, and closes the
+    /// workspace it left behind. Its worktree stays on disk for the retry.
+    fn retire(&mut self, record_id: &str, effects: &mut Vec<Effect>) {
+        let Some(record) = self.records.remove(record_id) else {
+            return;
+        };
+        effects.push(Effect::Dismiss { record: record.id.clone() });
+        if let Some(workspace_id) = record.workspace_id.clone() {
+            let thread = match &record.pane_id {
+                Some(pane) => threads::thread_id(&record.machine_id, pane),
+                None => format!("{LAUNCH_PREFIX}{}", record.id),
+            };
+            self.archiving.insert(thread.clone());
+            effects.push(Effect::Archive { machine: record.machine_id, thread, workspace_id, title: record.title });
+        }
+        self.rebuild();
+        self.fix_cursor();
+    }
+
+    /// Forgets a failed launch's row. Its task stays in the history.
+    pub(crate) fn dismiss(&mut self, id: &str, now: SystemTime, effects: &mut Vec<Effect>) {
         let Some(record_id) = id.strip_prefix(LAUNCH_PREFIX) else {
             return;
         };
-        if self.records.remove(record_id).is_some() {
+        if let Some(record) = self.records.remove(record_id) {
             effects.push(Effect::Dismiss { record: record_id.to_string() });
             self.rebuild();
             self.fix_cursor();
+            self.notify(
+                format!("Dismissed “{}”. Its task stays in the history: ⌃P in a new thread.", record.title),
+                NoticeKind::Info,
+                now,
+            );
         }
     }
 
@@ -832,7 +890,11 @@ impl App {
                 self.records.insert(record.id.clone(), (*record).clone());
                 self.rebuild();
                 self.set_launch(id, LaunchState::Failed(first_line.clone()));
-                self.notify(format!("Could not start “{}”: {first_line}", record.title), NoticeKind::Error, now);
+                self.notify(
+                    format!("Could not start “{}”: {first_line}. Press e on it to retry.", record.title),
+                    NoticeKind::Error,
+                    now,
+                );
             }
         }
     }
@@ -1262,6 +1324,11 @@ impl App {
         self.notice = None;
         effects.push(Effect::StartServer);
     }
+}
+
+/// Whether a launch got as far as making its worktree.
+fn worktree_made(record: &Record) -> bool {
+    record.workspace_id.is_some() && !record.cwd.is_empty()
 }
 
 fn first_line(record: &Record) -> String {
