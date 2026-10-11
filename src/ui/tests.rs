@@ -754,12 +754,13 @@ mod composer {
         assert_eq!(terminal.backend().buffer()[find(&terminal, "limit reached")].fg, palette.red);
         assert!(screen.contains("Harness    Auto → Claude · 15% left"), "{screen}");
         // Days later the numbers are only history: faint, with their age.
+        app.update(Input::Tick, at(1 + 3 * 86_400));
         let terminal = render(&app, at(1 + 3 * 86_400));
         let screen = text(&terminal);
         assert!(screen.contains("✻ Claude every window reset · 3d old"), "{screen}");
         assert_eq!(
             terminal.backend().buffer()[find(&terminal, "every window")].fg,
-            palette.subtext0,
+            palette.overlay0,
             "faint, not a warning"
         );
         assert!(screen.contains("Harness    Auto no current usage data"), "{screen}");
