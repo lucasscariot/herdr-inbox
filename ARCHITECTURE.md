@@ -147,7 +147,11 @@ assert the compiled version separately from the version-independent layout.
   `--model` from the arguments (a model pinned in `harness_args` becomes the
   session's model) and, once the workspace exists, runs `opencode api
   session.create` on the machine with the model and the workspace directory.
-  The agent then starts with `--session <id>`. A failed creation stops the
+  The agent then starts with `--session <id>`. A `--server` in the arguments
+  goes to the API call too, so the session lives where the TUI connects;
+  `--standalone` with a chosen model is refused, since its private server
+  never sees the session. The model's `provider/model` form is checked while
+  planning, so a bad choice creates no worktree. A failed creation stops the
   launch before the agent starts. OpenCode 1 still gets `--model`.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its

@@ -170,24 +170,41 @@ pub struct Session {
     pub program: String,
     /// `provider/model`, optionally followed by `#variant`.
     pub model: String,
+    /// The `Model.Ref` OpenCode's API takes.
+    model_ref: Value,
+    /// The server named by `--server` in the agent's arguments, which the
+    /// session must be created on for the TUI to find it.
+    pub server: Option<String>,
 }
 
 impl Session {
-    /// The body of `opencode api session.create`.
-    fn request(&self, directory: &str) -> Result<Value, String> {
-        let (model, variant) = match self.model.split_once('#') {
-            Some((model, variant)) => (model, Some(variant)),
-            None => (self.model.as_str(), None),
-        };
-        let (provider, id) = model
+    /// Checks the model and the agent's arguments before anything runs.
+    pub fn new(program: &str, model: &str, args: &[String]) -> Result<Self, String> {
+        let (name, variant) = model.split_once('#').map_or((model, None), |(name, variant)| (name, Some(variant)));
+        let (provider, id) = name
             .split_once('/')
             .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
             .ok_or_else(|| format!("OpenCode models are provider/model, not {model}"))?;
-        let mut model = serde_json::json!({ "providerID": provider, "id": id });
-        if let Some(variant) = variant.filter(|v| !v.is_empty()) {
-            model["variant"] = variant.into();
+        if args.iter().any(|arg| arg == "--standalone") {
+            // Its private server never sees a session created beforehand.
+            return Err("OpenCode with --standalone cannot start on a chosen model: pick Default".into());
         }
-        Ok(serde_json::json!({ "model": model, "location": { "directory": directory } }))
+        let mut model_ref = serde_json::json!({ "providerID": provider, "id": id });
+        if let Some(variant) = variant.filter(|v| !v.is_empty()) {
+            model_ref["variant"] = variant.into();
+        }
+        Ok(Self { program: program.into(), model: model.into(), model_ref, server: flag_value(args, &["--server"]) })
+    }
+
+    /// The arguments of `opencode api session.create`.
+    fn create_args(&self, directory: &str) -> Vec<String> {
+        let body = serde_json::json!({ "model": self.model_ref, "location": { "directory": directory } });
+        let mut args = vec![self.program.clone(), "api".into(), "session.create".into()];
+        if let Some(server) = &self.server {
+            args.extend(["--server".into(), server.clone()]);
+        }
+        args.extend(["--data".into(), body.to_string()]);
+        args
     }
 }
 
@@ -545,7 +562,7 @@ pub fn plan(
         // A model pinned in harness_args would make OpenCode refuse to start.
         let pinned = flag_value(&args, &["--model", "-m"]);
         args = strip_flag(args, &["--model", "-m"]);
-        session = model.clone().or(pinned).map(|model| Session { program: "opencode".into(), model });
+        session = model.clone().or(pinned).map(|model| Session::new("opencode", &model, &args)).transpose()?;
     } else if let Some(model) = &model {
         if !catalog.selectable {
             return Err(format!("{} does not support choosing a model at launch", request.harness));
@@ -850,8 +867,8 @@ fn steps(
 /// Creates an OpenCode session with the chosen model and returns its id.
 fn create_session(runner: &Runner, session: &Session, directory: &str) -> Result<String, String> {
     let fail = |reason: &str| format!("could not create an OpenCode session for {}: {reason}", session.model);
-    let body = session.request(directory)?.to_string();
-    let mut command = runner.exec(&[&session.program, "api", "session.create", "--data", &body]);
+    let args = session.create_args(directory);
+    let mut command = runner.exec(&args.iter().map(String::as_str).collect::<Vec<_>>());
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let output = run(command, &session.program, Duration::from_secs(30)).map_err(|e| fail(&e.message))?;
     let stdout = if runner.has_marker() {
@@ -863,10 +880,16 @@ fn create_session(runner: &Runner, session: &Session, directory: &str) -> Result
     match answer.as_ref().and_then(|answer| str_at(answer, &["data", "id"])) {
         Some(id) if output.success => Ok(id.to_string()),
         _ => {
-            let reason = [output.stderr.as_str(), stdout]
-                .iter()
-                .flat_map(|text| text.lines().rev())
-                .find(|line| !line.trim().is_empty())
+            // OpenCode follows its `Error: …` line with a stack trace.
+            let lines = || [output.stderr.as_str(), stdout].into_iter().flat_map(str::lines);
+            let reason = lines()
+                .find(|line| line.trim_start().starts_with("Error:"))
+                .or_else(|| {
+                    [output.stderr.as_str(), stdout]
+                        .into_iter()
+                        .flat_map(|text| text.lines().rev())
+                        .find(|line| !line.trim().is_empty())
+                })
                 .unwrap_or("no session id in the answer");
             Err(fail(reason.trim()))
         }
