@@ -52,9 +52,14 @@ pub struct Usage {
     pub windows: Vec<Window>,
     #[serde(default)]
     pub plan: Option<String>,
-    /// The provider refuses ordinary use right now.
+    /// A limit is reached: a window is spent, or the provider says so.
     #[serde(default)]
     pub reached: bool,
+    /// The provider's own verdict that ordinary use is refused. Unlike a
+    /// spent window, it is not cleared by a window's reset: only the next
+    /// reading can lift it.
+    #[serde(default)]
+    pub refused: bool,
     /// Codex "full reset" credits the user can spend from Codex itself.
     #[serde(default)]
     pub resets_available: u32,
@@ -82,14 +87,10 @@ impl Usage {
         self.live_windows(now).into_iter().max_by_key(|w| (w.used_percent, std::cmp::Reverse(w.resets_at)))
     }
 
-    /// Points left before the tightest window is spent.
+    /// Points left before the tightest window is spent: none while the
+    /// provider refuses use, else what the running windows leave.
     pub fn headroom(&self, now: SystemTime) -> u32 {
-        if self.reached && self.tightest(now).is_some_and(|w| w.used_percent >= 100) {
-            return 0;
-        }
-        if self.reached && self.live_windows(now).len() == self.windows.len() {
-            // Refused by the provider's own verdict, not by a window that
-            // has since started over.
+        if self.refused {
             return 0;
         }
         100u32.saturating_sub(self.tightest(now).map(|w| w.used_percent).unwrap_or(0))
@@ -249,7 +250,12 @@ mod tests {
     fn headroom_is_what_the_tightest_window_leaves() {
         assert_eq!(usage(&[("5h", 38), ("week", 71)]).headroom(at(0)), 29);
         assert_eq!(usage(&[]).headroom(at(0)), 100);
-        assert_eq!(Usage { reached: true, ..usage(&[("5h", 10)]) }.headroom(at(0)), 0, "the provider's verdict");
+        assert_eq!(Usage { refused: true, ..usage(&[("5h", 10)]) }.headroom(at(0)), 0, "the provider's verdict");
+        assert_eq!(
+            Usage { reached: true, ..usage(&[("5h", 10)]) }.headroom(at(0)),
+            90,
+            "reached without a spent window or a verdict is only history"
+        );
         assert_eq!(usage(&[("week", 120)]).headroom(at(0)), 0);
         // A window past its reset has started over and no longer counts.
         let reset = Usage {
@@ -263,6 +269,11 @@ mod tests {
         assert_eq!(reset.headroom(at(400)), 0);
         assert_eq!(reset.headroom(at(600)), 60, "the 5h window reset: only the week binds");
         assert_eq!(reset.summary(at(600)), "week 40%");
+        // The provider's own refusal outlives a window's reset: only the
+        // next reading can lift it.
+        let refused = Usage { refused: true, ..reset.clone() };
+        assert_eq!(refused.headroom(at(600)), 0);
+        assert_eq!(refused.summary(at(600)), "limit reached · resets in 2h");
         assert!(!usage(&[]).is_stale(at(STALE.as_secs())));
         assert!(usage(&[]).is_stale(at(STALE.as_secs() + 1)));
     }
@@ -278,7 +289,7 @@ mod tests {
             ..Usage::default()
         };
         assert_eq!(reached.summary(at(1000)), "limit reached · resets in 2h");
-        assert_eq!(Usage { reached: true, ..Usage::default() }.summary(at(0)), "limit reached");
+        assert_eq!(Usage { refused: true, ..Usage::default() }.summary(at(0)), "limit reached");
         // The exhausted window's reset is the one that matters, not the soonest.
         let weekly = Usage {
             reached: true,
@@ -427,6 +438,7 @@ mod tests {
             .unwrap();
         let refused = finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap();
         assert!(refused.usage("openai").unwrap().reached, "ordinaryUsageAllowed: false is a reached limit");
+        assert!(refused.usage("openai").unwrap().refused, "and the provider's own verdict");
 
         // Claude Code runs the wrapper with its status line JSON; the user's
         // own status line still gets the same input.

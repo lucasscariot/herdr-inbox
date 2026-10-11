@@ -1215,6 +1215,18 @@ mod composer_flow {
             })
             .expect("a launch");
         assert_eq!(plan.agent_args, ["--verbose"], "turned off in the config");
+        app.config.usage.claude_statusline = true;
+        app.config.usage.enabled = false;
+        type_text(&mut app, "And another");
+        let effects = app.update(press(KeyCode::Enter), at(8));
+        let plan = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Launch { plan, .. } => Some(plan),
+                _ => None,
+            })
+            .expect("a launch");
+        assert_eq!(plan.agent_args, ["--verbose"], "usage off: the cached wrapper is not used either");
     }
 
     #[test]

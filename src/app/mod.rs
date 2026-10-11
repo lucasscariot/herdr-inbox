@@ -756,7 +756,8 @@ impl App {
                     // compared agent was named by hand.
                     plan.record.harness_auto =
                         self.composer.auto_harness && request.comparison.is_none_or(|c| c.index == 0);
-                    if self.config.usage.claude_statusline
+                    if self.config.usage.enabled
+                        && self.config.usage.claude_statusline
                         && let Some(wrapper) = self.usage.get(&request.machine_id).and_then(|r| r.statusline.as_deref())
                     {
                         plan.with_claude_statusline(wrapper);

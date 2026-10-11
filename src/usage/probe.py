@@ -81,6 +81,7 @@ def anthropic():
         "windows": windows,
         "plan": None,
         "reached": any(w["used_percent"] >= 100 for w in windows),
+        "refused": False,
         "resets_available": 0,
         "read_at": int(read_at) if isinstance(read_at, (int, float)) else now,
         "source": "statusline",
@@ -115,14 +116,18 @@ def codex_usage(snapshot, camel, resets_available, read_at, source, allowed=None
     reached_key = "rateLimitReachedType" if camel else "rate_limit_reached_type"
     spend_key = "spendControlReached" if camel else "spend_control_reached"
     plan = snapshot.get("planType" if camel else "plan_type")
+    # The provider's own verdict, kept apart from a spent window: a window's
+    # reset clears the latter, only the next reading clears the former.
+    refused = (allowed is False) or bool(snapshot.get(reached_key)) or bool(snapshot.get(spend_key))
     if allowed is None:
-        reached = bool(snapshot.get(reached_key)) or bool(snapshot.get(spend_key)) or any(w["used_percent"] >= 100 for w in windows)
+        reached = refused or any(w["used_percent"] >= 100 for w in windows)
     else:
         reached = not allowed
     return {"usage": {
         "windows": windows,
         "plan": plan if isinstance(plan, str) else None,
         "reached": reached,
+        "refused": refused,
         "resets_available": resets_available,
         "read_at": read_at,
         "source": source,
