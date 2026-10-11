@@ -114,7 +114,11 @@ assert the compiled version separately from the version-independent layout.
   Status colours and small harness glyphs still use their palette tokens,
   and agent ANSI output is unchanged. Render tests assert these roles, and
   a real-binary PTY test changes the Herdr config between runs to check both
-  orange and non-orange accents.
+  orange and non-orange accents. Fills use a theme colour only when it is
+  RGB (`Palette::raised`, `Palette::active_row`): an ANSI grey such as the
+  plain `terminal` theme's `active_row_bg` is the colour terminals give dim
+  text, so text drawn on it vanishes. There, the highlighted thread gets a
+  thick accent edge instead of a fill.
 - **The sidebar header has three bands.** The wordmark and stats (each
   group's count, before the filter, so the filter never hides how much is
   waiting), then the actions (New thread and the filter field), then the list,
