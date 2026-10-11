@@ -518,23 +518,30 @@ fn strip_flag(args: Vec<String>, names: &[&str]) -> Vec<String> {
 }
 
 /// Whether a boolean OpenCode option is on. Like its option parser, the
-/// last of `--name`, `--name=<bool>` and `--no-name` wins, for any of the
-/// option's spellings (`--continue` or `-c`).
+/// last of `--name`, `--name=<bool>`, `--name <bool>` and `--no-name` wins,
+/// for any of the option's spellings (`--continue` or `-c`).
 fn switch(args: &[String], names: &[&str]) -> bool {
-    args.iter().fold(false, |on, arg| {
-        names.iter().fold(on, |on, name| {
+    let truth = |value: &str| match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    };
+    let mut on = false;
+    let mut args = args.iter().peekable();
+    while let Some(arg) = args.next() {
+        for name in names {
             let negated = name.strip_prefix("--").map(|long| format!("--no-{long}"));
             if arg == name {
-                true
+                // A true/false word right after the switch is its value.
+                on = args.next_if(|next| truth(next).is_some()).and_then(|next| truth(next)).unwrap_or(true);
             } else if negated.as_deref() == Some(arg.as_str()) {
-                false
+                on = false;
             } else if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
-                !matches!(value.to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off" | "")
-            } else {
-                on
+                on = truth(value).unwrap_or(!value.is_empty());
             }
-        })
-    })
+        }
+    }
+    on
 }
 
 /// The value of the last occurrence of a flag in `args`.

@@ -1010,12 +1010,28 @@ fn opencode_resume_switches_turned_off_are_allowed() {
         custom.harness_args.insert("opencode".into(), args.iter().map(|a| a.to_string()).collect());
         plan_for(&opencode_request(Some("opencode/big-pickle")), &custom, Some(&opencode(true)))
     };
-    for off in
-        [&["--continue=false"][..], &["-c=false"], &["--fork=false"], &["--no-continue"], &["--fork", "--no-fork"]]
-    {
+    for off in [
+        &["--continue=false"][..],
+        &["-c=false"],
+        &["--fork=false"],
+        &["--no-continue"],
+        &["--fork", "--no-fork"],
+        &["--continue", "false"],
+        &["-c", "0"],
+        &["--fork", "no", "--auto"],
+        &["--standalone", "false"],
+    ] {
         assert!(plan_with(off).is_ok(), "{off:?}");
     }
-    for on in [&["--continue=true"][..], &["-c=1"], &["--no-fork", "--fork"], &["--session="], &["-s", "ses_old"]] {
+    for on in [
+        &["--continue=true"][..],
+        &["-c=1"],
+        &["--no-fork", "--fork"],
+        &["--session="],
+        &["-s", "ses_old"],
+        &["--continue", "true"],
+        &["--fork", "--auto"],
+    ] {
         assert!(plan_with(on).unwrap_err().contains("picks its own session"), "{on:?}");
     }
 }

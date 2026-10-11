@@ -106,6 +106,14 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Fixed
 
+- OpenCode 2 starts on the chosen model again. It refuses `--model` on its
+  interactive command, so the inbox now creates an OpenCode session with
+  the model (`opencode api session.create`, on the `--server` in its
+  arguments if any) and starts OpenCode with `--session`. A launch that
+  cannot work is refused before anything is created: a model that is not
+  `provider/model`, `--standalone`, a disabled OpenCode background service,
+  or `--continue`, `--fork` and `--session` in OpenCode's arguments. If
+  OpenCode then fails to start, its session is deleted.
 - Retrying a failed launch (`e`) no longer fails with "already exists" when
   the launch had made its worktree: the retry reuses that worktree, keeps the
   task, can use any preset, and retires the failed launch once sent. Failed
