@@ -4,6 +4,26 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.3.0...v1.4.0) (2026-10-11)
+
+
+### Features
+
+* **composer:** pick the harness with the most usage left ([#44](https://github.com/lucasscariot/herdr-inbox/issues/44)) ([02c317d](https://github.com/lucasscariot/herdr-inbox/commit/02c317da8f39f91a79315baf1af02b8271a5146b))
+* **composer:** reorder presets with page up and page down ([#45](https://github.com/lucasscariot/herdr-inbox/issues/45)) ([f7f3f76](https://github.com/lucasscariot/herdr-inbox/commit/f7f3f76f5149a30c2c9a8e91feffa9bbe4356d73))
+
+
+### Bug Fixes
+
+* **composer:** keep the first-preset default pending until discovery answers ([#35](https://github.com/lucasscariot/herdr-inbox/issues/35)) ([e232ae2](https://github.com/lucasscariot/herdr-inbox/commit/e232ae23fc7de54f702b0fdf96cb4cced12d2b0e))
+* **launch:** let trailing filler close a sentence for a particle ([#40](https://github.com/lucasscariot/herdr-inbox/issues/40)) ([ddf2ac6](https://github.com/lucasscariot/herdr-inbox/commit/ddf2ac625bd24aedd3fc8d1161216ff2db2b600a))
+* **launch:** retry a failed launch in its worktree without losing the task ([#42](https://github.com/lucasscariot/herdr-inbox/issues/42)) ([217651e](https://github.com/lucasscariot/herdr-inbox/commit/217651eb48c254da082a79c0d1f57123da16e069))
+* **launch:** sharpen branch names on dates, subjects and abbreviations ([#36](https://github.com/lucasscariot/herdr-inbox/issues/36)) ([f1b3c7c](https://github.com/lucasscariot/herdr-inbox/commit/f1b3c7cee35e3e90d9a4c5f08937f474c6bbfa03))
+* **launch:** start OpenCode 2 on the chosen model through a session ([#43](https://github.com/lucasscariot/herdr-inbox/issues/43)) ([859707c](https://github.com/lucasscariot/herdr-inbox/commit/859707c44cfb7b2ae5e233cda89e548d125ed0fa))
+* **launch:** stop a bare "to" from marking the next word as a verb ([#38](https://github.com/lucasscariot/herdr-inbox/issues/38)) ([2215b8e](https://github.com/lucasscariot/herdr-inbox/commit/2215b8e28bb377f4963b7c80990ead23c2444d07))
+* **ui:** keep the highlighted thread readable on ANSI themes ([#41](https://github.com/lucasscariot/herdr-inbox/issues/41)) ([5443efd](https://github.com/lucasscariot/herdr-inbox/commit/5443efd50f4e0f45a08c6999181d0df0c70cce0c))
+* **ui:** reserve theme accents for focus and selection ([#39](https://github.com/lucasscariot/herdr-inbox/issues/39)) ([aa6e7c9](https://github.com/lucasscariot/herdr-inbox/commit/aa6e7c97d55ef7210752d7ccc7c250f642f1af44))
+
 ## [1.3.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.2.1...v1.3.0) (2026-10-10)
 
 
