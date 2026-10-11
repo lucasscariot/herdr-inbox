@@ -672,6 +672,7 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
     if let Some(reply) = app.reply.as_mut() {
         reply.skill_menu.follow(&reply.editor);
         reply.editor.insert(text);
+        reply.skill_menu.edited();
         return;
     }
     if app.filtering {
@@ -685,6 +686,7 @@ pub(super) fn paste(app: &mut App, text: &str, effects: &mut Vec<Effect>) {
             None if app.composer.field == Field::Task => {
                 app.composer.skill_menu.follow(&app.composer.task);
                 app.composer.task.insert(text);
+                app.composer.skill_menu.edited();
             }
             None => {}
         }

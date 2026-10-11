@@ -1098,6 +1098,17 @@ mod composer_flow {
     }
 
     #[test]
+    fn a_paste_starts_the_skill_list_at_the_top_again() {
+        let mut app = with_skills();
+        type_text(&mut app, "$");
+        app.update(press(KeyCode::Down), at(1));
+        app.update(press(KeyCode::Down), at(1));
+        app.update(Input::Paste("a".into()), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.task.text(), "$arena ", "the best match, not the old row");
+    }
+
+    #[test]
     fn enter_inserts_the_skill_and_esc_keeps_a_plain_dollar() {
         let mut app = with_skills();
         type_text(&mut app, "use $des");

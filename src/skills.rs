@@ -51,33 +51,34 @@ pub fn accept(editor: &mut Editor, start: usize, name: &str) {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Menu {
     pub selected: usize,
-    /// The `$` the user closed the menu on with Esc.
-    dismissed: Option<usize>,
+    /// The `$` the user closed the menu on with Esc, and the text it was in
+    /// (see [`Editor::replaced`]).
+    dismissed: Option<(usize, u64)>,
 }
 
 impl Menu {
     /// The skills offered right now, with the mention's start.
     pub fn offered<'a>(&self, editor: &Editor, skills: &'a [Skill]) -> Option<(usize, Vec<&'a Skill>)> {
         let (start, query) = query(editor)?;
-        if self.dismissed == Some(start) {
+        if self.dismissed == Some((start, editor.replaced())) {
             return None;
         }
         let found = matching(skills, query);
         (!found.is_empty()).then_some((start, found))
     }
 
-    /// Forgets a dismissal once its `$` is gone, so a later mention typed at
-    /// the same place, after a send or a clear, opens the menu again.
+    /// Forgets a dismissal once its `$` is deleted or its text replaced, so a
+    /// later mention at the same place opens the menu again.
     pub fn follow(&mut self, editor: &Editor) {
-        if let Some(start) = self.dismissed
-            && !editor.text().get(start..).is_some_and(|rest| rest.starts_with('$'))
+        if let Some((start, replaced)) = self.dismissed
+            && (replaced != editor.replaced() || !editor.text().get(start..).is_some_and(|rest| rest.starts_with('$')))
         {
             self.dismissed = None;
         }
     }
 
     pub fn dismiss(&mut self, editor: &Editor) {
-        self.dismissed = query(editor).map(|(start, _)| start);
+        self.dismissed = query(editor).map(|(start, _)| (start, editor.replaced()));
         self.selected = 0;
     }
 
@@ -229,6 +230,9 @@ mod tests {
         menu.follow(&text);
         text.insert("$");
         assert!(menu.offered(&text, &skills).is_some(), "a new task's $ at the same place");
+        menu.dismiss(&text);
+        text.set("$");
+        assert!(menu.offered(&text, &skills).is_some(), "another text, as from the history");
     }
 
     #[test]

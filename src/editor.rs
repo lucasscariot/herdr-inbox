@@ -11,11 +11,19 @@ pub struct Editor {
     text: String,
     /// Byte offset, always on a character boundary.
     cursor: usize,
+    /// How many times the whole text was replaced or cleared.
+    replaced: u64,
 }
 
 impl Editor {
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Changes each time the whole text is replaced or cleared, so state
+    /// tied to a place in the text can tell it now holds another text.
+    pub fn replaced(&self) -> u64 {
+        self.replaced
     }
 
     pub fn cursor(&self) -> usize {
@@ -29,11 +37,13 @@ impl Editor {
     pub fn set(&mut self, text: &str) {
         self.text = text.chars().take(MAX_LEN).collect();
         self.cursor = self.text.len();
+        self.replaced += 1;
     }
 
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.replaced += 1;
     }
 
     /// Inserts text at the cursor; carriage returns become newlines and the
