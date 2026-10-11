@@ -142,6 +142,13 @@ assert the compiled version separately from the version-independent layout.
   uses `--config model_reasoning_effort=\"level\"`, replacing only that key in
   configured arguments and preserving unrelated overrides. Agent terminal
   colours are never recoloured to match Inbox's own frames.
+- **OpenCode 2 takes its model through a session.** Its interactive command
+  refuses `--model`, so for a catalog with `session_api` the plan strips
+  `--model` from the arguments (a model pinned in `harness_args` becomes the
+  session's model) and, once the workspace exists, runs `opencode api
+  session.create` on the machine with the model and the workspace directory.
+  The agent then starts with `--session <id>`. A failed creation stops the
+  launch before the agent starts. OpenCode 1 still gets `--model`.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
   own record: focusing a finished thread, or watching it finish, shows it as

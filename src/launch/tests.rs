@@ -718,3 +718,108 @@ fn the_claude_status_line_is_added_unless_the_user_set_their_own() {
     let json = serde_json::to_string(&plan.record).unwrap();
     assert!(!json.contains("harness_auto"), "false is not written, so older journals read the same");
 }
+
+fn opencode(session_api: bool) -> Catalog {
+    Catalog {
+        choices: vec![Choice { id: "opencode/big-pickle".into(), label: "opencode/big-pickle".into() }],
+        selectable: true,
+        session_api,
+        ..Catalog::default()
+    }
+}
+
+fn opencode_request(model: Option<&str>) -> Request {
+    let mut request = request("Fix login loop", WorkspaceChoice::NewWorktree { branch: None });
+    request.harness = "opencode".into();
+    request.model = model.map(str::to_string);
+    request
+}
+
+#[test]
+fn opencode_2_gets_its_model_through_a_session_not_a_flag() {
+    let mut with_model = settings();
+    with_model
+        .harness_args
+        .insert("opencode".into(), ["--auto", "--model", "openai/gpt-5.5"].map(String::from).to_vec());
+    let plan = plan_for(&opencode_request(Some("opencode/big-pickle")), &with_model, Some(&opencode(true))).unwrap();
+    assert_eq!(plan.agent_args, ["--auto"]);
+    assert_eq!(plan.session.as_ref().map(|s| s.model.as_str()), Some("opencode/big-pickle"));
+    assert_eq!(plan.record.model, "opencode/big-pickle");
+
+    let pinned = plan_for(&opencode_request(None), &with_model, Some(&opencode(true))).unwrap();
+    assert_eq!(pinned.agent_args, ["--auto"]);
+    assert_eq!(pinned.session.map(|s| s.model), Some("openai/gpt-5.5".into()), "a pinned model still applies");
+
+    let plain = plan_for(&opencode_request(None), &settings(), Some(&opencode(true)));
+    assert_eq!(plain.unwrap().session, None, "no model, no session: OpenCode picks its own");
+
+    let v1 = plan_for(&opencode_request(Some("opencode/big-pickle")), &with_model, Some(&opencode(false))).unwrap();
+    assert_eq!(v1.agent_args, ["--auto", "--model", "opencode/big-pickle"]);
+    assert_eq!(v1.session, None);
+}
+
+#[test]
+fn opencode_session_requests_split_provider_model_and_variant() {
+    let session = |model: &str| Session { program: "opencode".into(), model: model.into() };
+    assert_eq!(
+        session("lmstudio/qwen/qwen3-coder-30b").request("/w").unwrap(),
+        serde_json::json!({"model": {"providerID": "lmstudio", "id": "qwen/qwen3-coder-30b"}, "location": {"directory": "/w"}})
+    );
+    assert_eq!(
+        session("openai/gpt-5.5#high").request("/w").unwrap()["model"],
+        serde_json::json!({"providerID": "openai", "id": "gpt-5.5", "variant": "high"})
+    );
+    assert!(session("big-pickle").request("/w").is_err());
+    assert!(session("/big-pickle").request("/w").is_err());
+}
+
+/// A fake `opencode` whose `api session.create` logs its arguments and
+/// answers with `answer`.
+fn fake_opencode(dir: &Path, answer: &str) -> String {
+    let path = dir.join("opencode");
+    let log = dir.join("opencode.log");
+    crate::testing::write_executable(
+        &path,
+        &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{answer}\n", log.display()),
+    );
+    path.display().to_string()
+}
+
+#[test]
+fn an_opencode_2_launch_creates_the_session_then_opens_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program =
+        fake_opencode(dir.path(), r#"echo '{"data":{"id":"ses_abc","model":{"id":"big-pickle"}}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
+    let created = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
+    assert!(created.starts_with("api session.create --data "), "{created}");
+    let body: Value = serde_json::from_str(created.trim().trim_start_matches("api session.create --data ")).unwrap();
+    assert_eq!(body["location"]["directory"], "/h/wt/new");
+    assert_eq!(body["model"], serde_json::json!({"providerID": "opencode", "id": "big-pickle"}));
+    assert_eq!(
+        calls(dir.path())[2],
+        "agent start t-fix-login-loop-4567cdef --kind opencode --pane w5:p1 --timeout 45000 -- --session ses_abc"
+    );
+}
+
+#[test]
+fn a_failed_opencode_session_stops_the_launch_before_the_agent_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program =
+        fake_opencode(dir.path(), "echo 'Error: background service unavailable' >&2; exit 1");
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, error }) = result else { panic!("{result:?}") };
+    assert_eq!(
+        error,
+        "could not create an OpenCode session for opencode/big-pickle: Error: background service unavailable"
+    );
+    assert_eq!(record.failed_stage, Some(Stage::Starting));
+    assert!(!calls(dir.path()).iter().any(|call| call.starts_with("agent start")));
+}

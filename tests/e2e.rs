@@ -868,6 +868,63 @@ fn composer_mouse_input_and_codex_thinking_work_in_the_real_terminal() {
 }
 
 #[test]
+fn opencode_2_starts_on_the_chosen_model_through_a_session() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    real_repo(&root.join("work"), "cockpit");
+    // OpenCode 2: no `--model` on its interactive command, a session API
+    // that takes one instead.
+    write_executable(
+        &root.join("bin/opencode"),
+        &format!(
+            r#"#!/bin/sh
+case "$1" in
+  --help) printf '%s\n' '--session, -s string' '--prompt string'; exit 0 ;;
+  --version) echo 'opencode v2.0.22'; exit 0 ;;
+  models) echo 'opencode/big-pickle'; exit 0 ;;
+  api) printf '%s\n' "$@" > '{root}/opencode-api.args'
+       echo '{{"data":{{"id":"ses_e2e","model":{{"id":"big-pickle","providerID":"opencode"}}}}}}'; exit 0 ;;
+esac
+printf '%s\n' "$@" > '{root}/opencode-start.args'
+echo 'not really opencode'
+exit 3
+"#,
+            root = root.display()
+        ),
+    );
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).unwrap();
+    std::fs::write(
+        root.join("config/herdr-inbox/config.toml"),
+        format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display()),
+    )
+    .unwrap();
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.click_text("+  New thread", 3);
+    inbox.wait_for_text("Harness    OpenCode");
+    inbox.click_text("Model      Default", 12);
+    inbox.wait_for_text("╭ Model ");
+    inbox.click_text("opencode/big-pickle", 2);
+    inbox.wait_until_gone("╭ Model ");
+    inbox.wait_for_text("Model      opencode/big-pickle");
+    inbox.click_text("Describe the task.", 0);
+    inbox.press("Fix login");
+    inbox.wait_for_text("Fix login");
+    inbox.click_text("↵ send", 2);
+    inbox.wait_for_text("✗ cockpit · OpenCode");
+    let api = std::fs::read_to_string(root.join("opencode-api.args"))
+        .unwrap_or_else(|err| panic!("no OpenCode session was created: {err}; screen:\n{}", inbox.text()));
+    assert!(api.starts_with("api\nsession.create\n--data\n"), "{api}");
+    assert!(api.contains(r#""model":{"id":"big-pickle","providerID":"opencode"}"#), "{api}");
+    let args = std::fs::read_to_string(root.join("opencode-start.args"))
+        .unwrap_or_else(|err| panic!("the sandbox OpenCode was not launched: {err}; screen:\n{}", inbox.text()));
+    assert_eq!(args, "--session\nses_e2e\n");
+}
+
+#[test]
 fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
     if !enabled() {
         return;

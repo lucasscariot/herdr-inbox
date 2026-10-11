@@ -247,6 +247,9 @@ the list does not know can still be used: type its id and pick **Use …**.
   Choosing a different model clears an incompatible thinking level. **Default**
   leaves the CLI's settings alone. If no levels are reported, the Thinking row
   says so rather than silently disappearing. `F5` refreshes the catalog.
+  OpenCode 2 has no `--model` flag on its interactive command, so the inbox
+  creates an OpenCode session with the chosen model through `opencode api`
+  and starts OpenCode on it with `--session`.
 - **Workspace** is a new git worktree by default, its branch named after the
   task (shown as `⎇ branch`), or one you name, or an existing checkout.
   The name keeps up to four content words of the task's first sentence:

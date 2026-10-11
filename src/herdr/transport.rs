@@ -44,6 +44,19 @@ impl Runner {
         }
     }
 
+    /// Runs any program on the machine: directly here, or through the login
+    /// shell over SSH, where its stdout follows the ready marker.
+    pub fn exec(&self, argv: &[&str]) -> Command {
+        match self {
+            Runner::Local(_) => {
+                let mut command = Command::new(argv[0]);
+                command.args(&argv[1..]);
+                command
+            }
+            Runner::Ssh(ssh) => ssh.login_exec(argv),
+        }
+    }
+
     /// Whether stdout starts with login noise ending in the ready marker.
     pub fn has_marker(&self) -> bool {
         matches!(self, Runner::Ssh(_))

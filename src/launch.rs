@@ -157,6 +157,38 @@ pub struct Plan {
     pub base: Option<String>,
     /// For `herdr agent start --timeout`.
     pub start_timeout_ms: u64,
+    /// A session to create before the agent starts, for a CLI that takes
+    /// its model that way.
+    pub session: Option<Session>,
+}
+
+/// OpenCode 2 has no `--model` on its interactive command: the model goes
+/// into a session created through its server API, which the TUI then opens
+/// with `--session`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub program: String,
+    /// `provider/model`, optionally followed by `#variant`.
+    pub model: String,
+}
+
+impl Session {
+    /// The body of `opencode api session.create`.
+    fn request(&self, directory: &str) -> Result<Value, String> {
+        let (model, variant) = match self.model.split_once('#') {
+            Some((model, variant)) => (model, Some(variant)),
+            None => (self.model.as_str(), None),
+        };
+        let (provider, id) = model
+            .split_once('/')
+            .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
+            .ok_or_else(|| format!("OpenCode models are provider/model, not {model}"))?;
+        let mut model = serde_json::json!({ "providerID": provider, "id": id });
+        if let Some(variant) = variant.filter(|v| !v.is_empty()) {
+            model["variant"] = variant.into();
+        }
+        Ok(serde_json::json!({ "model": model, "location": { "directory": directory } }))
+    }
 }
 
 impl Plan {
@@ -435,6 +467,20 @@ fn strip_flag(args: Vec<String>, names: &[&str]) -> Vec<String> {
     kept
 }
 
+/// The value of the last occurrence of a flag in `args`.
+fn flag_value(args: &[String], names: &[&str]) -> Option<String> {
+    let mut value = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if names.contains(&arg.as_str()) {
+            value = args.next().cloned();
+        } else if let Some(attached) = names.iter().find_map(|name| arg.strip_prefix(&format!("{name}="))) {
+            value = Some(attached.to_string());
+        }
+    }
+    value.filter(|v| !v.is_empty())
+}
+
 /// Removes only Codex's reasoning override, keeping unrelated config values.
 fn strip_codex_effort(args: Vec<String>) -> Vec<String> {
     let is_effort = |value: &str| value.split_once('=').is_some_and(|(key, _)| key.trim() == "model_reasoning_effort");
@@ -494,7 +540,13 @@ pub fn plan(
     let catalog = catalog.cloned().unwrap_or_default();
     let mut args = settings.harness_args.get(&request.harness).cloned().unwrap_or_default();
     let model = request.model.clone().filter(|m| !m.trim().is_empty());
-    if let Some(model) = &model {
+    let mut session = None;
+    if request.harness == "opencode" && catalog.session_api {
+        // A model pinned in harness_args would make OpenCode refuse to start.
+        let pinned = flag_value(&args, &["--model", "-m"]);
+        args = strip_flag(args, &["--model", "-m"]);
+        session = model.clone().or(pinned).map(|model| Session { program: "opencode".into(), model });
+    } else if let Some(model) = &model {
         if !catalog.selectable {
             return Err(format!("{} does not support choosing a model at launch", request.harness));
         }
@@ -558,7 +610,7 @@ pub fn plan(
         comparison: request.comparison,
         id,
     };
-    Ok(Plan { record, agent_args: args, base: None, start_timeout_ms: settings.agent_start_timeout_ms })
+    Ok(Plan { record, agent_args: args, base: None, start_timeout_ms: settings.agent_start_timeout_ms, session })
 }
 
 /// Eight characters that tell launches apart, even two sent in the same
@@ -591,7 +643,7 @@ impl std::fmt::Display for CliError {
 pub fn herdr(runner: &Runner, args: &[&str], timeout: Duration) -> Result<Value, CliError> {
     let mut command = runner.command(args);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let output = run(command, timeout)?;
+    let output = run(command, "herdr", timeout)?;
     let stdout = if runner.has_marker() {
         crate::herdr::ssh::after_marker(&output.stdout).unwrap_or("").to_string()
     } else {
@@ -617,10 +669,10 @@ struct Output {
     success: bool,
 }
 
-fn run(mut command: std::process::Command, timeout: Duration) -> Result<Output, CliError> {
+fn run(mut command: std::process::Command, program: &str, timeout: Duration) -> Result<Output, CliError> {
     use std::io::Read;
     let fail = |message: String| CliError { code: None, message };
-    let mut child = command.spawn().map_err(|err| fail(format!("cannot run herdr: {err}")))?;
+    let mut child = command.spawn().map_err(|err| fail(format!("cannot run {program}: {err}")))?;
     let mut stdout = child.stdout.take().ok_or_else(|| fail("no stdout".into()))?;
     let mut stderr = child.stderr.take().ok_or_else(|| fail("no stderr".into()))?;
     let (tx, rx) = std::sync::mpsc::channel();
@@ -636,7 +688,7 @@ fn run(mut command: std::process::Command, timeout: Duration) -> Result<Output, 
         let _ = child.kill();
     }
     let status = child.wait().map_err(|err| fail(err.to_string()))?;
-    let (stdout, stderr) = read.map_err(|_| fail("herdr did not answer in time".into()))?;
+    let (stdout, stderr) = read.map_err(|_| fail(format!("{program} did not answer in time")))?;
     Ok(Output { stdout, stderr, success: status.success() })
 }
 
@@ -696,7 +748,7 @@ fn steps(
     journal: &dyn Fn(&Record),
     progress: &dyn Fn(&str),
 ) -> Result<Outcome, String> {
-    let (agent_args, base) = (&plan.agent_args, plan.base.as_deref());
+    let (mut agent_args, base) = (plan.agent_args.clone(), plan.base.as_deref());
     let created = if record.workspace == "worktree" {
         progress(&format!("creating worktree {}", record.branch));
         let mut args = vec![
@@ -744,6 +796,10 @@ fn steps(
     progress(&format!("starting {}", record.harness));
     record.stage = Stage::Starting;
     journal(record);
+    if let Some(session) = &plan.session {
+        let id = create_session(runner, session, &record.cwd)?;
+        agent_args.extend(["--session".to_string(), id]);
+    }
     let timeout = plan.start_timeout_ms.to_string();
     let mut start: Vec<&str> =
         vec!["agent", "start", &record.agent_name, "--kind", &record.harness, "--pane", &pane, "--timeout", &timeout];
@@ -789,6 +845,32 @@ fn steps(
     progress("sending the task");
     submit(runner, record, journal)?;
     Ok(Outcome::Sent(record.clone()))
+}
+
+/// Creates an OpenCode session with the chosen model and returns its id.
+fn create_session(runner: &Runner, session: &Session, directory: &str) -> Result<String, String> {
+    let fail = |reason: &str| format!("could not create an OpenCode session for {}: {reason}", session.model);
+    let body = session.request(directory)?.to_string();
+    let mut command = runner.exec(&[&session.program, "api", "session.create", "--data", &body]);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let output = run(command, &session.program, Duration::from_secs(30)).map_err(|e| fail(&e.message))?;
+    let stdout = if runner.has_marker() {
+        crate::herdr::ssh::after_marker(&output.stdout).unwrap_or("")
+    } else {
+        output.stdout.as_str()
+    };
+    let answer: Option<Value> = stdout.lines().rev().find_map(|line| serde_json::from_str(line.trim()).ok());
+    match answer.as_ref().and_then(|answer| str_at(answer, &["data", "id"])) {
+        Some(id) if output.success => Ok(id.to_string()),
+        _ => {
+            let reason = [output.stderr.as_str(), stdout]
+                .iter()
+                .flat_map(|text| text.lines().rev())
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("no session id in the answer");
+            Err(fail(reason.trim()))
+        }
+    }
 }
 
 /// Sends the task and records the result.
