@@ -989,3 +989,16 @@ fn a_failed_cleanup_keeps_the_session_in_the_journal() {
     let Err(Failure { record, .. }) = result else { panic!("{result:?}") };
     assert_eq!(record.session_id.as_deref(), Some("ses_abc"));
 }
+
+#[test]
+fn opencode_session_selectors_are_refused_with_a_chosen_model() {
+    for flag in ["--continue", "-c", "--fork", "--session", "-s=ses_old", "--session=ses_old"] {
+        let mut resuming = settings();
+        resuming.harness_args.insert("opencode".into(), vec![flag.into()]);
+        let refused =
+            plan_for(&opencode_request(Some("opencode/big-pickle")), &resuming, Some(&opencode(true))).unwrap_err();
+        assert!(refused.contains("picks its own session"), "{flag}: {refused}");
+        let default = plan_for(&opencode_request(None), &resuming, Some(&opencode(true))).unwrap();
+        assert_eq!(default.agent_args, [flag], "Default leaves {flag} alone");
+    }
+}

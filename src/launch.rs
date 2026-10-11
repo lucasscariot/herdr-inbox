@@ -189,6 +189,17 @@ impl Session {
             .split_once('/')
             .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
             .ok_or_else(|| format!("OpenCode models are provider/model, not {model}"))?;
+        // These pick another session than the one made here, which the task
+        // would then miss and a failed start would not clean up.
+        let selectors = ["--continue", "-c", "--fork", "--session", "-s"];
+        if let Some(flag) = args
+            .iter()
+            .find_map(|arg| selectors.iter().find(|flag| arg == *flag || arg.starts_with(&format!("{flag}="))))
+        {
+            return Err(format!(
+                "OpenCode's {flag} picks its own session, so it cannot start on a chosen model: remove it from harness_args or pick Default"
+            ));
+        }
         if standalone(args) {
             // Its private server never sees a session created beforehand.
             return Err("OpenCode with --standalone cannot start on a chosen model: pick Default".into());
