@@ -157,7 +157,9 @@ assert the compiled version separately from the version-independent layout.
   planning, so a bad choice creates no worktree. A failed creation stops the
   launch before the agent starts; an agent that then fails to start has its
   session deleted (`session.remove`), since OpenCode keeps sessions until
-  deleted. A startup dialog keeps it: the agent is running on it. OpenCode 1 still gets `--model`.
+  deleted. A startup dialog keeps it: the agent is running on it. The
+  session's id is journaled as soon as it exists (`session_id`), so a launch
+  interrupted before the agent starts still says which session it left. OpenCode 1 still gets `--model`.
 - **Seen is local.** Herdr marks a finished pane seen when one of its own
   windows shows the tab. The inbox does not move Herdr's focus, so it keeps its
   own record: focusing a finished thread, or watching it finish, shows it as

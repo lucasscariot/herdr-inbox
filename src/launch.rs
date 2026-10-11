@@ -143,6 +143,10 @@ pub struct Record {
     pub failed_stage: Option<Stage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The OpenCode session made for the agent, journaled as soon as it
+    /// exists so an interrupted launch still says which one it left behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Set when the task went to several agents at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison: Option<Comparison>,
@@ -653,6 +657,7 @@ pub fn plan(
         unverified: false,
         failed_stage: None,
         error: None,
+        session_id: None,
         comparison: request.comparison,
         id,
     };
@@ -849,6 +854,8 @@ fn steps(
     let mut created_session = None;
     if let Some(session) = &plan.session {
         let id = create_session(runner, session, &record.cwd)?;
+        record.session_id = Some(id.clone());
+        journal(record);
         agent_args.extend(["--session".to_string(), id.clone()]);
         created_session = Some((session, id));
     }
@@ -883,8 +890,10 @@ fn steps(
         if !error.message.contains(STARTUP_BLOCKED) {
             // OpenCode keeps sessions until deleted: a retry would leave
             // one more empty session behind each time.
-            if let Some((session, id)) = &created_session {
-                remove_session(runner, session, id);
+            if let Some((session, id)) = &created_session
+                && remove_session(runner, session, id)
+            {
+                record.session_id = None;
             }
             return Err(error.message);
         }
@@ -934,13 +943,13 @@ fn check_shared_server(runner: &Runner, session: &Session) -> Result<(), String>
     Ok(())
 }
 
-/// Deletes a session the agent never opened. Best effort: the launch has
-/// already failed and says why.
-fn remove_session(runner: &Runner, session: &Session, id: &str) {
+/// Deletes a session the agent never opened, and says whether it is gone.
+/// Best effort: the launch has already failed and says why.
+fn remove_session(runner: &Runner, session: &Session, id: &str) -> bool {
     let args = session.remove_args(id);
     let mut command = runner.exec(&args.iter().map(String::as_str).collect::<Vec<_>>());
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let _ = run(command, &session.program, Duration::from_secs(15));
+    run(command, &session.program, Duration::from_secs(15)).is_ok_and(|output| output.success)
 }
 
 /// Creates an OpenCode session with the chosen model and returns its id.

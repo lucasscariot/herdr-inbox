@@ -936,7 +936,8 @@ fn a_failed_agent_start_deletes_the_opencode_session_it_was_given() {
         plan_for(&opencode_request(Some("opencode/big-pickle")), &with_server, Some(&opencode(true))).unwrap();
     plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
     let (result, _, _) = execute_logged(&runner, plan);
-    assert!(result.is_err(), "{result:?}");
+    let Err(Failure { record, .. }) = result else { panic!("{result:?}") };
+    assert_eq!(record.session_id, None, "the deleted session is no longer journaled");
     let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
     assert_eq!(log.lines().last(), Some("api session.remove --server http://box:4096 --param sessionID=ses_abc"));
 }
@@ -952,4 +953,39 @@ fn a_startup_dialog_keeps_the_opencode_session() {
     assert!(matches!(result, Ok(Outcome::WaitingForStartup(_))), "{result:?}");
     let log = std::fs::read_to_string(dir.path().join("opencode.log")).unwrap();
     assert!(!log.contains("session.remove"), "{log}");
+}
+
+#[test]
+fn the_opencode_session_is_journaled_before_the_agent_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program = fake_opencode(dir.path(), "false", r#"echo '{"data":{"id":"ses_abc"}}'"#);
+    let starts = |dir: &Path| calls(dir).iter().filter(|c| c.starts_with("agent start")).count();
+    let journaled = Mutex::new(Vec::new());
+    let result = execute(
+        &runner,
+        plan,
+        &|r| journaled.lock().unwrap().push((r.session_id.clone(), starts(dir.path()))),
+        &|_| {},
+    );
+    let Ok(Outcome::Sent(record)) = result else { panic!("{result:?}") };
+    assert_eq!(record.session_id.as_deref(), Some("ses_abc"));
+    let journaled = journaled.into_inner().unwrap();
+    let first = journaled.iter().find(|(id, _)| id.is_some()).unwrap();
+    assert_eq!(first, &(Some("ses_abc".to_string()), 0), "journaled before `agent start`: {journaled:?}");
+}
+
+#[test]
+fn a_failed_cleanup_keeps_the_session_in_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "broken", "ok");
+    let mut plan =
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &settings(), Some(&opencode(true))).unwrap();
+    plan.session.as_mut().unwrap().program =
+        fake_opencode(dir.path(), "false", r#"[ "$2" = session.remove ] && exit 1; echo '{"data":{"id":"ses_abc"}}'"#);
+    let (result, _, _) = execute_logged(&runner, plan);
+    let Err(Failure { record, .. }) = result else { panic!("{result:?}") };
+    assert_eq!(record.session_id.as_deref(), Some("ses_abc"));
 }
