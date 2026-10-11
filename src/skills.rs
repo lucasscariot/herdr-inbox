@@ -67,12 +67,12 @@ impl Menu {
         (!found.is_empty()).then_some((start, found))
     }
 
-    /// Forgets a dismissal once its `$` is deleted or its text replaced, so a
-    /// later mention at the same place opens the menu again.
+    /// Forgets a dismissal once the cursor is no longer in its mention: it
+    /// moved away, the `$` was deleted, or the text was replaced. A `$`
+    /// typed or pasted later, even at the same offset, opens the menu again.
     pub fn follow(&mut self, editor: &Editor) {
-        if let Some((start, replaced)) = self.dismissed
-            && (replaced != editor.replaced() || !editor.text().get(start..).is_some_and(|rest| rest.starts_with('$')))
-        {
+        let current = query(editor).map(|(start, _)| (start, editor.replaced()));
+        if self.dismissed.is_some() && self.dismissed != current {
             self.dismissed = None;
         }
     }
@@ -233,6 +233,14 @@ mod tests {
         menu.dismiss(&text);
         text.set("$");
         assert!(menu.offered(&text, &skills).is_some(), "another text, as from the history");
+
+        let mut text = editor("a $");
+        menu.dismiss(&text);
+        text.home();
+        menu.follow(&text);
+        text.insert("x $");
+        assert_eq!(query(&text), Some((2, "")), "a new $ where the dismissed one was");
+        assert!(menu.offered(&text, &skills).is_some(), "the cursor left the dismissed one");
     }
 
     #[test]
