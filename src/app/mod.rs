@@ -361,6 +361,8 @@ pub struct App {
     pub usage_reading: HashSet<String>,
     /// Reads the user asked for (F5): a failure is worth a notice.
     usage_asked: HashSet<String>,
+    /// When a machine's last read failed: no retry before the TTL passes.
+    usage_failed: HashMap<String, u64>,
     /// The time of the last input, for what the composer shows.
     clock: SystemTime,
     /// The composer's draft, kept while it is closed.
@@ -449,6 +451,7 @@ impl App {
             usage: HashMap::new(),
             usage_reading: HashSet::new(),
             usage_asked: HashSet::new(),
+            usage_failed: HashMap::new(),
             clock: std::time::UNIX_EPOCH,
             composer: Composer::default(),
             launches: Vec::new(),
@@ -657,6 +660,13 @@ impl App {
             if !force && self.usage.get(&machine.id).is_some_and(|r| r.fresh(now)) {
                 continue;
             }
+            let failed_recently = self
+                .usage_failed
+                .get(&machine.id)
+                .is_some_and(|at| crate::discovery::seconds(now).saturating_sub(*at) < usage::TTL.as_secs());
+            if !force && failed_recently {
+                continue;
+            }
             let Some(inventory) = self.inventories.get(&machine.id) else {
                 continue;
             };
@@ -687,12 +697,17 @@ impl App {
         let asked = self.usage_asked.remove(machine);
         match result {
             Ok(report) => {
+                self.usage_failed.remove(machine);
                 self.usage.insert(machine.to_string(), report);
             }
-            Err(error) if asked && self.focus == Focus::Composer => {
-                self.notify(format!("Could not read usage: {error}"), NoticeKind::Error, now);
+            Err(error) => {
+                // A machine that cannot answer is asked again after the
+                // TTL, not on the next tick.
+                self.usage_failed.insert(machine.to_string(), crate::discovery::seconds(now));
+                if asked && self.focus == Focus::Composer {
+                    self.notify(format!("Could not read usage: {error}"), NoticeKind::Error, now);
+                }
             }
-            Err(_) => {}
         }
         self.with_composer(|composer, ctx| composer.settle(ctx));
     }

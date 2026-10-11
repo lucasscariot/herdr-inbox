@@ -105,8 +105,9 @@ impl Usage {
             String::new()
         };
         if self.headroom(now) == 0 {
-            // The reset that frees ordinary use: the exhausted window's.
-            let binding = self.tightest(now).and_then(|w| w.resets_at);
+            // A reset is promised only by an exhausted window; a refusal by
+            // the provider's verdict ends with its next reading.
+            let binding = self.tightest(now).filter(|w| w.used_percent >= 100).and_then(|w| w.resets_at);
             return match binding.map(|at| resets_in(at, now)) {
                 Some(when) => format!("limit reached · resets {when}{age}"),
                 None => format!("limit reached{age}"),
@@ -273,7 +274,8 @@ mod tests {
         // next reading can lift it.
         let refused = Usage { refused: true, ..reset.clone() };
         assert_eq!(refused.headroom(at(600)), 0);
-        assert_eq!(refused.summary(at(600)), "limit reached · resets in 2h");
+        assert_eq!(refused.summary(at(600)), "limit reached", "no window is spent: no reset to promise");
+        assert_eq!(refused.summary(at(400)), "limit reached · resets in 1m", "the spent 5h window's reset");
         assert!(!usage(&[]).is_stale(at(STALE.as_secs())));
         assert!(usage(&[]).is_stale(at(STALE.as_secs() + 1)));
     }
@@ -398,7 +400,7 @@ mod tests {
             &codex,
             "#!/bin/sh\n[ \"$1\" = app-server ] || exit 1\nread first\nread second\nread third\n\
              printf '%s\\n' '{\"id\":0,\"result\":{}}' '{\"method\":\"account/updated\"}' \
-             '{\"id\":1,\"result\":{\"ordinaryUsageAllowed\":'\"${FAKE_ALLOWED:-true}\"',\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":{\"usedPercent\":4,\"windowDurationMins\":300,\"resetsAt\":null},\"planType\":\"prolite\",\"rateLimitReachedType\":null},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n",
+             '{\"id\":1,\"result\":{\"ordinaryUsageAllowed\":'\"${FAKE_ALLOWED:-true}\"',\"rateLimits\":{\"primary\":{\"usedPercent\":17,\"windowDurationMins\":10080,\"resetsAt\":1792305784},\"secondary\":{\"usedPercent\":4,\"windowDurationMins\":300,\"resetsAt\":null},\"planType\":\"prolite\",\"rateLimitReachedType\":'\"${FAKE_REACHED:-null}\"'},\"rateLimitResetCredits\":{\"availableCount\":3}}}'\n",
         )
         .unwrap();
         std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -439,6 +441,19 @@ mod tests {
         let refused = finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap();
         assert!(refused.usage("openai").unwrap().reached, "ordinaryUsageAllowed: false is a reached limit");
         assert!(refused.usage("openai").unwrap().refused, "and the provider's own verdict");
+        // An explicit verdict of allowed outranks a stale reached type.
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(PROBE)
+            .arg(settings(state.to_str(), codex.to_str(), false))
+            .env("HOME", dir.path())
+            .env("FAKE_ALLOWED", "true")
+            .env("FAKE_REACHED", "\"primary_window\"")
+            .output()
+            .unwrap();
+        let allowed = finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap();
+        assert!(!allowed.usage("openai").unwrap().refused, "allowed is the verdict");
+        assert!(!allowed.usage("openai").unwrap().reached);
 
         // Claude Code runs the wrapper with its status line JSON; the user's
         // own status line still gets the same input.
@@ -503,6 +518,25 @@ mod tests {
             "mine: {\"cwd\": \"",
             "the user's when the project has none"
         );
+        // A user's own `statusline.py` is not this wrapper: it is chained.
+        std::fs::write(claude_dir.join("statusline.py"), "import sys\nsys.stdout.write('user-py')\n").unwrap();
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            format!(
+                r#"{{"statusLine": {{"type": "command", "command": "python3 {}/statusline.py"}}}}"#,
+                claude_dir.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(chained(r#"{"cwd": "/nowhere"}"#.into()), "user-py");
+        // A user status line that runs this very wrapper ends the chain
+        // instead of recursing.
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            format!(r#"{{"statusLine": {{"type": "command", "command": "python3 {wrapper} {}"}}}}"#, cache.display()),
+        )
+        .unwrap();
+        assert_eq!(chained(r#"{"cwd": "/nowhere"}"#.into()), "");
 
         let report = run(settings(state.to_str(), None, true));
         assert!(report.usage("openai").is_none(), "codex was not asked for");

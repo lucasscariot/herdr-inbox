@@ -118,11 +118,11 @@ def codex_usage(snapshot, camel, resets_available, read_at, source, allowed=None
     plan = snapshot.get("planType" if camel else "plan_type")
     # The provider's own verdict, kept apart from a spent window: a window's
     # reset clears the latter, only the next reading clears the former.
-    refused = (allowed is False) or bool(snapshot.get(reached_key)) or bool(snapshot.get(spend_key))
     if allowed is None:
+        refused = bool(snapshot.get(reached_key)) or bool(snapshot.get(spend_key))
         reached = refused or any(w["used_percent"] >= 100 for w in windows)
     else:
-        reached = not allowed
+        refused = reached = not allowed
     return {"usage": {
         "windows": windows,
         "plan": plan if isinstance(plan, str) else None,

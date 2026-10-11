@@ -6,6 +6,10 @@
 # would show up in every Claude thread.
 import json, os, pathlib, subprocess, sys, tempfile, time
 
+# A user status line that runs this wrapper would recurse: the inner run
+# does nothing.
+if os.environ.get("HERDR_INBOX_STATUSLINE"):
+    sys.exit(0)
 raw = sys.stdin.buffer.read()
 cache = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else None
 
@@ -46,10 +50,11 @@ for path in candidates:
     if isinstance(status, dict) and status.get("type", "command") == "command" and isinstance(status.get("command"), str):
         command = status["command"]
         break
-own = os.path.basename(sys.argv[0]) if sys.argv else ""
-if isinstance(command, str) and command.strip() and own not in command:
+own = {os.path.abspath(sys.argv[0]), os.path.realpath(sys.argv[0])} if sys.argv and sys.argv[0] else set()
+if isinstance(command, str) and command.strip() and not any(path in command for path in own):
     try:
-        result = subprocess.run(["sh", "-c", command], input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False)
+        env = dict(os.environ, HERDR_INBOX_STATUSLINE="1")
+        result = subprocess.run(["sh", "-c", command], input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False, env=env)
         sys.stdout.buffer.write(result.stdout)
         sys.stdout.flush()
     except (OSError, subprocess.SubprocessError):
