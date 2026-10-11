@@ -231,8 +231,9 @@ pub fn finish(output: &str, now: SystemTime) -> Result<Report, String> {
 }
 
 /// The `--settings` Claude Code takes for one session: the wrapper as its
-/// status line, with the user's own options kept, re-run every minute
-/// unless they chose another interval, so the numbers follow the session.
+/// status line, with the user's own options kept. No refresh timer is
+/// added: Claude Code runs the status line on every event, which is when
+/// the numbers move, and a timer would also re-run the user's own command.
 pub fn statusline_settings(wrapper: &str, options: &serde_json::Map<String, serde_json::Value>) -> String {
     let cache = match wrapper.rsplit_once('/') {
         Some((dir, _)) => format!("{dir}/anthropic.json"),
@@ -241,7 +242,6 @@ pub fn statusline_settings(wrapper: &str, options: &serde_json::Map<String, serd
     let mut status = options.clone();
     status.insert("type".into(), json!("command"));
     status.insert("command".into(), json!(format!("python3 \"{wrapper}\" \"{cache}\"")));
-    status.entry("refreshInterval").or_insert(json!(60));
     json!({"statusLine": status}).to_string()
 }
 
@@ -402,7 +402,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&flag).unwrap();
         assert_eq!(value["statusLine"]["type"], "command");
         assert_eq!(value["statusLine"]["command"], "python3 \"/s/usage/statusline.py\" \"/s/usage/anthropic.json\"");
-        assert_eq!(value["statusLine"]["refreshInterval"], 60);
+        assert!(value["statusLine"].get("refreshInterval").is_none(), "events only, as the user had it");
         // The user's own options travel along; their interval wins.
         let options = json!({"padding": 0, "hideVimModeIndicator": true, "refreshInterval": 5, "command": "theirs"});
         let flag = statusline_settings("/s/usage/statusline.py", options.as_object().unwrap());
@@ -595,6 +595,31 @@ mod tests {
         assert_eq!(windows, [("5h", 24), ("week", 41)]);
         assert_eq!(anthropic.windows[1].resets_at, Some(1738857600));
         assert_eq!(anthropic.source, "statusline");
+
+        // Several sessions share the cache: a reading is written only when
+        // it moves forward, and an identical one keeps its age.
+        let read_at = |cache: &std::path::Path| -> u64 {
+            let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
+            saved["read_at"].as_u64().unwrap()
+        };
+        let used = |cache: &std::path::Path| -> f64 {
+            let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(cache).unwrap()).unwrap();
+            saved["rate_limits"]["five_hour"]["used_percentage"].as_f64().unwrap()
+        };
+        let stamp = read_at(&cache);
+        let backdated = stamp - 1000;
+        let mut saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+        saved["read_at"] = json!(backdated);
+        std::fs::write(&cache, saved.to_string()).unwrap();
+        chained(r#"{"rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": 1738425600}, "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}}"#.into());
+        assert_eq!(read_at(&cache), backdated, "the same snapshot again is not re-stamped");
+        chained(r#"{"rate_limits": {"five_hour": {"used_percentage": 10.0, "resets_at": 1738425600}, "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}}"#.into());
+        assert_eq!(used(&cache), 23.5, "an older session's lower reading does not win");
+        chained(r#"{"rate_limits": {"five_hour": {"used_percentage": 30.0, "resets_at": 1738425600}, "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}}"#.into());
+        assert_eq!(used(&cache), 30.0, "more spent in the same window: newer");
+        chained(r#"{"rate_limits": {"five_hour": {"used_percentage": 2.0, "resets_at": 1738443600}, "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}}"#.into());
+        assert_eq!(used(&cache), 2.0, "a later reset: newer, however little is spent");
+        assert!(read_at(&cache) >= stamp);
 
         // The wrapper also keeps a spend limit as a window, and a launch's
         // probe reports the project's own status line options.

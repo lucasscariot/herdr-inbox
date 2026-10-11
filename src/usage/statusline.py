@@ -18,16 +18,57 @@ try:
 except ValueError:
     data = {}
 limits = data.get("rate_limits") if isinstance(data, dict) else None
+
+
+def window_key(window):
+    """Usage only grows inside a window and the window only resets forward,
+    so (reset, used) orders two readings of the same account."""
+    if not isinstance(window, dict):
+        return None
+    try:
+        return (float(window.get("resets_at") or 0), float(window.get("used_percentage") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def newer(cached, fresh):
+    """Whether `fresh` should replace `cached`. Several sessions share the
+    cache and each re-reports the snapshot it last received, so a reading
+    is written only when it moves forward; an identical one is left alone
+    so its age stays honest."""
+    if not isinstance(cached, dict):
+        return True
+    if cached == fresh:
+        return False
+    forward = backward = False
+    for name in set(cached) | set(fresh):
+        before, after = window_key(cached.get(name)), window_key(fresh.get(name))
+        if before is None or after is None:
+            # A window that appears or goes away is the newer state: Claude
+            # Code drops a window once its reset has passed.
+            forward = True
+        elif after > before:
+            forward = True
+        elif after < before:
+            backward = True
+    return forward or not backward
+
+
 if cache and isinstance(limits, dict):
     try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=".anthropic-", dir=str(cache.parent))
-        with os.fdopen(fd, "w") as handle:
-            json.dump({"rate_limits": limits, "read_at": int(time.time())}, handle)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, cache)
-    except OSError:
-        pass
+        cached = json.loads(cache.read_text()).get("rate_limits")
+    except (OSError, ValueError, AttributeError):
+        cached = None
+    if newer(cached, limits):
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".anthropic-", dir=str(cache.parent))
+            with os.fdopen(fd, "w") as handle:
+                json.dump({"rate_limits": limits, "read_at": int(time.time())}, handle)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, cache)
+        except OSError:
+            pass
 
 # The user's own status line, in Claude Code's order of precedence below the
 # command line: the project's local settings, the project's settings, then
