@@ -190,17 +190,22 @@ impl Session {
             .filter(|(provider, id)| !provider.is_empty() && !id.is_empty())
             .ok_or_else(|| format!("OpenCode models are provider/model, not {model}"))?;
         // These pick another session than the one made here, which the task
-        // would then miss and a failed start would not clean up.
-        let selectors = ["--continue", "-c", "--fork", "--session", "-s"];
-        if let Some(flag) = args
-            .iter()
-            .find_map(|arg| selectors.iter().find(|flag| arg == *flag || arg.starts_with(&format!("{flag}="))))
-        {
+        // would then miss and a failed start would not clean up. `--continue`
+        // and `--fork` are switches and can be turned off; `--session` names
+        // a session whenever it is given.
+        let session_flag = ["--session", "-s"]
+            .into_iter()
+            .find(|flag| args.iter().any(|arg| arg == flag || arg.starts_with(&format!("{flag}="))));
+        let switched_on = [("--continue", &["--continue", "-c"][..]), ("--fork", &["--fork"][..])]
+            .into_iter()
+            .find(|(_, names)| switch(args, names))
+            .map(|(flag, _)| flag);
+        if let Some(flag) = session_flag.or(switched_on) {
             return Err(format!(
                 "OpenCode's {flag} picks its own session, so it cannot start on a chosen model: remove it from harness_args or pick Default"
             ));
         }
-        if standalone(args) {
+        if switch(args, &["--standalone"]) {
             // Its private server never sees a session created beforehand.
             return Err("OpenCode with --standalone cannot start on a chosen model: pick Default".into());
         }
@@ -512,17 +517,23 @@ fn strip_flag(args: Vec<String>, names: &[&str]) -> Vec<String> {
     kept
 }
 
-/// Whether OpenCode's arguments ask for a private server. Like its option
-/// parser, the last of `--standalone`, `--standalone=<bool>` and
-/// `--no-standalone` wins.
-fn standalone(args: &[String]) -> bool {
-    args.iter().fold(false, |on, arg| match arg.as_str() {
-        "--standalone" => true,
-        "--no-standalone" => false,
-        arg => match arg.strip_prefix("--standalone=") {
-            Some(value) => !matches!(value.to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off" | ""),
-            None => on,
-        },
+/// Whether a boolean OpenCode option is on. Like its option parser, the
+/// last of `--name`, `--name=<bool>` and `--no-name` wins, for any of the
+/// option's spellings (`--continue` or `-c`).
+fn switch(args: &[String], names: &[&str]) -> bool {
+    args.iter().fold(false, |on, arg| {
+        names.iter().fold(on, |on, name| {
+            let negated = name.strip_prefix("--").map(|long| format!("--no-{long}"));
+            if arg == name {
+                true
+            } else if negated.as_deref() == Some(arg.as_str()) {
+                false
+            } else if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
+                !matches!(value.to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off" | "")
+            } else {
+                on
+            }
+        })
     })
 }
 

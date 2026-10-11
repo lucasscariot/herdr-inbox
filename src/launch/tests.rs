@@ -904,7 +904,7 @@ fn opencode_sessions_use_the_configured_executable() {
 
 #[test]
 fn every_spelling_of_standalone_is_recognised() {
-    let on = |args: &[&str]| standalone(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+    let on = |args: &[&str]| switch(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), &["--standalone"]);
     for args in
         [&["--standalone"][..], &["--standalone=true"], &["--standalone=1"], &["--no-standalone", "--standalone"]]
     {
@@ -1000,5 +1000,22 @@ fn opencode_session_selectors_are_refused_with_a_chosen_model() {
         assert!(refused.contains("picks its own session"), "{flag}: {refused}");
         let default = plan_for(&opencode_request(None), &resuming, Some(&opencode(true))).unwrap();
         assert_eq!(default.agent_args, [flag], "Default leaves {flag} alone");
+    }
+}
+
+#[test]
+fn opencode_resume_switches_turned_off_are_allowed() {
+    let plan_with = |args: &[&str]| {
+        let mut custom = settings();
+        custom.harness_args.insert("opencode".into(), args.iter().map(|a| a.to_string()).collect());
+        plan_for(&opencode_request(Some("opencode/big-pickle")), &custom, Some(&opencode(true)))
+    };
+    for off in
+        [&["--continue=false"][..], &["-c=false"], &["--fork=false"], &["--no-continue"], &["--fork", "--no-fork"]]
+    {
+        assert!(plan_with(off).is_ok(), "{off:?}");
+    }
+    for on in [&["--continue=true"][..], &["-c=1"], &["--no-fork", "--fork"], &["--session="], &["-s", "ses_old"]] {
+        assert!(plan_with(on).unwrap_err().contains("picks its own session"), "{on:?}");
     }
 }
