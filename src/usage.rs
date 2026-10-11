@@ -166,6 +166,11 @@ pub struct Report {
     /// Where the status line wrapper landed on that machine.
     #[serde(default)]
     pub statusline: Option<String>,
+    /// The user's own status line options (`padding`, `refreshInterval`…)
+    /// for the project the probe was asked about, to carry into the
+    /// wrapper's settings.
+    #[serde(default)]
+    pub statusline_options: serde_json::Map<String, serde_json::Value>,
     /// Seconds since the epoch when the probe ran.
     #[serde(default)]
     pub read_at: u64,
@@ -209,9 +214,11 @@ pub fn pick<'a>(
 }
 
 /// The probe's one JSON argument. `state_dir` is this machine's; a remote
-/// machine derives its own from its environment.
-pub fn settings(state_dir: Option<&str>, codex: Option<&str>, claude: bool) -> String {
-    json!({"state_dir": state_dir, "codex": codex, "claude": claude, "statusline": STATUSLINE}).to_string()
+/// machine derives its own from its environment. `project_dir` names the
+/// checkout whose status line options a launch should keep.
+pub fn settings(state_dir: Option<&str>, codex: Option<&str>, claude: bool, project_dir: Option<&str>) -> String {
+    json!({"state_dir": state_dir, "codex": codex, "claude": claude, "statusline": STATUSLINE, "project_dir": project_dir})
+        .to_string()
 }
 
 /// Turns the probe's output into a report.
@@ -224,14 +231,18 @@ pub fn finish(output: &str, now: SystemTime) -> Result<Report, String> {
 }
 
 /// The `--settings` Claude Code takes for one session: the wrapper as its
-/// status line, re-run every minute so the numbers follow the session.
-pub fn statusline_settings(wrapper: &str) -> String {
+/// status line, with the user's own options kept, re-run every minute
+/// unless they chose another interval, so the numbers follow the session.
+pub fn statusline_settings(wrapper: &str, options: &serde_json::Map<String, serde_json::Value>) -> String {
     let cache = match wrapper.rsplit_once('/') {
         Some((dir, _)) => format!("{dir}/anthropic.json"),
         None => "anthropic.json".into(),
     };
-    json!({"statusLine": {"type": "command", "command": format!("python3 \"{wrapper}\" \"{cache}\""), "refreshInterval": 60}})
-        .to_string()
+    let mut status = options.clone();
+    status.insert("type".into(), json!("command"));
+    status.insert("command".into(), json!(format!("python3 \"{wrapper}\" \"{cache}\"")));
+    status.entry("refreshInterval").or_insert(json!(60));
+    json!({"statusLine": status}).to_string()
 }
 
 #[cfg(test)]
@@ -387,13 +398,23 @@ mod tests {
 
     #[test]
     fn the_settings_name_the_wrapper_and_its_cache() {
-        let flag = statusline_settings("/s/usage/statusline.py");
+        let flag = statusline_settings("/s/usage/statusline.py", &serde_json::Map::new());
         let value: serde_json::Value = serde_json::from_str(&flag).unwrap();
         assert_eq!(value["statusLine"]["type"], "command");
         assert_eq!(value["statusLine"]["command"], "python3 \"/s/usage/statusline.py\" \"/s/usage/anthropic.json\"");
         assert_eq!(value["statusLine"]["refreshInterval"], 60);
-        let probe: serde_json::Value = serde_json::from_str(&settings(Some("/s"), Some("codex"), true)).unwrap();
+        // The user's own options travel along; their interval wins.
+        let options = json!({"padding": 0, "hideVimModeIndicator": true, "refreshInterval": 5, "command": "theirs"});
+        let flag = statusline_settings("/s/usage/statusline.py", options.as_object().unwrap());
+        let value: serde_json::Value = serde_json::from_str(&flag).unwrap();
+        assert_eq!(value["statusLine"]["padding"], 0);
+        assert_eq!(value["statusLine"]["hideVimModeIndicator"], true);
+        assert_eq!(value["statusLine"]["refreshInterval"], 5);
+        assert!(value["statusLine"]["command"].as_str().unwrap().contains("statusline.py"), "never theirs");
+        let probe: serde_json::Value =
+            serde_json::from_str(&settings(Some("/s"), Some("codex"), true, Some("/p"))).unwrap();
         assert_eq!(probe["state_dir"], "/s");
+        assert_eq!(probe["project_dir"], "/p");
         assert_eq!(probe["codex"], "codex");
         assert_eq!(probe["claude"], true);
         assert_eq!(probe["statusline"], STATUSLINE);
@@ -416,19 +437,22 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let claude_dir = dir.path().join("claude-config");
+        std::fs::create_dir_all(&claude_dir).unwrap();
         let run = |settings: String| {
             let output = std::process::Command::new("python3")
                 .arg("-c")
                 .arg(PROBE)
                 .arg(settings)
                 .env("HOME", dir.path())
+                .env("CLAUDE_CONFIG_DIR", &claude_dir)
                 .env("CODEX_HOME", dir.path().join("nohome"))
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
             finish(&String::from_utf8_lossy(&output.stdout), at(1)).unwrap()
         };
-        let report = run(settings(state.to_str(), codex.to_str(), true));
+        let report = run(settings(state.to_str(), codex.to_str(), true, None));
         let wrapper = report.statusline.clone().expect("the wrapper is installed");
         assert_eq!(wrapper, state.join("usage/statusline.py").to_string_lossy());
         assert_eq!(std::fs::read_to_string(&wrapper).unwrap(), STATUSLINE);
@@ -445,7 +469,7 @@ mod tests {
         let output = std::process::Command::new("python3")
             .arg("-c")
             .arg(PROBE)
-            .arg(settings(state.to_str(), codex.to_str(), false))
+            .arg(settings(state.to_str(), codex.to_str(), false, None))
             .env("HOME", dir.path())
             .env("FAKE_ALLOWED", "false")
             .output()
@@ -457,7 +481,7 @@ mod tests {
         let output = std::process::Command::new("python3")
             .arg("-c")
             .arg(PROBE)
-            .arg(settings(state.to_str(), codex.to_str(), false))
+            .arg(settings(state.to_str(), codex.to_str(), false, None))
             .env("HOME", dir.path())
             .env("FAKE_ALLOWED", "true")
             .env("FAKE_REACHED", "\"primary_window\"")
@@ -473,7 +497,7 @@ mod tests {
         let output = std::process::Command::new("python3")
             .arg("-c")
             .arg(PROBE)
-            .arg(settings(state.to_str(), codex.to_str(), false))
+            .arg(settings(state.to_str(), codex.to_str(), false, None))
             .env("HOME", dir.path())
             .env("FAKE_ALLOWED", "true")
             .env("FAKE_USED", "100")
@@ -485,8 +509,6 @@ mod tests {
 
         // Claude Code runs the wrapper with its status line JSON; the user's
         // own status line still gets the same input.
-        let claude_dir = dir.path().join("claude-config");
-        std::fs::create_dir_all(&claude_dir).unwrap();
         std::fs::write(
             claude_dir.join("settings.json"),
             r#"{"statusLine": {"type": "command", "command": "printf 'mine: '; head -c 9"}}"#,
@@ -566,13 +588,34 @@ mod tests {
         .unwrap();
         assert_eq!(chained(r#"{"cwd": "/nowhere"}"#.into()), "");
 
-        let report = run(settings(state.to_str(), None, true));
+        let report = run(settings(state.to_str(), None, true, None));
         assert!(report.usage("openai").is_none(), "codex was not asked for");
         let anthropic = report.usage("anthropic").expect("the cache is read");
         let windows: Vec<(&str, u32)> = anthropic.windows.iter().map(|w| (w.label.as_str(), w.used_percent)).collect();
         assert_eq!(windows, [("5h", 24), ("week", 41)]);
         assert_eq!(anthropic.windows[1].resets_at, Some(1738857600));
         assert_eq!(anthropic.source, "statusline");
+
+        // The wrapper also keeps a spend limit as a window, and a launch's
+        // probe reports the project's own status line options.
+        let spend = chained(r#"{"rate_limits": {"spend_limit": {"used_percentage": 62.8, "resets_at": 1740787200, "used_usd": 314.12, "limit_usd": 500, "period": "monthly"}}}"#.into());
+        assert_eq!(spend, "");
+        let report = run(settings(state.to_str(), None, true, Some(project.to_str().unwrap())));
+        let anthropic = report.usage("anthropic").unwrap();
+        assert_eq!(anthropic.windows.len(), 1);
+        assert_eq!((anthropic.windows[0].label.as_str(), anthropic.windows[0].used_percent), ("spend", 63));
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"statusLine": {"type": "command", "command": "printf 'project'", "padding": 0, "refreshInterval": 5}}"#,
+        )
+        .unwrap();
+        let report = run(settings(state.to_str(), None, false, Some(project.to_str().unwrap())));
+        assert_eq!(
+            report.statusline_options,
+            json!({"padding": 0, "refreshInterval": 5}).as_object().cloned().unwrap()
+        );
+        let report = run(settings(state.to_str(), None, false, None));
+        assert!(report.statusline_options.is_empty(), "the user's settings have no options");
 
         // A failing app server falls back to the newest session log.
         std::fs::write(&codex, "#!/bin/sh\nexit 1\n").unwrap();
@@ -586,8 +629,9 @@ mod tests {
         let output = std::process::Command::new("python3")
             .arg("-c")
             .arg(PROBE)
-            .arg(settings(state.to_str(), codex.to_str(), false))
+            .arg(settings(state.to_str(), codex.to_str(), false, None))
             .env("HOME", dir.path())
+            .env("CLAUDE_CONFIG_DIR", &claude_dir)
             .env("CODEX_HOME", dir.path().join("codex-home"))
             .output()
             .unwrap();

@@ -1,8 +1,9 @@
 # Usage probe for Herdr Inbox. Runs on each machine with Python 3.9+, from
 # source, so nothing needs installing there. Reads one JSON argument:
 #   {"state_dir": "/path" | null, "codex": "codex" | null, "claude": bool,
-#    "statusline": "<the status line wrapper's source>"}
-# and prints {"anthropic": {...}, "openai": {...}, "statusline": "/path"}.
+#    "statusline": "<the status line wrapper's source>", "project_dir": "/p" | null}
+# and prints {"anthropic": {...}, "openai": {...}, "statusline": "/path",
+#             "statusline_options": {...}}.
 #
 # Every provider entry is {"usage": {...}} or {"error": "why"}. A usage has
 # windows [{"label", "used_percent", "resets_at"}], "plan", "reached",
@@ -53,6 +54,24 @@ def install_statusline():
         return None
 
 
+def statusline_options(project_dir):
+    """The user's own status line options for a project, in Claude Code's
+    order below the command line, without the command the wrapper chains."""
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or str(pathlib.Path.home() / ".claude")
+    candidates = []
+    if isinstance(project_dir, str) and project_dir:
+        candidates += [pathlib.Path(project_dir) / ".claude/settings.local.json", pathlib.Path(project_dir) / ".claude/settings.json"]
+    candidates.append(pathlib.Path(config_dir) / "settings.json")
+    for path in candidates:
+        try:
+            status = json.loads(path.read_text()).get("statusLine")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(status, dict):
+            return {key: value for key, value in status.items() if key not in ("type", "command")}
+    return {}
+
+
 def anthropic():
     """Claude Code's numbers, as the status line wrapper last saw them."""
     cache = usage_dir / "anthropic.json"
@@ -64,7 +83,7 @@ def anthropic():
     if not isinstance(limits, dict):
         return {"error": "no Claude thread has reported yet"}
     windows = []
-    for key, label in (("five_hour", "5h"), ("seven_day", "week")):
+    for key, label in (("five_hour", "5h"), ("seven_day", "week"), ("spend_limit", "spend")):
         window = limits.get(key)
         if not isinstance(window, dict) or window.get("used_percentage") is None:
             continue
@@ -220,7 +239,7 @@ def openai(executable):
         return {"error": "Codex app server: %s" % error}
 
 
-report = {"statusline": install_statusline()}
+report = {"statusline": install_statusline(), "statusline_options": statusline_options(settings.get("project_dir"))}
 if settings.get("claude"):
     report["anthropic"] = anthropic()
 if settings.get("codex"):

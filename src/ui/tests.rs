@@ -729,7 +729,8 @@ mod composer {
         };
         providers.insert("anthropic".to_string(), usage("5h", 85, false));
         providers.insert("openai".to_string(), usage("week", 17, false));
-        let report = crate::usage::Report { providers, statusline: None, read_at: 1 };
+        let report =
+            crate::usage::Report { providers, statusline: None, statusline_options: Default::default(), read_at: 1 };
         app.update(Input::Usage { machine: LOCAL.into(), result: Ok(report.clone()) }, at(1));
         let terminal = render(&app, at(1 + 240));
         let screen = text(&terminal);

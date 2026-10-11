@@ -573,6 +573,7 @@ mod usage {
                 })
                 .collect(),
             statusline: Some("/s/usage/statusline.py".into()),
+            statusline_options: Default::default(),
             read_at: 900,
         }
     }

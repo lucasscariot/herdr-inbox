@@ -168,12 +168,19 @@ impl Plan {
     }
 
     /// Gives a Claude thread the status line wrapper that reports usage,
-    /// unless `--settings` is already set.
-    pub fn with_claude_statusline(&mut self, wrapper: &str) {
+    /// keeping the user's own status line options, unless `--settings` is
+    /// already set.
+    pub fn with_claude_statusline(&mut self, wrapper: &str, options: &serde_json::Map<String, Value>) {
         if !self.wants_claude_statusline() {
             return;
         }
-        self.agent_args.extend(["--settings".to_string(), crate::usage::statusline_settings(wrapper)]);
+        self.agent_args.extend(["--settings".to_string(), crate::usage::statusline_settings(wrapper, options)]);
+    }
+
+    /// The checkout whose `.claude` settings the agent will read: the
+    /// existing checkout, or the repository a new worktree comes from.
+    pub fn project_dir(&self) -> &str {
+        if self.record.cwd.is_empty() { &self.record.repo } else { &self.record.cwd }
     }
 }
 

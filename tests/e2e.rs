@@ -1299,7 +1299,14 @@ fn the_composer_shows_codex_usage_and_lets_the_inbox_pick_the_harness() {
     }
     let sandbox = Sandbox::start();
     let root = sandbox.root.path();
-    real_repo(&root.join("work"), "cockpit");
+    let repo = real_repo(&root.join("work"), "cockpit");
+    // The project's own status line options travel with the wrapper.
+    std::fs::create_dir_all(repo.join(".claude")).expect("mkdir .claude");
+    std::fs::write(
+        repo.join(".claude/settings.json"),
+        r#"{"statusLine": {"type": "command", "command": "echo mine", "padding": 0}}"#,
+    )
+    .expect("write project settings");
     // Codex answers its app server the way the real one does; Claude has
     // not reported yet, so Codex is the only provider with numbers.
     write_executable(
@@ -1327,6 +1334,8 @@ fn the_composer_shows_codex_usage_and_lets_the_inbox_pick_the_harness() {
     let wrapper = root.join("state/herdr-inbox/usage/statusline.py");
     assert!(args.contains("--settings\n"), "{args}");
     assert!(args.contains(&format!("python3 \\\"{}\\\"", wrapper.display())), "{args}");
+    assert!(args.contains("\"padding\":0"), "the project's own option is kept: {args}");
+    assert!(!args.contains("echo mine"), "the wrapper chains the command itself: {args}");
     inbox.wait_for_text("✻ Claude no data yet  ·  ◆ Codex week 17%");
     assert!(wrapper.is_file(), "the status line wrapper is installed for Claude threads");
     let report: serde_json::Value =

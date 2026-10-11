@@ -1089,7 +1089,12 @@ mod composer_flow {
                 });
             }
         }
-        crate::usage::Report { providers, statusline: Some("/s/usage/statusline.py".into()), read_at: 1 }
+        crate::usage::Report {
+            providers,
+            statusline: Some("/s/usage/statusline.py".into()),
+            statusline_options: Default::default(),
+            read_at: 1,
+        }
     }
 
     #[test]
@@ -1213,7 +1218,8 @@ mod composer_flow {
         assert_eq!(app.preferences.project("cockpit").harness.as_deref(), Some("codex"));
         assert!(app.composer.auto_harness, "the next task is still chosen by the inbox");
 
-        // A Claude launch carries the wrapper, in its own settings, after the user's flags.
+        // A Claude launch keeps the user's flags; the status line wrapper is
+        // the launch's business, where the project's own options are known.
         app.config.global.harness_args =
             Some(std::collections::BTreeMap::from([("claude".to_string(), vec!["--verbose".to_string()])]));
         app.update(press(KeyCode::F(3)), at(5));
@@ -1223,40 +1229,16 @@ mod composer_flow {
         assert_eq!(app.composer.harness.as_deref(), Some("claude"));
         type_text(&mut app, "Add the invoice export");
         let effects = app.update(press(KeyCode::Enter), at(6));
-        let plan = launch_of(&effects)
-            .map(|_| ())
-            .and(effects.iter().find_map(|e| match e {
+        let plan = effects
+            .iter()
+            .find_map(|e| match e {
                 Effect::Launch { plan, .. } => Some(plan),
                 _ => None,
-            }))
+            })
             .expect("a launch");
-        assert_eq!(plan.agent_args[0], "--verbose");
-        assert_eq!(plan.agent_args[1], "--settings");
-        assert!(plan.agent_args[2].contains("statusline.py"));
+        assert_eq!(plan.agent_args, ["--verbose"]);
+        assert!(plan.wants_claude_statusline(), "the launch adds the wrapper");
         assert!(!plan.record.harness_auto);
-        app.config.usage.claude_statusline = false;
-        type_text(&mut app, "Another one");
-        let effects = app.update(press(KeyCode::Enter), at(7));
-        let plan = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::Launch { plan, .. } => Some(plan),
-                _ => None,
-            })
-            .expect("a launch");
-        assert_eq!(plan.agent_args, ["--verbose"], "turned off in the config");
-        app.config.usage.claude_statusline = true;
-        app.config.usage.enabled = false;
-        type_text(&mut app, "And another");
-        let effects = app.update(press(KeyCode::Enter), at(8));
-        let plan = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::Launch { plan, .. } => Some(plan),
-                _ => None,
-            })
-            .expect("a launch");
-        assert_eq!(plan.agent_args, ["--verbose"], "usage off: the cached wrapper is not used either");
     }
 
     #[test]

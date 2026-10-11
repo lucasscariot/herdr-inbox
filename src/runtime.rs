@@ -591,7 +591,7 @@ impl Work {
         let state = self.state.clone();
         let tx = self.tx.clone();
         thread::spawn(move || {
-            let settings = usage::settings(state_dir.as_deref(), codex.as_deref(), claude);
+            let settings = usage::settings(state_dir.as_deref(), codex.as_deref(), claude, None);
             let result = transport
                 .probe(usage::PROBE, &settings, USAGE_TIMEOUT)
                 .map_err(|err| err.to_string())
@@ -614,14 +614,14 @@ impl Work {
                 // the machine yet: the probe installs it, nothing else. A
                 // plan that already has its settings skips the round trip.
                 let state_dir = transport.is_local().then(|| state.dir().to_string_lossy().into_owned());
-                let settings = usage::settings(state_dir.as_deref(), None, false);
-                if let Some(wrapper) = transport
+                let settings = usage::settings(state_dir.as_deref(), None, false, Some(plan.project_dir()));
+                if let Some(report) = transport
                     .probe(usage::PROBE, &settings, STATUSLINE_TIMEOUT)
                     .ok()
                     .and_then(|output| usage::finish(&output, SystemTime::now()).ok())
-                    .and_then(|report| report.statusline)
+                    && let Some(wrapper) = &report.statusline
                 {
-                    plan.with_claude_statusline(&wrapper);
+                    plan.with_claude_statusline(wrapper, &report.statusline_options);
                 }
             }
             let id = plan.record.id.clone();
