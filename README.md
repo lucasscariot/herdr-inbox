@@ -1,63 +1,105 @@
 # Herdr Inbox
 
-A dedicated terminal client for [Herdr](https://herdr.dev), built for people
-who run many coding agents across many projects. Every agent thread sits in
-one list, sorted by what it needs from you. The thread you pick runs live next
-to it, fully interactive.
+**Your agents keep coding. You know who needs you next.**
 
-```
- herdr inbox                    1/3 │ ✻ Claude Code
- ● 1  ✓ 1  ◐ 1  ○ 0       3 threads │
- ────────────────────────────────── │ > Fix the login redirect loop on mobile
-  +  New thread                  n  │
-  /  Filter threads              /  │   Do you want to make this edit?
- ────────────────────────────────── │   ❯ 1. Yes
- NEEDS INPUT  1                     │     2. No
-▎cockpit                    ● input │
-▎Fix the login redirect loop on mo… │
-▎✻ Claude · ⎇ fix-login-redirect    │
-                                    │
- READY  1                           │
-▎site                       ✓ ready │
-▎Review navigation                  │
-▎◈ OpenCode · ⎇ main             2m │
-                                    │
- WORKING  1                         │
-▎api                      ◐ working │
-▎Add invoice export                 │
-▎◆ Codex · ⎇ main               14s │
-  AGENT  tab threads
-```
+Run Claude Code, Codex, OpenCode and Pi across your projects and machines.
+Herdr Inbox puts their threads in one terminal, with agents waiting for your
+input and finished tasks at the top. Answer a question, review a result, then
+move on while the rest keep working.
 
-Herdr Inbox is its own program and leaves your Herdr setup alone. It talks to
-the Herdr server you already run, through Herdr's public interfaces only:
+Built on [Herdr](https://herdr.dev), with a live, fully interactive agent
+terminal beside the list. Launch your next task in a fresh git worktree
+without leaving the inbox.
 
-- the JSON socket API for threads, status and archiving;
-- `herdr terminal session control` for the live terminal, Herdr's documented
-  interface for third-party clients.
+[Install](#install) · [Try your first task](#try-your-first-task) ·
+[Star on GitHub](https://github.com/lucasscariot/herdr-inbox)
 
-It never replaces `herdr`, never starts a server unless you ask it to, and
-only updates its own binary when you confirm an update. Plain `herdr` keeps
-working beside it, on the same sessions.
+![Herdr Inbox showing threads grouped by needs input, ready and working beside a live agent discussion](docs/screenshots/inbox.png)
+
+*An example session. The agent waiting for an answer comes first; finished
+tasks are ready to review, and the others keep running.*
+
+## Keep the work moving
+
+- See what needs you next. Threads group themselves into needs input, ready,
+  working and idle as agent status changes.
+- Browse a discussion with `j` and `k`, then press `Enter` to type directly
+  into the agent's live terminal. Reply from the list with `r`.
+- Start tasks in separate git worktrees by default. Pick your project,
+  machine, agent and model, or reuse a saved preset.
+- Give the same task to two or three agents with `F12`. Each gets its own
+  worktree so you can compare their approaches.
+- Bring your saved SSH machines into the same inbox. Local and remote
+  threads share one list, with each machine's connection status in view.
+- Dictate with `Ctrl+T`, or paste a screenshot into a local task or reply.
 
 ## Install
 
-You need [Herdr](https://herdr.dev) 0.9.2 or newer.
+You need [Herdr](https://herdr.dev) 0.9.2 or newer and an installed coding
+agent CLI. Project and agent discovery requires Python 3.9 or newer,
+available as `python3` locally and on any SSH machines you use. Prebuilt
+binaries support Linux and macOS on x86_64 and arm64.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lucasscariot/herdr-inbox/main/install.sh | sh
 ```
 
-The installer downloads the prebuilt binary for Linux or macOS (x86_64 or
-arm64), checks its SHA-256, and puts it in `~/.local/bin`
-(`HERDR_INBOX_INSTALL_DIR` to change it). It never touches `herdr`. To update,
-press **Ctrl+G** in the thread list or composer, or run the installer again.
+Then open your inbox:
+
+```sh
+herdr-inbox                  # the default Herdr session
+herdr-inbox --session work   # a named session
+```
+
+If no Herdr server is running, Inbox offers to start one. Existing threads
+in that session appear automatically.
+
+The installer checks the download's SHA-256 and puts `herdr-inbox` in
+`~/.local/bin`. Add that directory to your `PATH` if needed, or set
+`HERDR_INBOX_INSTALL_DIR` to choose another directory. To update, press
+**Ctrl+G** in the thread list or composer, or run the installer again.
+
+Herdr Inbox runs beside plain `herdr` on the same sessions. It uses Herdr's
+public interfaces and leaves your Herdr installation alone. It starts a
+server only when you ask, and installs an Inbox update only when you confirm.
+
+### Try your first task
+
+1. Press `n` or click **+ New thread**.
+2. Pick a project with `F2` and an installed agent with `F3`, or click their
+   fields. Choose a model and thinking level if the agent supports them,
+   or keep its defaults.
+3. Write a task, such as "Add dark mode to the storefront", and press
+   `Enter`. Inbox launches it in a new worktree by default.
+4. Watch its status change. Select the thread to preview the discussion,
+   then press `Enter` to answer a question or review the result.
+
+![Herdr Inbox composer with an example task, saved agent presets, project and model choices, and a new git worktree](docs/screenshots/composer.png)
+
+*Write the task, pick your setup, send. Saved presets make the next launch
+a click or a keypress away.*
+
+Inbox looks for projects under `~/Work`, `~/Projects` and `~/goinfre` by
+default. If your repositories live elsewhere, set `roots` in
+`~/.config/herdr-inbox/config.toml`:
+
+```toml
+roots = ["~/code"]
+```
+
+Restart Inbox after changing its configuration. See
+[configuration](#configuration) for more options. To compare approaches,
+press `F12` in the composer and add a second or third agent before sending.
+
+### Build from source
 
 To build from source instead (Rust 1.88 or newer):
 
 ```sh
 cargo install --locked --git https://github.com/lucasscariot/herdr-inbox
 ```
+
+### Uninstall
 
 To uninstall, remove the binary and, if you like, what it remembers:
 
@@ -67,14 +109,6 @@ rm -rf ~/.config/herdr-inbox ~/.local/state/herdr-inbox ~/.local/share/herdr-inb
 ```
 
 ## Use
-
-```sh
-herdr-inbox                  # the default Herdr session
-herdr-inbox --session work   # a named session
-```
-
-If no Herdr server is running, Herdr Inbox offers to start one. That runs
-`herdr server`, exactly what `herdr` itself would do.
 
 | Where | Key | Action |
 | --- | --- | --- |
@@ -348,8 +382,9 @@ reaches it the same way.
 Herdr Inbox reaches a machine with your own SSH setup, one shared connection
 per host. On the remote side it needs `herdr` on the PATH of a login shell, or
 in `~/.local/bin`, `~/.cargo/bin`, Homebrew or mise. A machine that cannot be
-reached never blocks the others. Without a local Herdr server, the remote
-threads stay usable, and `s` starts the local server.
+reached never blocks the others. Project and agent discovery on that machine
+also needs Python 3.9 or newer available as `python3`. Without a local Herdr
+server, the remote threads stay usable, and `s` starts the local server.
 
 ### When another window has the thread
 
@@ -383,6 +418,15 @@ runners or cancel those checks. Each check runs once per push: the release
 workflow builds binaries only on PRs that change how they are built.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
+
+## Help more people find Inbox
+
+If Inbox earns a place in your terminal, [give it a GitHub
+star](https://github.com/lucasscariot/herdr-inbox). It helps other developers
+running several agents find the project.
+
+Have a workflow to share or something slowing you down? [Open an
+issue](https://github.com/lucasscariot/herdr-inbox/issues).
 
 ## License
 

@@ -49,6 +49,12 @@ All notable changes to Herdr Inbox. The format follows
 
 ## [Unreleased]
 
+### Documentation
+
+- Rework the README with example inbox and composer screenshots, a clearer
+  product pitch, a first-task walkthrough and links to star the project.
+  State the Python 3.9+ discovery requirement for local and SSH machines.
+
 ### Added
 
 - `PageUp` and `PageDown` reorder the highlighted preset one place earlier
