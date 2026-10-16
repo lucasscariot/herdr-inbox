@@ -4,6 +4,14 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.5.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.4.0...v1.5.0) (2026-10-16)
+
+
+### Features
+
+* **api:** launch tasks sent from a web page over tailscale ([#49](https://github.com/lucasscariot/herdr-inbox/issues/49)) ([3e2f811](https://github.com/lucasscariot/herdr-inbox/commit/3e2f8112870bce42d889036906ec894d797e05f9))
+* **composer:** name installed skills with $ in tasks and replies ([#47](https://github.com/lucasscariot/herdr-inbox/issues/47)) ([9293e4d](https://github.com/lucasscariot/herdr-inbox/commit/9293e4d14b753cf4e4e96ab8848303892fe3d014))
+
 ## [1.4.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.3.0...v1.4.0) (2026-10-11)
 
 
