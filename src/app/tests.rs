@@ -1142,6 +1142,20 @@ mod composer_flow {
         assert_eq!(answer, Err(crate::api::Refusal::unavailable("Herdr isn't running.")));
     }
 
+    #[test]
+    fn an_api_prompt_is_refused_when_its_project_shares_a_name() {
+        let mut app = composing();
+        let mut projects = inventory().projects;
+        let mut fork = projects[0].clone();
+        (fork.path, fork.github) = ("/a/cockpit".into(), "someone/cockpit".into());
+        projects.insert(0, fork);
+        let inventory = Inventory { projects, ..inventory() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(2));
+        let (effects, answer) = api_prompt(&mut app, "lucasscariot/cockpit", "Fix it");
+        assert!(launch_of(&effects).is_none(), "never launched in the other cockpit");
+        assert_eq!(answer.map_err(|r| r.status), Err(409));
+    }
+
     fn with_skills() -> App {
         let (mut app, _) = loaded();
         app.update(press(KeyCode::Char('n')), at(1));

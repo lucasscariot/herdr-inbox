@@ -479,8 +479,10 @@ harness when usage is read, the model and thinking level last used with it,
 your branch prefix and harness arguments. The task goes to the history and
 shows as a launch. The answer is `202` with the `harness`, `branch` and
 `agent` it chose, or an `error`: `404` when there is no checkout (Inbox looks
-again, so a fresh clone works on the next try), `503` while Herdr is not
-running or projects are still being found.
+again, so a fresh clone works on the next try), `409` when another project
+has the same name (give one a `name` in `[[projects]]`), `503` while Herdr is
+not running or projects are still being found, or when Inbox did not answer
+in time, in which case the task is never launched later.
 
 Anything else is refused: another origin, a request without the
 `Tailscale-User-Login` header `tailscale serve` adds, or another login. A

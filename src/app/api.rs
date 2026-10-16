@@ -37,6 +37,7 @@ pub(super) fn prompt(
             Refusal::unavailable("Looking for projects. Retry in a few seconds.")
         });
     };
+    let project = project?;
     let mut composer = Composer {
         project: Some(project),
         machine: Some(LOCAL.to_string()),
@@ -65,10 +66,16 @@ pub(super) fn prompt(
 }
 
 /// The project whose `origin` is `repository` on GitHub; of two clones, the
-/// one named after it.
-fn local_project(app: &App, repository: &str) -> Option<String> {
+/// one named after it. The composer knows projects by name, so a clone whose
+/// name another project also has is refused rather than launched elsewhere.
+fn local_project(app: &App, repository: &str) -> Option<Result<String, Refusal>> {
     let inventory = app.inventories.get(LOCAL)?;
     let clones: Vec<_> = inventory.projects.iter().filter(|p| p.github.eq_ignore_ascii_case(repository)).collect();
     let name = repository.rsplit('/').next().unwrap_or(repository);
-    clones.iter().find(|p| p.name.eq_ignore_ascii_case(name)).or(clones.first()).map(|p| p.name.clone())
+    let project = &clones.iter().find(|p| p.name.eq_ignore_ascii_case(name)).or(clones.first())?.name;
+    if inventory.projects.iter().filter(|p| p.name == *project).count() > 1 {
+        let message = format!("Another project is also named {project}: give one a name in [[projects]].");
+        return Some(Err(Refusal::conflict(message)));
+    }
+    Some(Ok(project.clone()))
 }

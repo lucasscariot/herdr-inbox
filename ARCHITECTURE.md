@@ -202,8 +202,12 @@ assert the compiled version separately from the version-independent layout.
   API goes through `App::send` like a typed task, so it can never launch
   differently. It answers once the launch is planned, not when the agent is
   up. A repository not found starts a project scan, since scans otherwise
-  follow the composer opening. Without `[api] enabled` and both an origin and
-  a login, nothing listens.
+  follow the composer opening. The event loop claims a prompt before handing
+  it to the app, and a request that timed out first withdraws it, so a
+  prompt reported as failed never launches later. The composer knows projects
+  by name, so a repository whose checkout shares its name with another project
+  is refused rather than launched in the wrong one. Without `[api] enabled`
+  and both an origin and a login, nothing listens.
 - **Discovery, launches and self-updates never block the UI.** They run on
   worker threads and report back as inputs.
 - **Usage comes from the CLIs' own channels.** Codex is asked through its

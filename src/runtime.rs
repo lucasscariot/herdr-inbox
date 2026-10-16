@@ -207,6 +207,14 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
             last_tick = Instant::now();
         }
         for input in inputs {
+            // A prompt whose request already gave up was refused: drop it.
+            let given_up = match &input {
+                Input::ApiPrompt { id, .. } => !work.api.as_ref().is_some_and(|api| api.claim(*id)),
+                _ => false,
+            };
+            if given_up {
+                continue;
+            }
             let effects = redraw.update(&mut app, input, SystemTime::now());
             for effect in effects {
                 if !perform(effect, &mut session, herdr, &fleet, &work) {

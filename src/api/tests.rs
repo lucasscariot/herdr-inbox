@@ -106,6 +106,32 @@ fn the_listener_waits_for_the_apps_answer() {
     assert!(response.ends_with(r#"{"harness":"claude","branch":"fix-build","agent":"t-fix"}"#), "{response}");
 }
 
+fn waiting(listener: &Listener, id: u64) -> mpsc::Receiver<Answer> {
+    let (answer, rx) = mpsc::channel();
+    listener.pending.lock().unwrap().insert(id, Slot { answer, claimed: false });
+    rx
+}
+
+#[test]
+fn a_prompt_given_up_on_is_never_claimed_and_a_claimed_one_is_awaited() {
+    let listener = Listener { pending: Arc::default(), port: 0 };
+    let _rx = waiting(&listener, 1);
+    assert!(withdraw(&listener.pending, 1), "the request timed out first");
+    assert!(!listener.claim(1), "so the app must not launch it");
+
+    let rx = waiting(&listener, 2);
+    assert!(listener.claim(2));
+    assert!(!withdraw(&listener.pending, 2), "launching: the request waits on");
+    let accepted = Accepted { harness: "codex".into(), branch: "b".into(), agent: "a".into() };
+    listener.answer(2, Ok(accepted.clone()));
+    assert_eq!(rx.try_recv(), Ok(Ok(accepted)));
+
+    let rx = waiting(&listener, 3);
+    listener.answer(3, Err(Refusal::invalid("no")));
+    assert!(!withdraw(&listener.pending, 3), "answered just before the timeout");
+    assert!(rx.try_recv().is_ok());
+}
+
 #[test]
 fn refusals_carry_their_status_and_message() {
     let response = answered(Err(Refusal::not_found("No local checkout of me/app.")));

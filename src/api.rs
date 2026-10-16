@@ -55,6 +55,10 @@ impl Refusal {
         Self { status: 404, message: message.into() }
     }
 
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self { status: 409, message: message.into() }
+    }
+
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self { status: 503, message: message.into() }
     }
@@ -62,10 +66,19 @@ impl Refusal {
 
 pub type Answer = Result<Accepted, Refusal>;
 
+/// A request waiting for the app. Once claimed, the app is launching it, so
+/// the request no longer gives up on it.
+struct Slot {
+    answer: Sender<Answer>,
+    claimed: bool,
+}
+
+type Pending = Mutex<HashMap<u64, Slot>>;
+
 /// The running listener. Answers come back from the event loop by id.
 #[derive(Clone)]
 pub struct Listener {
-    pending: Arc<Mutex<HashMap<u64, Sender<Answer>>>>,
+    pending: Arc<Pending>,
     /// The port bound, which differs from the config's only when that is 0.
     pub port: u16,
 }
@@ -76,7 +89,7 @@ impl Listener {
     pub fn start(config: &ApiConfig, tx: Sender<Input>) -> std::io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, config.port))?;
         let port = listener.local_addr()?.port();
-        let pending: Arc<Mutex<HashMap<u64, Sender<Answer>>>> = Arc::default();
+        let pending: Arc<Pending> = Arc::default();
         let counter = Arc::new(AtomicU64::new(0));
         let config = config.clone();
         let shared = pending.clone();
@@ -89,22 +102,44 @@ impl Listener {
         Ok(Self { pending, port })
     }
 
+    /// Takes prompt `id` for launching. False when its request already gave
+    /// up: it was told so, and must not launch behind its back.
+    pub fn claim(&self, id: u64) -> bool {
+        let Ok(mut pending) = self.pending.lock() else {
+            return false;
+        };
+        match pending.get_mut(&id) {
+            Some(slot) => {
+                slot.claimed = true;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Hands the app's answer to the request waiting for it, if it still is.
     pub fn answer(&self, id: u64, answer: Answer) {
         let waiting = self.pending.lock().ok().and_then(|mut pending| pending.remove(&id));
         if let Some(waiting) = waiting {
-            let _ = waiting.send(answer);
+            let _ = waiting.answer.send(answer);
         }
     }
 }
 
-fn serve(
-    mut stream: TcpStream,
-    config: &ApiConfig,
-    tx: &Sender<Input>,
-    pending: &Mutex<HashMap<u64, Sender<Answer>>>,
-    counter: &AtomicU64,
-) {
+/// Gives up on prompt `id` unless the app has claimed or answered it. True
+/// when given up.
+fn withdraw(pending: &Pending, id: u64) -> bool {
+    let Ok(mut pending) = pending.lock() else {
+        return false;
+    };
+    if pending.get(&id).is_none_or(|slot| slot.claimed) {
+        return false;
+    }
+    pending.remove(&id);
+    true
+}
+
+fn serve(mut stream: TcpStream, config: &ApiConfig, tx: &Sender<Input>, pending: &Pending, counter: &AtomicU64) {
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
     let response = match read_request(&mut stream) {
@@ -115,14 +150,19 @@ fn serve(
                 let id = counter.fetch_add(1, Ordering::Relaxed);
                 let (answer_tx, answer_rx) = mpsc::channel();
                 if let Ok(mut pending) = pending.lock() {
-                    pending.insert(id, answer_tx);
+                    pending.insert(id, Slot { answer: answer_tx, claimed: false });
                 }
+                let late = || Err(Refusal::unavailable("Herdr Inbox did not answer in time."));
                 let answer = if tx.send(Input::ApiPrompt { id, repository, prompt }).is_err() {
                     Err(Refusal::unavailable("Herdr Inbox is closing."))
                 } else {
-                    answer_rx
-                        .recv_timeout(ANSWER_TIMEOUT)
-                        .unwrap_or_else(|_| Err(Refusal::unavailable("Herdr Inbox did not answer in time.")))
+                    match answer_rx.recv_timeout(ANSWER_TIMEOUT) {
+                        Ok(answer) => answer,
+                        Err(_) if withdraw(pending, id) => late(),
+                        // Claimed or answered just now: the launch is under
+                        // way, so wait for it rather than report a failure.
+                        Err(_) => answer_rx.recv_timeout(ANSWER_TIMEOUT).unwrap_or_else(|_| late()),
+                    }
                 };
                 if let Ok(mut pending) = pending.lock() {
                     pending.remove(&id);
@@ -186,6 +226,7 @@ impl Response {
             403 => "Forbidden",
             404 => "Not Found",
             405 => "Method Not Allowed",
+            409 => "Conflict",
             413 => "Payload Too Large",
             415 => "Unsupported Media Type",
             422 => "Unprocessable Content",
