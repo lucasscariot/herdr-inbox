@@ -161,9 +161,10 @@ fn serve(mut stream: TcpStream, config: &ApiConfig, tx: &Sender<Input>, pending:
                     match answer_rx.recv_timeout(ANSWER_TIMEOUT) {
                         Ok(answer) => answer,
                         Err(_) if withdraw(pending, id) => late(),
-                        // Claimed or answered just now: the launch is under
-                        // way, so wait for it rather than report a failure.
-                        Err(_) => answer_rx.recv_timeout(ANSWER_TIMEOUT).unwrap_or_else(|_| late()),
+                        // Claimed or answered just now: the app launches it
+                        // whatever happens, so wait for the answer rather
+                        // than report a failure the retry would duplicate.
+                        Err(_) => answer_rx.recv().unwrap_or_else(|_| late()),
                     }
                 };
                 if let Ok(mut pending) = pending.lock() {
@@ -337,11 +338,20 @@ pub fn route(request: &Request, config: &ApiConfig) -> Route {
         return Respond(Response::error(415, "Send JSON.").with_cors(config));
     }
     match serde_json::from_slice::<PromptBody>(&request.body) {
-        Ok(body) => Route::Prompt { repository: body.repository.trim().to_string(), prompt: body.prompt },
-        Err(_) => Respond(
+        Ok(body) if is_repository(body.repository.trim()) => {
+            Route::Prompt { repository: body.repository.trim().to_string(), prompt: body.prompt }
+        }
+        _ => Respond(
             Response::error(400, "Expected {\"repository\": \"owner/name\", \"prompt\": \"…\"}.").with_cors(config),
         ),
     }
+}
+
+/// `owner/name` as GitHub spells it. Anything else, an empty string
+/// included, would match the projects that have no GitHub origin.
+fn is_repository(value: &str) -> bool {
+    let valid = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_alphanumeric() || "_.-".contains(c));
+    value.split_once('/').is_some_and(|(owner, name)| valid(owner) && valid(name))
 }
 
 fn answered(answer: Answer) -> Response {

@@ -65,6 +65,9 @@ def project_for(root, name=None):
     project = projects.get(key)
     if not project:
         project = projects[key] = {"name": name or root.name, "path": key, "checkouts": {}}
+    elif name:
+        # A configured name wins over the one a root scan gave the same checkout.
+        project["name"] = name
     return project
 
 def add_checkout(project, path, branch, linked):

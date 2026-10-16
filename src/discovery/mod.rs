@@ -470,4 +470,27 @@ mod tests {
         assert_eq!(fix.branch, "fix-login");
         assert_eq!(inventory.harnesses, ["sh"], "only installed executables count");
     }
+
+    #[test]
+    fn a_configured_name_renames_a_project_a_root_also_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for path in ["a/app", "b/app"] {
+            std::fs::create_dir_all(root.join(path).join(".git")).unwrap();
+            std::fs::write(root.join(path).join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        let settings = json!({
+            "roots": [root.join("a").display().to_string(), root.join("b").display().to_string()],
+            "depth": 1,
+            "projects": [{"path": root.join("b/app").display().to_string(), "name": "app-b"}],
+            "executables": {},
+            "include_models": false,
+        });
+        let output =
+            std::process::Command::new("python3").arg("-c").arg(PROBE).arg(settings.to_string()).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let inventory = finish(&String::from_utf8_lossy(&output.stdout), None, false, &BTreeMap::new(), at(1)).unwrap();
+        let names: Vec<&str> = inventory.projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["app", "app-b"]);
+    }
 }

@@ -51,6 +51,10 @@ fn anything_else_is_refused_before_the_app_sees_it() {
     assert_eq!(status(post(&[("Origin", ORIGIN), ("Tailscale-User-Login", "other@example.com"), json], BODY)), 403);
     assert_eq!(status(post(&[("Origin", ORIGIN), login, ("Content-Type", "text/plain")], BODY)), 415);
     assert_eq!(status(post(&[("Origin", ORIGIN), login, json], "{\"prompt\": 1}")), 400);
+    for repository in ["", "  ", "app", "me/", "/app", "me/app/x", "me/a p"] {
+        let body = serde_json::json!({ "repository": repository, "prompt": "Fix it" }).to_string();
+        assert_eq!(status(post(&[("Origin", ORIGIN), login, json], &body)), 400, "{repository:?}");
+    }
     assert_eq!(status(route(&request("GET", "/prompts", &[("Origin", ORIGIN), login], ""), &config())), 405);
 }
 
