@@ -143,7 +143,9 @@ fn serve(mut stream: TcpStream, config: &ApiConfig, tx: &Sender<Input>, pending:
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
     let response = match read_request(&mut stream) {
-        Err(response) => response,
+        // The header names the allowed page only, so it may read why its
+        // request was refused while any other page still sees nothing.
+        Err(response) => response.with_cors(config),
         Ok(request) => match route(&request, config) {
             Route::Respond(response) => response,
             Route::Prompt { repository, prompt } => {

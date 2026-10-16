@@ -106,6 +106,19 @@ fn the_listener_waits_for_the_apps_answer() {
     assert!(response.ends_with(r#"{"harness":"claude","branch":"fix-build","agent":"t-fix"}"#), "{response}");
 }
 
+#[test]
+fn the_allowed_page_can_read_why_an_unreadable_request_was_refused() {
+    let (tx, _rx) = mpsc::channel();
+    let listener = Listener::start(&config(), tx).expect("bound");
+    let mut stream = TcpStream::connect(("127.0.0.1", listener.port)).expect("connected");
+    let head = format!("POST /prompts HTTP/1.1\r\nOrigin: {ORIGIN}\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
+    stream.write_all(head.as_bytes()).expect("sent");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("answered");
+    assert!(response.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{response}");
+    assert!(response.contains(&format!("Access-Control-Allow-Origin: {ORIGIN}\r\n")), "{response}");
+}
+
 fn waiting(listener: &Listener, id: u64) -> mpsc::Receiver<Answer> {
     let (answer, rx) = mpsc::channel();
     listener.pending.lock().unwrap().insert(id, Slot { answer, claimed: false });

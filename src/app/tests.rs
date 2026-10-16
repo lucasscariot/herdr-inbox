@@ -1112,6 +1112,36 @@ mod composer_flow {
     }
 
     #[test]
+    fn an_api_prompt_waits_for_usage_past_its_ttl_before_auto_chooses() {
+        let mut app = composing();
+        let old = usage_report(&[("anthropic", "5h", 38), ("openai", "week", 17)]);
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(old) }, at(2));
+        let later = at(2 + crate::usage::TTL.as_secs() + 1);
+        let input = Input::ApiPrompt { id: 7, repository: "lucasscariot/cockpit".into(), prompt: "Fix it".into() };
+        let effects = app.update(input, later);
+        assert!(effects.iter().any(|e| matches!(e, Effect::ReadUsage { .. })), "usage is read again");
+        assert!(launch_of(&effects).is_none(), "not from the expired report");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ApiReply { .. })));
+        let fresh = usage_report(&[("anthropic", "5h", 10), ("openai", "week", 90)]);
+        let effects = app.update(Input::Usage { machine: LOCAL.into(), result: Ok(fresh) }, later);
+        assert_eq!(launch_of(&effects).map(|r| r.harness.as_str()), Some("claude"), "chosen from the new report");
+        assert!(effects.iter().any(|e| matches!(e, Effect::ApiReply { id: 7, answer: Ok(_) })));
+    }
+
+    #[test]
+    fn an_api_prompt_held_for_usage_launches_anyway_when_the_read_is_slow() {
+        let mut app = composing();
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(usage_report(&[("openai", "week", 17)])) }, at(2));
+        let later = 2 + crate::usage::TTL.as_secs() + 1;
+        let input = Input::ApiPrompt { id: 7, repository: "lucasscariot/cockpit".into(), prompt: "Fix it".into() };
+        assert!(launch_of(&app.update(input, at(later))).is_none());
+        assert!(launch_of(&app.update(Input::Tick, at(later + 1))).is_none(), "still waiting");
+        let effects = app.update(Input::Tick, at(later + 10));
+        assert!(launch_of(&effects).is_some());
+        assert!(effects.iter().any(|e| matches!(e, Effect::ApiReply { id: 7, answer: Ok(_) })));
+    }
+
+    #[test]
     fn an_api_prompt_without_usage_auto_takes_the_usual_harness() {
         let mut app = composing();
         app.config.usage.enabled = false;

@@ -202,7 +202,9 @@ assert the compiled version separately from the version-independent layout.
   API goes through `App::send` like a typed task, so it can never launch
   differently. It answers once the launch is planned, not when the agent is
   up. A repository not found starts a project scan, since scans otherwise
-  follow the composer opening. The event loop claims a prompt before handing
+  follow the composer opening. When the usage report is past its TTL, the
+  prompt waits for the read it starts (up to ten seconds) so Auto never
+  chooses from old numbers. The event loop claims a prompt before handing
   it to the app, and a request that timed out first withdraws it, so a
   prompt reported as failed never launches later. The composer knows projects
   by name, so a repository whose checkout shares its name with another project

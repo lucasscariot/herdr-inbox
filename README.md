@@ -475,7 +475,8 @@ The page sends `POST /prompts` with
 `{"repository": "owner/name", "prompt": "…"}`. Inbox finds the project whose
 `origin` is that GitHub repository on this machine and launches the task
 exactly as the composer would on a new thread: a new worktree, the Auto
-harness when usage is read, the model and thinking level last used with it,
+harness when usage is read (read again first when it is more than five
+minutes old), the model and thinking level last used with it,
 your branch prefix and harness arguments. The task goes to the history and
 shows as a launch. The answer is `202` with the `harness`, `branch` and
 `agent` it chose, or an `error`: `404` when there is no checkout (Inbox looks
