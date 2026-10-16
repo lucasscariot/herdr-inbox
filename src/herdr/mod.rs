@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod events;
+pub mod server;
 pub mod socket;
 pub mod ssh;
 pub mod terminal;

@@ -54,7 +54,11 @@ herdr-inbox --session work   # a named session
 ```
 
 If no Herdr server is running, Inbox offers to start one. Existing threads
-in that session appear automatically.
+in that session appear automatically. The server keeps running after you
+quit Inbox or close its terminal. On Linux with systemd, it runs in its own
+user scope (`systemctl --user status 'app-herdr*'`). Terminals such as
+Ghostty, GNOME Terminal and Konsole stop the scope of a closed tab, so the
+server would otherwise go down with that tab. `herdr server stop` stops it.
 
 The installer checks the download's SHA-256 and puts `herdr-inbox` in
 `~/.local/bin`. Add that directory to your `PATH` if needed, or set

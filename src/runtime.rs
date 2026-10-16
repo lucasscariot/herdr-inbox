@@ -318,7 +318,7 @@ fn perform(
             link.request(Request::Refresh);
         }
         Effect::StartServer => {
-            start_server(herdr);
+            crate::herdr::server::start(herdr);
             if let Some((_, link)) = fleet.get(threads::LOCAL) {
                 link.request(Request::Refresh);
             }
@@ -698,19 +698,6 @@ fn usage_file(machine: &str) -> String {
 
 fn safe_name(machine: &str) -> String {
     machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
-}
-
-/// Starts `herdr server` detached, exactly as `herdr` itself would.
-fn start_server(herdr: &HerdrCommand) {
-    let mut command: Command = herdr.command();
-    command.arg("server").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // Its own process group, so closing the inbox never stops the server.
-        command.process_group(0);
-    }
-    let _ = command.spawn();
 }
 
 fn spawn_input_reader(tx: Sender<Input>) {

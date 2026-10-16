@@ -21,6 +21,7 @@ public interfaces.
 | `herdr::api` | JSON socket API. One request per connection, because Herdr answers the first line and closes. |
 | `herdr::events` | `events.subscribe` streams. Each subscription owns its connection; Herdr resets one that receives anything else. |
 | `herdr::terminal` | Runs `herdr terminal session control <pane> --takeover` and speaks its JSON lines: base64 ANSI frames out, input/resize/scroll/mouse/release in. |
+| `herdr::server` | Starts `herdr server` in its own process group. On Linux with a systemd user manager, it runs in its own transient scope, `app-herdr\x2dinbox-herdr-<random>.scope` in `app.slice` (via `systemd-run --user --scope`), with the inbox's environment. That keeps it alive when the terminal stops the tab's scope. If `systemd-run` fails, it starts directly. |
 | `herdr::ssh` | Builds SSH commands for a saved machine: one ControlMaster connection per host, `sh -lc` with the usual install directories on PATH, a ready marker before `exec herdr` so login noise is skipped, single-quoted arguments that bash, zsh and fish read alike. |
 | `herdr::transport` | One machine's API calls, subscriptions, `herdr` runner and git probe. Local goes to the socket; remote runs `herdr remote-api-bridge` over SSH, one process per call and one per subscription. |
 | `machines` | Reads enabled saved machines from `herdr machine list --json`. |
