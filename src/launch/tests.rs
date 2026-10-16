@@ -18,6 +18,7 @@ fn project() -> Project {
             CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false },
             CheckoutEntry { path: "/h/wt/fix-login".into(), branch: "fix-login".into(), linked: true },
         ],
+        github: String::new(),
     }
 }
 

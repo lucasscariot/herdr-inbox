@@ -637,6 +637,7 @@ mod composer {
                     CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false },
                     CheckoutEntry { path: "/h/wt/fix".into(), branch: "fix".into(), linked: true },
                 ],
+                github: String::new(),
             }],
             harnesses: vec!["claude".into()],
             models: BTreeMap::from([(

@@ -369,6 +369,9 @@ harness_args = { codex = ["--no-daemon", "--fast"] }
 enabled = true                     # false hides the row and the Auto choice
 claude_statusline = true           # give Claude threads the reporting status line
 providers = { opencode = "anthropic" }  # a CLI on the Claude or ChatGPT plan
+
+[api]                              # prompts from a web page; see below
+enabled = false
 ```
 
 ### Dictation
@@ -446,6 +449,43 @@ in `~/.local/bin`, `~/.cargo/bin`, Homebrew or mise. A machine that cannot be
 reached never blocks the others. Project and agent discovery on that machine
 also needs Python 3.9 or newer available as `python3`. Without a local Herdr
 server, the remote threads stay usable, and `s` starts the local server.
+
+### Prompts from another device
+
+Inbox can take tasks from a web page, such as a dashboard you open on your
+phone, while it is running. It is off until you turn it on, and then it
+answers one page and one person only:
+
+```toml
+[api]
+enabled = true
+port = 7777                                      # on 127.0.0.1 only
+allowed_origin = "https://dashboard.example.com" # the page that sends tasks
+allowed_login = "you@example.com"                # your Tailscale login
+```
+
+Inbox listens on `127.0.0.1` alone. Publish it to your tailnet, and only
+there, with `tailscale serve`, which adds HTTPS and the caller's login:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:7777
+```
+
+The page sends `POST /prompts` with
+`{"repository": "owner/name", "prompt": "…"}`. Inbox finds the project whose
+`origin` is that GitHub repository on this machine and launches the task
+exactly as the composer would on a new thread: a new worktree, the Auto
+harness when usage is read, the model and thinking level last used with it,
+your branch prefix and harness arguments. The task goes to the history and
+shows as a launch. The answer is `202` with the `harness`, `branch` and
+`agent` it chose, or an `error`: `404` when there is no checkout (Inbox looks
+again, so a fresh clone works on the next try), `503` while Herdr is not
+running or projects are still being found.
+
+Anything else is refused: another origin, a request without the
+`Tailscale-User-Login` header `tailscale serve` adds, or another login. A
+request straight to the port from this machine could set that header itself,
+so the port is never published any other way.
 
 ### When another window has the thread
 

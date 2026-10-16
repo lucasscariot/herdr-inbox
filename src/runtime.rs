@@ -180,7 +180,8 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
     let voice = Voice::new(config.speech.clone(), credentials.clone());
     app.update(Input::Speech(voice.status()), SystemTime::now());
     let mut app = app.with_credentials(credentials);
-    let work = Work { state, config, voice, labels, tx: tx.clone() };
+    let api = start_api(&config, &tx, &mut app);
+    let work = Work { state, config, voice, labels, tx: tx.clone(), api };
     work.restore(&mut app);
     let mut session: Option<(u64, Session)> = None;
     let mut redraw = Redraw::new(Instant::now());
@@ -220,6 +221,21 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
     }
 }
 
+/// Starts the prompt listener when enabled; a port already taken is said, not fatal.
+fn start_api(config: &Config, tx: &Sender<Input>, app: &mut App) -> Option<crate::api::Listener> {
+    if !config.api.enabled {
+        return None;
+    }
+    match crate::api::Listener::start(&config.api, tx.clone()) {
+        Ok(listener) => Some(listener),
+        Err(err) => {
+            let message = format!("Prompts API not started on port {}: {err}", config.api.port);
+            app.notify(message, crate::app::NoticeKind::Error, SystemTime::now());
+            None
+        }
+    }
+}
+
 fn drain(rx: &Receiver<Input>) -> Vec<Input> {
     rx.try_iter().take(512).collect()
 }
@@ -235,6 +251,11 @@ fn perform(
     let tx = &work.tx;
     match effect {
         Effect::Quit => return false,
+        Effect::ApiReply { id, answer } => {
+            if let Some(api) = &work.api {
+                api.answer(id, answer);
+            }
+        }
         Effect::Detach => {
             if let Some((_, mut old)) = session.take() {
                 old.release();
@@ -524,6 +545,8 @@ struct Work {
     /// Machine id → (label, is local), for per-machine settings.
     labels: HashMap<String, (String, bool)>,
     tx: Sender<Input>,
+    /// Listening for prompts, when `[api]` is enabled.
+    api: Option<crate::api::Listener>,
 }
 
 impl Work {

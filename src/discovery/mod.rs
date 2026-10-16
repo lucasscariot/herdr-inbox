@@ -65,6 +65,9 @@ pub struct Project {
     pub branch: String,
     #[serde(default)]
     pub checkouts: Vec<CheckoutEntry>,
+    /// `owner/name` of the `origin` remote on GitHub; empty otherwise.
+    #[serde(default)]
+    pub github: String,
 }
 
 impl Project {
@@ -417,10 +420,17 @@ mod tests {
                 CheckoutEntry { path: "/h/wt/fix".into(), branch: "fix".into(), linked: true },
                 CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false },
             ],
+            github: String::new(),
         };
         assert_eq!(project.main_checkout().path, "/w/cockpit");
         assert_eq!(project.taken_branches(), ["fix", "main"]);
-        let bare = Project { name: "x".into(), path: "/x".into(), branch: String::new(), checkouts: vec![] };
+        let bare = Project {
+            name: "x".into(),
+            path: "/x".into(),
+            branch: String::new(),
+            checkouts: vec![],
+            github: String::new(),
+        };
         assert_eq!(bare.main_checkout().path, "/x");
     }
 

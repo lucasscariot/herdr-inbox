@@ -2,6 +2,7 @@
 //! and a list of effects for the runtime to perform; nothing in here does I/O,
 //! so every behaviour is testable without a server or a terminal.
 
+mod api;
 mod composer;
 mod dictation;
 mod input;
@@ -231,6 +232,11 @@ pub enum Effect {
     },
     InstallWhisper,
     SaveCredentials(crate::speech::backends::Credentials),
+    /// The answer to a prompt from the API, for the request waiting on it.
+    ApiReply {
+        id: u64,
+        answer: crate::api::Answer,
+    },
     Quit,
 }
 
@@ -316,6 +322,12 @@ pub enum Input {
     UpdateInstalled(Result<crate::update::Installed, String>),
     /// Something in the background failed in a way the user should know.
     Error(String),
+    /// A prompt from the API, to launch like a task sent from the composer.
+    ApiPrompt {
+        id: u64,
+        repository: String,
+        prompt: String,
+    },
     Tick,
 }
 
@@ -626,6 +638,10 @@ impl App {
             Input::Whisper { result, progress } => self.on_whisper(result, progress, &mut effects),
             Input::UpdateChecked(result) => self.updates.checked(result),
             Input::UpdateInstalled(result) => self.updates.installed(result),
+            Input::ApiPrompt { id, repository, prompt } => {
+                let answer = api::prompt(self, &repository, &prompt, now, &mut effects);
+                effects.push(Effect::ApiReply { id, answer });
+            }
             Input::Tick => {
                 if self.notice.as_ref().is_some_and(|n| n.until <= now) {
                     self.notice = None;
