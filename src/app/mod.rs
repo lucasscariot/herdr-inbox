@@ -2,6 +2,7 @@
 //! and a list of effects for the runtime to perform; nothing in here does I/O,
 //! so every behaviour is testable without a server or a terminal.
 
+mod api;
 mod composer;
 mod dictation;
 mod input;
@@ -231,6 +232,11 @@ pub enum Effect {
     },
     InstallWhisper,
     SaveCredentials(crate::speech::backends::Credentials),
+    /// The answer to a prompt from the API, for the request waiting on it.
+    ApiReply {
+        id: u64,
+        answer: crate::api::Answer,
+    },
     Quit,
 }
 
@@ -316,6 +322,12 @@ pub enum Input {
     UpdateInstalled(Result<crate::update::Installed, String>),
     /// Something in the background failed in a way the user should know.
     Error(String),
+    /// A prompt from the API, to launch like a task sent from the composer.
+    ApiPrompt {
+        id: u64,
+        repository: String,
+        prompt: String,
+    },
     Tick,
 }
 
@@ -363,6 +375,8 @@ pub struct App {
     usage_asked: HashSet<String>,
     /// When a machine's last read failed: no retry before the TTL passes.
     usage_failed: HashMap<String, u64>,
+    /// API prompts waiting for the usage Auto chooses from.
+    api_held: Vec<api::Held>,
     /// The time of the last input, for what the composer shows.
     clock: SystemTime,
     /// The composer's draft, kept while it is closed.
@@ -476,6 +490,7 @@ impl App {
             usage_reading: HashSet::new(),
             usage_asked: HashSet::new(),
             usage_failed: HashMap::new(),
+            api_held: Vec::new(),
             clock: std::time::UNIX_EPOCH,
             composer: Composer::default(),
             launches: Vec::new(),
@@ -582,7 +597,10 @@ impl App {
                 Err(err) => self.notify(format!("Could not archive “{title}”: {err}"), NoticeKind::Error, now),
             },
             Input::Inventory { machine, result } => self.on_inventory(&machine, result, now, &mut effects),
-            Input::Usage { machine, result } => self.on_usage(&machine, result, now),
+            Input::Usage { machine, result } => {
+                self.on_usage(&machine, result, now);
+                api::release(self, now, &mut effects);
+            }
             Input::LaunchProgress { id, text } => self.set_launch(&id, LaunchState::Running(text)),
             Input::LaunchFinished { id, result } => self.on_launch_finished(&id, result, now, &mut effects),
             Input::Resumed { result } => self.on_resumed(result, now),
@@ -626,6 +644,9 @@ impl App {
             Input::Whisper { result, progress } => self.on_whisper(result, progress, &mut effects),
             Input::UpdateChecked(result) => self.updates.checked(result),
             Input::UpdateInstalled(result) => self.updates.installed(result),
+            Input::ApiPrompt { id, repository, prompt } => {
+                api::receive(self, id, repository, prompt, now, &mut effects)
+            }
             Input::Tick => {
                 if self.notice.as_ref().is_some_and(|n| n.until <= now) {
                     self.notice = None;
@@ -633,6 +654,7 @@ impl App {
                 if self.focus == Focus::Composer {
                     self.read_usage(false, now, &mut effects);
                 }
+                api::release(self, now, &mut effects);
                 match self.hold.tick(now) {
                     Step::Type(spaces) => input::type_spaces(self, spaces, now, &mut effects),
                     Step::Release => self.release_space(now, &mut effects),

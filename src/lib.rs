@@ -1,6 +1,7 @@
 //! Herdr Inbox: one keyboard-first inbox for every coding agent on every
 //! machine, on top of a Herdr server.
 
+pub mod api;
 pub mod app;
 pub mod cli;
 pub mod clipboard;

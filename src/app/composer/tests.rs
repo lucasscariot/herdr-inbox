@@ -23,6 +23,7 @@ fn project(name: &str, branches: &[(&str, bool)]) -> Project {
                 linked: *linked,
             })
             .collect(),
+        github: String::new(),
     }
 }
 

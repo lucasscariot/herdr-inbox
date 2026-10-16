@@ -43,11 +43,31 @@ def git_info(directory):
         return None
     return None
 
+def read_github(common):
+    """The `owner/name` of the origin remote when it is on GitHub, else ""."""
+    try:
+        lines = (common / "config").read_text().splitlines()
+    except OSError:
+        return ""
+    in_origin = False
+    for line in lines:
+        line = line.strip()
+        if line.startswith("["):
+            in_origin = line.replace(" ", "") == '[remote"origin"]'
+        elif in_origin and line.split("=", 1)[0].strip() == "url" and "=" in line:
+            url = line.split("=", 1)[1].strip()
+            match = re.match(r"^(?:https://(?:[^@/]+@)?github\.com/|(?:ssh://)?git@github\.com[:/])([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url)
+            return match.group(1) if match else ""
+    return ""
+
 def project_for(root, name=None):
     key = str(root)
     project = projects.get(key)
     if not project:
         project = projects[key] = {"name": name or root.name, "path": key, "checkouts": {}}
+    elif name:
+        # A configured name wins over the one a root scan gave the same checkout.
+        project["name"] = name
     return project
 
 def add_checkout(project, path, branch, linked):
@@ -64,6 +84,7 @@ def register(directory, name=None):
     root, common, own = info
     root = root.resolve()
     project = project_for(root, name)
+    project["github"] = read_github(common)
     add_checkout(project, root, read_head(common), False)
     if own != common:
         add_checkout(project, directory.resolve(), read_head(own), True)

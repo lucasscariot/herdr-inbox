@@ -71,6 +71,62 @@ pub struct Config {
     /// apply to a harness the table does not know.
     #[serde(default)]
     pub usage: UsageConfig,
+    /// Prompts from a web page on another device, through a local port.
+    #[serde(default)]
+    pub api: ApiConfig,
+}
+
+/// `[api]`: off unless enabled, and then only for one origin and one login.
+/// Nothing is assumed about either: the listener refuses to start without both.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ApiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bound on 127.0.0.1 only; `tailscale serve` publishes it to the tailnet.
+    #[serde(default = "api_port")]
+    pub port: u16,
+    /// The page allowed to send prompts, as `https://host`.
+    #[serde(default)]
+    pub allowed_origin: String,
+    /// The Tailscale login, as `tailscale serve` passes it in `Tailscale-User-Login`.
+    #[serde(default)]
+    pub allowed_login: String,
+}
+
+pub const API_PORT: u16 = 7777;
+
+fn api_port() -> u16 {
+    API_PORT
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self { enabled: false, port: API_PORT, allowed_origin: String::new(), allowed_login: String::new() }
+    }
+}
+
+impl ApiConfig {
+    /// Trims the origin and login, since both are compared exactly against
+    /// request headers and the origin is echoed back as the CORS header.
+    fn validate(mut self) -> Result<Self, String> {
+        self.allowed_origin = self.allowed_origin.trim().to_string();
+        self.allowed_login = self.allowed_login.trim().to_string();
+        if !self.enabled {
+            return Ok(self);
+        }
+        let origin = &self.allowed_origin;
+        let host = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://"));
+        if host.is_none_or(|h| h.is_empty() || h.contains('/')) {
+            return Err("api.allowed_origin must be an origin such as https://dashboard.example.com".into());
+        }
+        if self.allowed_login.is_empty() {
+            return Err("api.allowed_login must name the Tailscale login allowed to send prompts".into());
+        }
+        if self.port == 0 {
+            return Err("api.port must be between 1 and 65535".into());
+        }
+        Ok(self)
+    }
 }
 
 /// `[usage]`: every key optional.
@@ -128,7 +184,7 @@ impl Config {
         config.validate(path)
     }
 
-    fn validate(self, path: &Path) -> Result<Self, ConfigError> {
+    fn validate(mut self, path: &Path) -> Result<Self, ConfigError> {
         let depths = std::iter::once(self.global.depth).chain(self.machines.values().map(|m| m.depth));
         if depths.flatten().any(|depth| depth > MAX_DEPTH) {
             return Err(invalid(path, &format!("depth must be between 0 and {MAX_DEPTH}")));
@@ -152,6 +208,7 @@ impl Config {
                 &format!("usage.providers values must be one of {}, not {unknown}", known.join(", ")),
             ));
         }
+        self.api = self.api.validate().map_err(|message| invalid(path, &message))?;
         Ok(self)
     }
 
@@ -242,6 +299,32 @@ mod tests {
         assert_eq!(effective.branch_prefix, "");
         assert!(effective.harness_args.is_empty());
         assert_eq!(Config::default().default_workspace, WorkspaceMode::Worktree);
+    }
+
+    #[test]
+    fn the_api_is_off_until_enabled_with_an_origin_and_a_login() {
+        assert!(!Config::default().api.enabled);
+        assert_eq!(toml("[api]\nallowed_origin = \"x\"\n").api.port, API_PORT);
+        let config = toml(
+            "[api]\nenabled = true\nport = 7000\nallowed_origin = \"https://dash.example.com\"\nallowed_login = \"me@example.com\"\n",
+        );
+        assert_eq!(config.api.port, 7000);
+        assert_eq!(config.api.allowed_login, "me@example.com");
+        let padded = toml(
+            "[api]\nenabled = true\nallowed_origin = \" https://dash.example.com \"\nallowed_login = \" me@example.com\\n\"\n",
+        );
+        assert_eq!(padded.api.allowed_origin, "https://dash.example.com");
+        assert_eq!(padded.api.allowed_login, "me@example.com");
+        for refused in [
+            "[api]\nenabled = true\nallowed_login = \"me@example.com\"\n",
+            "[api]\nenabled = true\nallowed_origin = \"https://dash.example.com/\"\nallowed_login = \"me@example.com\"\n",
+            "[api]\nenabled = true\nallowed_origin = \"dash.example.com\"\nallowed_login = \"me@example.com\"\n",
+            "[api]\nenabled = true\nallowed_origin = \"https://dash.example.com\"\n",
+            "[api]\nenabled = true\nport = 0\nallowed_origin = \"https://dash.example.com\"\nallowed_login = \"me\"\n",
+        ] {
+            let error = Config::parse_toml(refused, Path::new("config.toml")).unwrap_err();
+            assert!(error.to_string().contains("api."), "{refused}: {error}");
+        }
     }
 
     #[test]

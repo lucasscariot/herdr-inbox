@@ -1033,6 +1033,7 @@ mod composer_flow {
                 path: "/w/cockpit".into(),
                 branch: "main".into(),
                 checkouts: vec![CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false }],
+                github: "lucasscariot/cockpit".into(),
             }],
             harnesses: vec!["claude".into(), "codex".into()],
             models: BTreeMap::new(),
@@ -1061,6 +1062,128 @@ mod composer_flow {
             Effect::Launch { plan, .. } => Some(&plan.record),
             _ => None,
         })
+    }
+
+    fn api_prompt(app: &mut App, repository: &str, prompt: &str) -> (Vec<Effect>, crate::api::Answer) {
+        let input = Input::ApiPrompt { id: 7, repository: repository.into(), prompt: prompt.into() };
+        let effects = app.update(input, at(3));
+        let answer = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::ApiReply { id: 7, answer } => Some(answer.clone()),
+                _ => None,
+            })
+            .expect("an answer");
+        (effects, answer)
+    }
+
+    #[test]
+    fn an_api_prompt_launches_like_the_composer_with_auto_and_leaves_it_alone() {
+        let mut app = composing();
+        app.update(
+            Input::Usage {
+                machine: LOCAL.into(),
+                result: Ok(usage_report(&[("anthropic", "5h", 38), ("openai", "week", 17)])),
+            },
+            at(2),
+        );
+        type_text(&mut app, "half written");
+        let shown = app.composer.task.text().to_string();
+        let (effects, answer) = api_prompt(&mut app, "LucasScariot/cockpit", "  Fix the login redirect loop ");
+        let record = launch_of(&effects).expect("a launch");
+        assert_eq!(record.project, "cockpit");
+        assert_eq!(record.machine_id, LOCAL);
+        assert_eq!(record.task, "Fix the login redirect loop");
+        assert_eq!(record.workspace, "worktree", "always a new worktree");
+        assert_eq!(record.harness, "codex", "the harness with the most usage left");
+        assert!(record.harness_auto);
+        let accepted = answer.expect("accepted");
+        assert_eq!(
+            accepted,
+            crate::api::Accepted {
+                harness: "codex".into(),
+                branch: record.branch.clone(),
+                agent: record.agent_name.clone()
+            }
+        );
+        assert!(effects.contains(&Effect::SaveHistory("Fix the login redirect loop".into())));
+        assert_eq!(app.composer.task.text(), shown, "the composer on screen is untouched");
+        assert_eq!(app.launches.last().map(|l| l.title.as_str()), Some(record.title.as_str()));
+    }
+
+    #[test]
+    fn an_api_prompt_waits_for_usage_past_its_ttl_before_auto_chooses() {
+        let mut app = composing();
+        let old = usage_report(&[("anthropic", "5h", 38), ("openai", "week", 17)]);
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(old) }, at(2));
+        let later = at(2 + crate::usage::TTL.as_secs() + 1);
+        let input = Input::ApiPrompt { id: 7, repository: "lucasscariot/cockpit".into(), prompt: "Fix it".into() };
+        let effects = app.update(input, later);
+        assert!(effects.iter().any(|e| matches!(e, Effect::ReadUsage { .. })), "usage is read again");
+        assert!(launch_of(&effects).is_none(), "not from the expired report");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ApiReply { .. })));
+        let fresh = usage_report(&[("anthropic", "5h", 10), ("openai", "week", 90)]);
+        let effects = app.update(Input::Usage { machine: LOCAL.into(), result: Ok(fresh) }, later);
+        assert_eq!(launch_of(&effects).map(|r| r.harness.as_str()), Some("claude"), "chosen from the new report");
+        assert!(effects.iter().any(|e| matches!(e, Effect::ApiReply { id: 7, answer: Ok(_) })));
+    }
+
+    #[test]
+    fn an_api_prompt_held_for_usage_launches_anyway_when_the_read_is_slow() {
+        let mut app = composing();
+        app.update(Input::Usage { machine: LOCAL.into(), result: Ok(usage_report(&[("openai", "week", 17)])) }, at(2));
+        let later = 2 + crate::usage::TTL.as_secs() + 1;
+        let input = Input::ApiPrompt { id: 7, repository: "lucasscariot/cockpit".into(), prompt: "Fix it".into() };
+        assert!(launch_of(&app.update(input, at(later))).is_none());
+        assert!(launch_of(&app.update(Input::Tick, at(later + 1))).is_none(), "still waiting");
+        let effects = app.update(Input::Tick, at(later + 10));
+        assert!(launch_of(&effects).is_some());
+        assert!(effects.iter().any(|e| matches!(e, Effect::ApiReply { id: 7, answer: Ok(_) })));
+    }
+
+    #[test]
+    fn an_api_prompt_without_usage_auto_takes_the_usual_harness() {
+        let mut app = composing();
+        app.config.usage.enabled = false;
+        let (effects, answer) = api_prompt(&mut app, "lucasscariot/cockpit", "Fix it");
+        assert_eq!(launch_of(&effects).map(|r| r.harness.as_str()), Some("claude"));
+        assert!(!launch_of(&effects).is_some_and(|r| r.harness_auto));
+        assert!(answer.is_ok());
+    }
+
+    #[test]
+    fn an_api_prompt_is_refused_without_a_checkout_a_task_or_a_server() {
+        let mut app = composing();
+        let (effects, answer) = api_prompt(&mut app, "lucasscariot/elsewhere", "Fix it");
+        assert!(launch_of(&effects).is_none());
+        assert_eq!(answer.map_err(|r| r.status), Err(404));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Discover { .. })), "a new clone is looked for");
+        let (_, answer) = api_prompt(&mut app, "lucasscariot/cockpit", "   ");
+        assert_eq!(answer.map_err(|r| r.status), Err(422));
+
+        let (mut app, _) = loaded();
+        let (effects, answer) = api_prompt(&mut app, "lucasscariot/cockpit", "Fix it");
+        assert_eq!(answer.map_err(|r| r.status), Err(503), "nothing discovered yet");
+        assert!(effects.contains(&Effect::Discover { machine: LOCAL.into(), include_models: true }));
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(1));
+        app.update(connection(LOCAL, Connection::NoServer), at(2));
+        let (effects, answer) = api_prompt(&mut app, "lucasscariot/cockpit", "Fix it");
+        assert!(launch_of(&effects).is_none());
+        assert_eq!(answer, Err(crate::api::Refusal::unavailable("Herdr isn't running.")));
+    }
+
+    #[test]
+    fn an_api_prompt_is_refused_when_its_project_shares_a_name() {
+        let mut app = composing();
+        let mut projects = inventory().projects;
+        let mut fork = projects[0].clone();
+        (fork.path, fork.github) = ("/a/cockpit".into(), "someone/cockpit".into());
+        projects.insert(0, fork);
+        let inventory = Inventory { projects, ..inventory() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(2));
+        let (effects, answer) = api_prompt(&mut app, "lucasscariot/cockpit", "Fix it");
+        assert!(launch_of(&effects).is_none(), "never launched in the other cockpit");
+        assert_eq!(answer.map_err(|r| r.status), Err(409));
     }
 
     fn with_skills() -> App {
@@ -1718,6 +1841,7 @@ mod conveniences {
                 path: "/w/cockpit".into(),
                 branch: "main".into(),
                 checkouts: vec![CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false }],
+                github: "lucasscariot/cockpit".into(),
             }],
             harnesses: vec!["claude".into(), "codex".into()],
             models: BTreeMap::from([(
@@ -3522,6 +3646,7 @@ mod pasted_images {
                 path: "/w/cockpit".into(),
                 branch: "main".into(),
                 checkouts: vec![CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false }],
+                github: "lucasscariot/cockpit".into(),
             }],
             harnesses: vec!["claude".into()],
             models: BTreeMap::new(),

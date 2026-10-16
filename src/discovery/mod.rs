@@ -65,6 +65,9 @@ pub struct Project {
     pub branch: String,
     #[serde(default)]
     pub checkouts: Vec<CheckoutEntry>,
+    /// `owner/name` of the `origin` remote on GitHub; empty otherwise.
+    #[serde(default)]
+    pub github: String,
 }
 
 impl Project {
@@ -417,10 +420,17 @@ mod tests {
                 CheckoutEntry { path: "/h/wt/fix".into(), branch: "fix".into(), linked: true },
                 CheckoutEntry { path: "/w/cockpit".into(), branch: "main".into(), linked: false },
             ],
+            github: String::new(),
         };
         assert_eq!(project.main_checkout().path, "/w/cockpit");
         assert_eq!(project.taken_branches(), ["fix", "main"]);
-        let bare = Project { name: "x".into(), path: "/x".into(), branch: String::new(), checkouts: vec![] };
+        let bare = Project {
+            name: "x".into(),
+            path: "/x".into(),
+            branch: String::new(),
+            checkouts: vec![],
+            github: String::new(),
+        };
         assert_eq!(bare.main_checkout().path, "/x");
     }
 
@@ -459,5 +469,28 @@ mod tests {
         let fix = cockpit.checkouts.iter().find(|c| c.linked).expect("the linked worktree is grouped under its repo");
         assert_eq!(fix.branch, "fix-login");
         assert_eq!(inventory.harnesses, ["sh"], "only installed executables count");
+    }
+
+    #[test]
+    fn a_configured_name_renames_a_project_a_root_also_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for path in ["a/app", "b/app"] {
+            std::fs::create_dir_all(root.join(path).join(".git")).unwrap();
+            std::fs::write(root.join(path).join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        let settings = json!({
+            "roots": [root.join("a").display().to_string(), root.join("b").display().to_string()],
+            "depth": 1,
+            "projects": [{"path": root.join("b/app").display().to_string(), "name": "app-b"}],
+            "executables": {},
+            "include_models": false,
+        });
+        let output =
+            std::process::Command::new("python3").arg("-c").arg(PROBE).arg(settings.to_string()).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let inventory = finish(&String::from_utf8_lossy(&output.stdout), None, false, &BTreeMap::new(), at(1)).unwrap();
+        let names: Vec<&str> = inventory.projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["app", "app-b"]);
     }
 }

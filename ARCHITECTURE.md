@@ -27,7 +27,7 @@ public interfaces.
 | `link` | One per machine. Keeps that server in sync: ping, one lifecycle subscription, one status subscription for all agent panes (replaced when the pane set changes), debounced snapshots with the git facts of their checkouts (cached 15 s), a 30 s resync, reconnection with backoff. |
 | `config` | `config.toml` (or the legacy plugin's `config.json`): roots, depth, branch prefix, harness arguments and executables, extra models, per-machine overrides. |
 | `state` | Remembered choices, cached inventories and launch journals under `$XDG_STATE_HOME/herdr-inbox`, written atomically and privately. |
-| `discovery` | An embedded Python 3.9+ probe, run with `python3` on each machine (over SSH through a login shell), finds projects, worktrees, installed agent CLIs and their model and thinking catalogs, and the user's skills (`~/.agents/skills` first, then each harness's own directory; a name is kept once and skills are read on every pass). Codex's cache supplies per-model reasoning levels, with `CODEX_HOME` respected. Models are cached 15 minutes; a capability revision expires older inventories once. |
+| `discovery` | An embedded Python 3.9+ probe, run with `python3` on each machine (over SSH through a login shell), finds projects (with the GitHub `owner/name` of their `origin`), worktrees, installed agent CLIs and their model and thinking catalogs, and the user's skills (`~/.agents/skills` first, then each harness's own directory; a name is kept once and skills are read on every pass). Codex's cache supplies per-model reasoning levels, with `CODEX_HOME` respected. Models are cached 15 minutes; a capability revision expires older inventories once. |
 | `usage` | Subscription usage per provider (Anthropic behind `claude`, OpenAI behind `codex`, or as the config maps a harness), and the pick of the harness with the most headroom. An embedded Python probe asks Codex's own app server (`account/rateLimits/read`, session log as fallback) and reads the cache a status line wrapper, also embedded and installed by the probe, fills from the JSON Claude Code hands its status line. Reports are cached per machine; a project can remember `auto` instead of a harness. |
 | `launch` | Plans a launch (branch name, flags) without side effects, then runs it step by step with the `herdr` CLI: worktree or workspace, tab title, `agent start`, thread metadata, `agent prompt`. A journal is written before the first change and after each step. A comparison is one plan per agent, each with its own worktree, planned together before any runs. |
 | `editor`, `fuzzy` | The composer's text box, cell-to-cursor placement using the same Unicode-aware wrapping as drawing, and its pickers' ranking. Model pickers match labels and ids. |
@@ -49,6 +49,8 @@ public interfaces.
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
 | `ui` | Pure drawing from `&App`, including themed frames and explicit popup title styles. |
 | `ui::harness` | One single-width coloured glyph per harness, drawn before its readable name in the sidebar, the preset chips and the composer picker. Claude, Codex, Pi and OpenCode have distinct glyphs; other harnesses get a neutral one. |
+| `api` | Opt-in prompts from one web page over HTTP on 127.0.0.1, published by `tailscale serve`. The routing is pure: one path, the configured origin (CORS preflight included) and Tailscale login, JSON. An accepted prompt becomes `Input::ApiPrompt`; the request waits for the app's `Effect::ApiReply`. |
+| `app::api` | Launches an API prompt from a fresh composer through `App::send`, so the harness (Auto), model, branch, history and launch row are the composer's own; the composer on screen is restored untouched. The project is the local one whose `origin` is the repository on GitHub. |
 | `runtime` | Terminal setup, the event loop, effect execution. |
 | `runtime::redraw` | Applies inputs and schedules draws with a 16 ms frame limit. Forwarded keys wait for the agent's echo instead of redrawing an unchanged screen. |
 
@@ -196,6 +198,18 @@ assert the compiled version separately from the version-independent layout.
   notice; while the microphone is open no key reaches an agent.
 - **Secrets stay out of sight.** API keys go to `curl` on its standard input,
   never in its arguments, and a key being typed is drawn as dots.
+- **The API is a second composer, not a second launcher.** A prompt from the
+  API goes through `App::send` like a typed task, so it can never launch
+  differently. It answers once the launch is planned, not when the agent is
+  up. A repository not found starts a project scan, since scans otherwise
+  follow the composer opening. When the usage report is past its TTL, the
+  prompt waits for the read it starts (up to ten seconds) so Auto never
+  chooses from old numbers. The event loop claims a prompt before handing
+  it to the app, and a request that timed out first withdraws it, so a
+  prompt reported as failed never launches later. The composer knows projects
+  by name, so a repository whose checkout shares its name with another project
+  is refused rather than launched in the wrong one. Without `[api] enabled`
+  and both an origin and a login, nothing listens.
 - **Discovery, launches and self-updates never block the UI.** They run on
   worker threads and report back as inputs.
 - **Usage comes from the CLIs' own channels.** Codex is asked through its
