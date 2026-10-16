@@ -1270,7 +1270,7 @@ fn without_a_server_the_inbox_offers_to_start_one() {
     assert!(sandbox.socket().exists());
     // With a systemd user manager, the server leaves the terminal's scope, so
     // closing the terminal tab that ran the inbox cannot take it down.
-    if Path::new("/run/systemd/system").is_dir() && std::env::var_os("XDG_RUNTIME_DIR").is_some() {
+    if herdr_inbox::herdr::server::scoped() {
         let cgroup = server_cgroup(&sandbox.socket()).expect("the started server is running");
         assert!(
             cgroup.contains("/app.slice/app-herdr\\x2dinbox-herdr-") && cgroup.ends_with(".scope"),

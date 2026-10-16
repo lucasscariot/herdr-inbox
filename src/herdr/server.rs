@@ -17,25 +17,33 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::terminal::HerdrCommand;
 
-/// How long `systemd-run` gets to fail before the scope counts as started.
-const SCOPE_GRACE: Duration = Duration::from_secs(2);
+/// How long `systemd-run` gets to move into its scope before it is given up
+/// on. Longer than the 25 s a D-Bus call waits for the user manager's reply,
+/// so a slow bus fails on its own first.
+const SCOPE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Starts `herdr server` in the background, exactly as `herdr` itself would,
 /// and reaps it when it ends.
 pub fn start(herdr: &HerdrCommand) {
-    let systemd_run = user_manager(Path::new("/run/systemd/system"), |key| std::env::var_os(key))
-        .then(|| OsString::from("systemd-run"));
+    let systemd_run = scoped().then(|| OsString::from("systemd-run"));
     let herdr = herdr.clone();
-    thread::spawn(move || run(&herdr, systemd_run));
+    thread::spawn(move || run(&herdr, systemd_run, SCOPE_TIMEOUT));
 }
 
-fn run(herdr: &HerdrCommand, systemd_run: Option<OsString>) {
-    if let Some(program) = systemd_run
-        && let Ok(mut child) = scope_command(herdr, &program, &unit_name()).spawn()
-        && !failed_early(&mut child, SCOPE_GRACE)
-    {
-        let _ = child.wait();
-        return;
+/// Whether [`start`] tries to give the server a scope of its own here.
+pub fn scoped() -> bool {
+    user_manager(Path::new("/run/systemd/system"), |key| std::env::var_os(key))
+}
+
+fn run(herdr: &HerdrCommand, systemd_run: Option<OsString>, timeout: Duration) {
+    if let Some(program) = systemd_run {
+        let unit = unit_name();
+        if let Ok(mut child) = scope_command(herdr, &program, &unit).spawn()
+            && entered_scope(&mut child, &unit, timeout)
+        {
+            let _ = child.wait();
+            return;
+        }
     }
     if let Ok(mut child) = direct_command(herdr).spawn() {
         let _ = child.wait();
@@ -100,18 +108,34 @@ fn description(herdr: &HerdrCommand) -> String {
     }
 }
 
-/// Whether the child exited unsuccessfully within `grace`. `systemd-run`
-/// fails at once when the user manager refuses the scope; once it has exec'd
-/// the server it keeps running.
-fn failed_early(child: &mut Child, grace: Duration) -> bool {
+/// Whether `systemd-run` got the server its scope. It moves itself into
+/// `unit` before exec'ing the server, so the scope exists once its cgroup is
+/// `unit`; exiting unsuccessfully before that, however late, means the user
+/// manager refused it. Past `timeout` it is killed and counts as refused.
+fn entered_scope(child: &mut Child, unit: &str, timeout: Duration) -> bool {
     let started = Instant::now();
     loop {
+        if in_unit(child.id(), unit) {
+            return true;
+        }
         match child.try_wait() {
-            Ok(Some(status)) => return !status.success(),
-            Ok(None) if started.elapsed() < grace => thread::sleep(Duration::from_millis(20)),
-            Ok(None) | Err(_) => return false,
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Err(_) => return true,
         }
     }
+}
+
+/// Whether process `pid` runs in the cgroup of systemd unit `unit`.
+fn in_unit(pid: u32, unit: &str) -> bool {
+    let suffix = format!("/{unit}");
+    std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .is_ok_and(|text| text.lines().any(|line| line.ends_with(&suffix)))
 }
 
 #[cfg(test)]
@@ -222,8 +246,18 @@ mod tests {
         let fake_herdr = root.path().join("herdr");
         write_executable(&fake_herdr, &format!("#!/bin/sh\nprintf 'server %s\\n' \"$*\" >> {log:?}\n"));
 
-        run(&herdr(&fake_herdr, Some("night")), Some(fake_run.into_os_string()));
+        run(&herdr(&fake_herdr, Some("night")), Some(fake_run.into_os_string()), SCOPE_TIMEOUT);
         assert_eq!(wait_for(&log), "scope /h/herdr.sock\nserver --session night server\n");
+    }
+
+    #[test]
+    fn a_scope_is_recognised_by_its_cgroup() {
+        let own = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+        let unit = own.lines().next().and_then(|line| line.rsplit('/').next()).unwrap_or_default().to_string();
+        if !unit.is_empty() {
+            assert!(in_unit(std::process::id(), &unit), "{own}");
+        }
+        assert!(!in_unit(std::process::id(), "app-herdr\\x2dinbox-herdr-0.scope"));
     }
 
     #[test]
@@ -235,12 +269,35 @@ mod tests {
         let fake_herdr = root.path().join("herdr");
         write_executable(&fake_herdr, &format!("#!/bin/sh\nprintf 'server %s\\n' \"$*\" >> {log:?}\n"));
 
-        run(&herdr(&fake_herdr, None), Some(fake_run.into_os_string()));
+        run(&herdr(&fake_herdr, None), Some(fake_run.into_os_string()), SCOPE_TIMEOUT);
         assert_eq!(wait_for(&log), "server server\n");
 
         let missing = root.path().join("no-systemd-run");
         std::fs::remove_file(&log).expect("rm");
-        run(&herdr(&fake_herdr, None), Some(missing.into_os_string()));
+        run(&herdr(&fake_herdr, None), Some(missing.into_os_string()), SCOPE_TIMEOUT);
         assert_eq!(wait_for(&log), "server server\n");
+    }
+
+    #[test]
+    fn a_scope_refused_late_or_never_answered_still_falls_back() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let log = root.path().join("log");
+        let fake_herdr = root.path().join("herdr");
+        write_executable(&fake_herdr, &format!("#!/bin/sh\nprintf 'server %s\\n' \"$*\" >> {log:?}\n"));
+
+        // A slow user bus: the call times out long after systemd-run started.
+        let slow = root.path().join("slow-systemd-run");
+        write_executable(&slow, "#!/bin/sh\nsleep 2.5\necho 'Connection timed out' >&2\nexit 1\n");
+        run(&herdr(&fake_herdr, None), Some(slow.into_os_string()), SCOPE_TIMEOUT);
+        assert_eq!(wait_for(&log), "server server\n");
+
+        // A bus that never answers: systemd-run is given up on.
+        let stuck = root.path().join("stuck-systemd-run");
+        write_executable(&stuck, "#!/bin/sh\nexec sleep 60\n");
+        std::fs::remove_file(&log).expect("rm");
+        let started = Instant::now();
+        run(&herdr(&fake_herdr, None), Some(stuck.into_os_string()), Duration::from_millis(300));
+        assert_eq!(wait_for(&log), "server server\n");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }
