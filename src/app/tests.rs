@@ -1038,6 +1038,7 @@ mod composer_flow {
             models: BTreeMap::new(),
             models_at: 0,
             models_revision: crate::discovery::MODELS_REVISION,
+            skills: Vec::new(),
         }
     }
 
@@ -1060,6 +1061,67 @@ mod composer_flow {
             Effect::Launch { plan, .. } => Some(&plan.record),
             _ => None,
         })
+    }
+
+    fn with_skills() -> App {
+        let (mut app, _) = loaded();
+        app.update(press(KeyCode::Char('n')), at(1));
+        let skill = |name: &str| crate::discovery::Skill {
+            name: name.into(),
+            description: String::new(),
+            path: format!("/home/me/.agents/skills/{name}/SKILL.md"),
+        };
+        let inventory = Inventory { skills: vec![skill("arena"), skill("architect"), skill("deslop")], ..inventory() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        app
+    }
+
+    #[test]
+    fn dollar_completes_a_skill_and_the_agent_learns_where_it_lives() {
+        let mut app = with_skills();
+        type_text(&mut app, "$ar");
+        app.update(press(KeyCode::Down), at(1));
+        assert_eq!(app.composer.field, Field::Task, "the menu takes the arrows, not the fields");
+        app.update(press(KeyCode::Up), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.task.text(), "$arena ");
+        type_text(&mut app, "the login page");
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        let record = launch_of(&effects).expect("Enter sends once the menu is closed");
+        assert_eq!(record.task, "$arena the login page", "titles and history keep what was written");
+        assert_eq!(
+            record.message(),
+            "$arena the login page\n\nSkills mentioned above: read each SKILL.md and follow it.\n- $arena: /home/me/.agents/skills/arena/SKILL.md"
+        );
+        assert_eq!(record.title, "$arena the login page");
+        assert!(effects.contains(&Effect::SaveHistory("$arena the login page".into())));
+    }
+
+    #[test]
+    fn a_paste_starts_the_skill_list_at_the_top_again() {
+        let mut app = with_skills();
+        type_text(&mut app, "$");
+        app.update(press(KeyCode::Down), at(1));
+        app.update(press(KeyCode::Down), at(1));
+        app.update(Input::Paste("a".into()), at(1));
+        app.update(press(KeyCode::Tab), at(1));
+        assert_eq!(app.composer.task.text(), "$arena ", "the best match, not the old row");
+    }
+
+    #[test]
+    fn enter_inserts_the_skill_and_esc_keeps_a_plain_dollar() {
+        let mut app = with_skills();
+        type_text(&mut app, "use $des");
+        assert!(launch_of(&app.update(press(KeyCode::Enter), at(1))).is_none());
+        assert_eq!(app.composer.task.text(), "use $deslop ");
+        app.composer.task.clear();
+        type_text(&mut app, "costs $");
+        app.update(press(KeyCode::Esc), at(1));
+        assert_eq!(app.focus, Focus::Composer, "Esc closes the menu, not the composer");
+        type_text(&mut app, "5");
+        let record = launch_of(&app.update(press(KeyCode::Enter), at(5))).unwrap().clone();
+        assert_eq!(record.task, "costs $5");
+        assert_eq!(record.message(), "costs $5", "no skill named, nothing added");
     }
 
     #[test]
@@ -1594,6 +1656,7 @@ mod composer_flow {
             thinking: String::new(),
             title: "Old task".into(),
             task: "Old task".into(),
+            prompt: String::new(),
             agent_name: "t-old".into(),
             created_at: 0,
             stage: Stage::StartupBlocked,
@@ -1669,6 +1732,7 @@ mod conveniences {
             )]),
             models_at: 0,
             models_revision: crate::discovery::MODELS_REVISION,
+            skills: Vec::new(),
         }
     }
 
@@ -1707,6 +1771,7 @@ mod conveniences {
             thinking: "high".into(),
             title: format!("Task {id}"),
             task: format!("Task {id}\nwith details"),
+            prompt: String::new(),
             agent_name: format!("t-{id}"),
             created_at: 5,
             stage,
@@ -2355,6 +2420,51 @@ mod conveniences {
         );
         assert!(app.reply.is_none());
         assert_eq!(app.focus, Focus::List, "replying never leaves the list");
+    }
+
+    #[test]
+    fn a_reply_can_name_a_skill_of_the_threads_machine() {
+        let (mut app, _) = loaded();
+        let skill = crate::discovery::Skill {
+            name: "deslop".into(),
+            description: "Remove slop".into(),
+            path: "/home/me/.claude/skills/deslop/SKILL.md".into(),
+        };
+        let inventory = crate::discovery::Inventory { skills: vec![skill], ..Default::default() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        type_text(&mut app, "now $de");
+        app.update(press(KeyCode::Tab), at(1));
+        type_text(&mut app, "it");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        let [Effect::Prompt { text, .. }] = &effects[..] else { panic!("{effects:?}") };
+        assert_eq!(
+            text,
+            "now $deslop it\n\nSkills mentioned above: read each SKILL.md and follow it.\n- $deslop: /home/me/.claude/skills/deslop/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn a_reply_too_small_to_draw_leaves_enter_to_send() {
+        let (mut app, _) = loaded();
+        let skill = crate::discovery::Skill {
+            name: "deslop".into(),
+            description: String::new(),
+            path: "/home/me/.claude/skills/deslop/SKILL.md".into(),
+        };
+        let inventory = crate::discovery::Inventory { skills: vec![skill], ..Default::default() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('j')), at(1));
+        app.update(press(KeyCode::Char('r')), at(1));
+        app.update(Input::Resize { width: 80, height: 5 }, at(1));
+        assert!(!crate::app::reply_fits(app.layout.terminal));
+        type_text(&mut app, "now $de");
+        let effects = app.update(press(KeyCode::Enter), at(1));
+        let [Effect::Prompt { text, .. }] = &effects[..] else { panic!("{effects:?}") };
+        assert_eq!(text, "now $de", "no hidden menu took Enter");
     }
 
     #[test]
@@ -3417,6 +3527,7 @@ mod pasted_images {
             models: BTreeMap::new(),
             models_at: 0,
             models_revision: crate::discovery::MODELS_REVISION,
+            skills: Vec::new(),
         };
         app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
         app

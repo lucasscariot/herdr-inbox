@@ -18,7 +18,7 @@ pub mod layout;
 use std::collections::HashMap;
 
 use crate::config::{Config, WorkspaceMode};
-use crate::discovery::{Catalog, Inventory, Project};
+use crate::discovery::{Catalog, Inventory, Project, Skill};
 use crate::editor::Editor;
 use crate::launch::{self, Comparison, Request, WorkspaceChoice};
 use crate::presets::{self, Preset};
@@ -239,6 +239,8 @@ pub struct Composer {
     pub start_preset: bool,
     /// The failed launch this task retries: sending it retires that launch.
     pub retry: Option<String>,
+    /// The `$` skill menu over the task.
+    pub skill_menu: crate::skills::Menu,
 }
 
 impl Default for Composer {
@@ -263,6 +265,7 @@ impl Default for Composer {
             strip_return: Field::Preset,
             start_preset: false,
             retry: None,
+            skill_menu: crate::skills::Menu::default(),
         }
     }
 }
@@ -283,6 +286,11 @@ pub struct Context<'a> {
 impl Context<'_> {
     fn inventory(&self, machine: &str) -> Option<&Inventory> {
         self.inventories.get(machine)
+    }
+
+    /// The skills installed on a machine.
+    pub fn skills(&self, machine: &str) -> &[Skill] {
+        self.inventory(machine).map(|i| i.skills.as_slice()).unwrap_or_default()
     }
 
     fn machine(&self, id: &str) -> Option<&MachineState> {
@@ -1074,6 +1082,8 @@ impl Composer {
         }
         let harness = self.harness.clone().ok_or(format!("No agent CLI is installed on {}.", machine.label))?;
         let project = ctx.project(self).cloned().ok_or(format!("{project_name} is not on {}.", machine.label))?;
+        let task = self.task_text();
+        let prompt = crate::skills::expand(&task, ctx.skills(&machine_id));
         let request = |harness: String, model, thinking, workspace, comparison| Request {
             machine_id: machine_id.clone(),
             machine_label: machine.label.clone(),
@@ -1081,7 +1091,8 @@ impl Composer {
             harness,
             model,
             thinking,
-            task: self.task_text(),
+            task: task.clone(),
+            prompt: prompt.clone(),
             workspace,
             comparison,
         };

@@ -380,6 +380,66 @@ pub fn clip_start(text: &str, width: usize) -> String {
     std::iter::once('…').chain(tail.into_iter().rev()).collect()
 }
 
+/// The most rows the `$` skill menu shows at once.
+const SKILL_ROWS: usize = 8;
+
+/// The `$` skill menu, below or above the line at `anchor`, kept inside
+/// `area`: each skill's name, then its description, dimmed. It shrinks to
+/// what fits; when not even one row fits, it goes over the whole `screen`,
+/// since the keys still go to it.
+#[allow(clippy::too_many_arguments)]
+pub fn skill_menu(
+    buf: &mut Buffer,
+    screen: Rect,
+    area: Rect,
+    anchor: (u16, u16),
+    below: bool,
+    offered: &[&crate::discovery::Skill],
+    selected: usize,
+    palette: &Palette,
+) {
+    let area = if area.height < 3 || area.width < 8 { screen } else { area };
+    let rows = offered.len().min(SKILL_ROWS).min(area.height.saturating_sub(2) as usize) as u16;
+    let width = area.width.min(72);
+    let height = rows + 2;
+    if rows == 0 || width < 4 {
+        return;
+    }
+    let y = if below { anchor.1 + 1 } else { anchor.1.saturating_sub(height) };
+    let y = y.clamp(area.y, area.bottom() - height);
+    let x = anchor.0.saturating_sub(2).clamp(area.x, area.right() - width);
+    let rect = Rect::new(x, y, width, height);
+    let style = Style::new().fg(palette.text).bg(palette.surface0);
+    fill(buf, rect, style);
+    ratatui::widgets::Widget::render(
+        ratatui::widgets::Block::new()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .style(style)
+            .border_style(frame(palette, true).bg(palette.surface0))
+            .title_style(style.fg(palette.subtext0))
+            .title(" Skills ")
+            .title_bottom(Line::from(" ⇥ insert · esc close ").right_aligned()),
+        rect,
+        buf,
+    );
+    let selected = selected.min(offered.len() - 1);
+    let start = selected.saturating_sub(rows as usize - 1);
+    for (row, (index, skill)) in offered.iter().enumerate().skip(start).take(rows as usize).enumerate() {
+        let chosen = index == selected;
+        let row_style = if chosen { style.bg(palette.selection_bg) } else { style };
+        let line = Rect::new(rect.x + 1, rect.y + 1 + row as u16, rect.width - 2, 1);
+        fill(buf, line, row_style);
+        let name = if chosen { row_style.fg(palette.accent).add_modifier(Modifier::BOLD) } else { row_style };
+        let left = [
+            (if chosen { "▸ " } else { "  " }.to_string(), name),
+            (format!("${}", skill.name), name),
+            (format!("  {}", skill.description), row_style.fg(palette.overlay0)),
+        ];
+        split_line(buf, line.x, line.y, line.width, &left, &[]);
+    }
+}
+
 /// Draws `left` and `right` on one line of `area`, clipping `left` so `right`
 /// always fits.
 fn split_line(buf: &mut Buffer, x: u16, y: u16, width: u16, left: &[(String, Style)], right: &[(String, Style)]) {
@@ -677,7 +737,7 @@ fn note_line(thread: &Thread) -> Option<(String, NoteColor)> {
 /// The reply box, over the bottom of the terminal area. Returns the cursor.
 fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &Palette) -> Option<(u16, u16)> {
     let area = app.layout.terminal;
-    if area.width < 12 || area.height < 6 {
+    if !crate::app::reply_fits(area) {
         return None;
     }
     let inner_width = area.width.saturating_sub(6);
@@ -708,7 +768,7 @@ fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &P
             Style::new().fg(palette.text).bg(palette.surface0),
         );
     }
-    let hint = "↵ send · ⇧↵ new line · esc cancel";
+    let hint = "↵ send · ⇧↵ new line · $ skills · esc cancel";
     split_line(
         buf,
         rect.x + 2,
@@ -717,7 +777,23 @@ fn reply_box(buf: &mut Buffer, app: &App, reply: &crate::app::Reply, palette: &P
         &[],
         &[(hint.into(), Style::new().fg(palette.overlay0).bg(palette.surface0))],
     );
-    Some((rect.x + 2 + col.min(inner_width), rect.y + 1 + row - scroll))
+    let cursor = (rect.x + 2 + col.min(inner_width), rect.y + 1 + row - scroll);
+    let machine = app.thread(&reply.thread).map(|t| t.machine_id.as_str()).unwrap_or_default();
+    if let Some((_, offered)) = reply.skill_menu.offered(&reply.editor, app.skills_on(machine)) {
+        // Above the box, over the agent's screen.
+        let above = Rect::new(area.x, area.y, area.width, rect.y.saturating_sub(area.y));
+        skill_menu(
+            buf,
+            area,
+            above,
+            (cursor.0, rect.y),
+            false,
+            &offered,
+            reply.skill_menu.selected(&reply.editor),
+            palette,
+        );
+    }
+    Some(cursor)
 }
 
 fn separator(buf: &mut Buffer, app: &App, palette: &Palette) {

@@ -20,6 +20,7 @@ pub mod orbit;
 pub mod presets;
 pub mod runtime;
 pub mod screen;
+pub mod skills;
 pub mod speech;
 pub mod state;
 pub mod theme;

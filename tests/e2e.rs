@@ -1007,6 +1007,48 @@ fn the_composer_discovers_projects_and_launches_into_a_new_worktree() {
 }
 
 #[test]
+fn dollar_names_a_global_skill_and_the_launch_carries_its_file() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    real_repo(&root.join("work"), "cockpit");
+    write_executable(&root.join("bin/claude"), "#!/bin/sh\nexit 3\n");
+    let skill = root.join("home/.agents/skills/arena/SKILL.md");
+    std::fs::create_dir_all(skill.parent().expect("dir")).expect("mkdir skill");
+    std::fs::write(&skill, "---\nname: arena\ndescription: Spawn parallel candidates\n---\n# Arena\n").expect("skill");
+    let config = format!("roots = [\"{}\"]\ndepth = 1\nagent_start_timeout_ms = 3500\n", root.join("work").display());
+    std::fs::create_dir_all(root.join("config/herdr-inbox")).expect("mkdir config");
+    std::fs::write(root.join("config/herdr-inbox/config.toml"), config).expect("write config");
+
+    let mut inbox = Inbox::start(&sandbox, 120, 34);
+    inbox.wait_for_text("No agent threads yet.");
+    inbox.keys("n");
+    inbox.wait_for_text("Harness    Claude");
+    inbox.keys("Fix the login loop with $ar");
+    inbox.wait_for_text("$arena  Spawn parallel candidates");
+    inbox.keys("\t");
+    inbox.wait_until_gone("Spawn parallel candidates");
+    inbox.wait_for_text("Fix the login loop with $arena");
+    inbox.keys("\r");
+    inbox.wait_for_text("✗ cockpit · Claude");
+
+    let journals: Vec<_> = std::fs::read_dir(root.join("state/herdr-inbox/launches")).expect("journals").collect();
+    let journal: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(journals[0].as_ref().expect("entry").path()).expect("read"))
+            .expect("json");
+    assert_eq!(journal["task"], "Fix the login loop with $arena");
+    assert_eq!(
+        journal["prompt"],
+        format!(
+            "Fix the login loop with $arena\n\nSkills mentioned above: read each SKILL.md and follow it.\n- $arena: {}",
+            skill.display()
+        )
+    );
+}
+
+#[test]
 fn presets_lead_the_composer_in_the_real_terminal() {
     if !enabled() {
         return;

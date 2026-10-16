@@ -83,7 +83,10 @@ pub struct Request {
     pub harness: String,
     pub model: Option<String>,
     pub thinking: Option<String>,
+    /// The task as written: titles, branch names and history come from it.
     pub task: String,
+    /// What the agent gets: the task, with where its `$skill` mentions live.
+    pub prompt: String,
     pub workspace: WorkspaceChoice,
     pub comparison: Option<Comparison>,
 }
@@ -121,6 +124,10 @@ pub struct Record {
     pub thinking: String,
     pub title: String,
     pub task: String,
+    /// What the agent gets when it differs from the task: the task, with
+    /// where its `$skill` mentions live.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prompt: String,
     pub agent_name: String,
     pub created_at: u64,
     pub stage: Stage,
@@ -150,6 +157,13 @@ pub struct Record {
     /// Set when the task went to several agents at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comparison: Option<Comparison>,
+}
+
+impl Record {
+    /// The text the agent is sent.
+    pub fn message(&self) -> &str {
+        if self.prompt.is_empty() { &self.task } else { &self.prompt }
+    }
 }
 
 /// What `plan` decided, ready to run.
@@ -675,6 +689,7 @@ pub fn plan(
         thinking: thinking.unwrap_or_default(),
         title,
         task: task.to_string(),
+        prompt: Some(request.prompt.trim()).filter(|p| *p != task).unwrap_or_default().to_string(),
         created_at: crate::discovery::seconds(now),
         stage: Stage::Creating,
         workspace: workspace.into(),
@@ -1018,7 +1033,7 @@ fn submit(runner: &Runner, record: &mut Record, journal: &dyn Fn(&Record)) -> Re
     let pane = record.pane_id.clone().ok_or("the launch has no pane")?;
     record.stage = Stage::Submitting;
     journal(record);
-    let last = paste_leading(runner, &pane, &record.task)?;
+    let last = paste_leading(runner, &pane, record.message())?;
     let prompt =
         ["agent", "prompt", &pane, &last, "--wait", "--until", "working", "--until", "blocked", "--timeout", "15000"];
     match herdr(runner, &prompt, Duration::from_secs(30)) {

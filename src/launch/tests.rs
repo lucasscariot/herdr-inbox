@@ -30,6 +30,7 @@ fn request(task: &str, workspace: WorkspaceChoice) -> Request {
         model: None,
         thinking: None,
         task: task.into(),
+        prompt: task.into(),
         workspace,
         comparison: None,
     }
@@ -458,6 +459,32 @@ fn a_worktree_launch_runs_every_step_in_order_and_journals_each() {
             "agent prompt w5:p1 Fix login loop --wait --until working --until blocked --timeout 15000",
         ]
     );
+}
+
+#[test]
+fn the_agent_gets_the_prompt_and_the_journal_keeps_the_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = fake_herdr(dir.path(), "ok", "ok");
+    let mut request = request("$arena Fix login loop", WorkspaceChoice::NewWorktree { branch: None });
+    request.prompt = "$arena Fix login loop\n\n- $arena: /h/arena/SKILL.md".into();
+    let plan = plan_for(&request, &settings(), Some(&claude())).unwrap();
+    assert_eq!(plan.record.task, "$arena Fix login loop");
+    assert_eq!(plan.record.message(), request.prompt);
+    let (result, _, _) = execute_logged(&runner, plan);
+    assert!(matches!(result, Ok(Outcome::Sent(_))), "{result:?}");
+    let calls = calls(dir.path()).join("\n");
+    assert!(calls.contains("tab rename w5:t1 $arena Fix login loop\n"), "{calls}");
+    assert!(
+        calls.contains("agent prompt w5:p1 $arena Fix login loop\n\n- $arena: /h/arena/SKILL.md --wait"),
+        "{calls}"
+    );
+
+    let plain = plan_for(&request_plain(), &settings(), Some(&claude())).unwrap();
+    assert!(plain.record.prompt.is_empty(), "a prompt equal to the task is not journaled twice");
+}
+
+fn request_plain() -> Request {
+    request("Fix login loop", WorkspaceChoice::NewWorktree { branch: None })
 }
 
 #[test]

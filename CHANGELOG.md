@@ -77,6 +77,11 @@ All notable changes to Herdr Inbox. The format follows
 
 ### Added
 
+- Type `$` in the composer or a reply to pick a skill installed on the
+  target machine, from `~/.agents/skills` and each harness's own directory
+  (Codex, Claude Code, OpenCode, Pi, Gemini, Copilot). The task keeps
+  `$name` as written, and the agent also gets each mentioned skill's
+  `SKILL.md` path, so any harness can use any of them.
 - A **Usage** row under the composer's choices shows each subscription's
   windows (`✻ Claude 5h 38% · week 29%  ·  ◆ Codex week 17%`), yellow past
   80 %, red when a limit is reached, faint with their age once stale. The

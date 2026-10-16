@@ -2,7 +2,8 @@
 # from source, so nothing needs installing there. Reads one JSON argument:
 #   {"roots": [...], "depth": 0-3, "projects": [{"path", "name"}],
 #    "executables": {harness: executable}, "include_models": bool}
-# and prints {"projects": [...], "harnesses": [...], "models": {...}}.
+# and prints {"projects": [...], "harnesses": [...], "models": {...},
+#   "skills": [...]}.
 import json, os, pathlib, shutil, sys, subprocess, re
 from concurrent.futures import ThreadPoolExecutor
 try:
@@ -189,6 +190,53 @@ def catalog(kind):
                 choices.append({"id": identifier, "label": identifier})
     return kind, {"choices": choices, "selectable": selectable, "session_api": api, "default": default, "thinking_flag": thinking_flag, "thinking": thinking, "thinking_by_model": thinking_by_model}
 
+# Skills installed for the user, wherever a harness keeps them. The shared
+# ~/.agents/skills comes first; a name found twice keeps its first place.
+def skill_dirs():
+    home = pathlib.Path.home()
+    codex = pathlib.Path(os.environ.get("CODEX_HOME", str(home / ".codex"))).expanduser()
+    config = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))).expanduser()
+    return [home / ".agents/skills", codex / "skills", home / ".claude/skills", config / "opencode/skills",
+            config / "opencode/skill", home / ".pi/agent/skills", home / ".gemini/skills", home / ".copilot/skills"]
+
+def frontmatter(text):
+    """name and description from a SKILL.md header, block scalars included."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fields, key = {}, None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        match = re.match(r"([A-Za-z_-]+):\s*(.*)$", line)
+        if match and not line[0].isspace():
+            key, value = match.group(1), match.group(2).strip()
+            fields[key] = "" if value in (">", "|", ">-", "|-") else value.strip("\"'")
+        elif key and line.strip():
+            fields[key] = (fields[key] + " " + line.strip()).strip()
+    return fields
+
+skills, seen = [], set()
+for directory in skill_dirs():
+    try:
+        entries = sorted(directory.iterdir())
+    except OSError:
+        continue
+    for entry in entries:
+        path = entry / "SKILL.md"
+        if entry.name.startswith(".") or not path.is_file():
+            continue
+        try:
+            fields = frontmatter(path.read_text(errors="replace")[:8192])
+        except OSError:
+            continue
+        name = fields.get("name", "")
+        name = name if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", name) else entry.name
+        if name in seen or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", name):
+            continue
+        seen.add(name)
+        skills.append({"name": name, "description": fields.get("description", "")[:300], "path": str(path)})
+
 models = {}
 if settings.get("include_models", True):
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -197,4 +245,4 @@ for project in projects.values():
     checkouts = sorted(project["checkouts"].values(), key=lambda c: (c["linked"], c["branch"].lower(), c["path"]))
     project["checkouts"] = checkouts
     project["branch"] = next((c["branch"] for c in checkouts if not c["linked"]), "")
-print(json.dumps({"projects": sorted(projects.values(), key=lambda p: (p["name"].lower(), p["path"])), "harnesses": harnesses, "models": models}))
+print(json.dumps({"projects": sorted(projects.values(), key=lambda p: (p["name"].lower(), p["path"])), "harnesses": harnesses, "models": models, "skills": skills}))

@@ -652,12 +652,41 @@ mod composer {
             )]),
             models_at: 0,
             models_revision: crate::discovery::MODELS_REVISION,
+            skills: Vec::new(),
         };
         app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
         for c in "Fix the login redirect loop".chars() {
             key(&mut app, KeyCode::Char(c));
         }
         app
+    }
+
+    #[test]
+    fn dollar_shows_the_skills_under_the_line_being_typed() {
+        let mut app = composing(110, 30);
+        let skill = |name: &str, description: &str| crate::discovery::Skill {
+            name: name.into(),
+            description: description.into(),
+            path: format!("/h/.agents/skills/{name}/SKILL.md"),
+        };
+        let mut inventory = app.inventories[LOCAL].clone();
+        inventory.skills = vec![skill("arena", "Spawn parallel candidates"), skill("deslop", "Remove slop")];
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        for c in " with $".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        let terminal = render(&app, at(1));
+        let screen = text(&terminal);
+        assert!(screen.contains("▸ $arena  Spawn parallel candidates"), "{screen}");
+        assert!(screen.contains("$deslop  Remove slop"), "{screen}");
+        assert!(screen.contains("⇥/↵ insert"), "{screen}");
+        let (_, task_row) = find(&terminal, "Fix the login redirect loop with $");
+        let (_, menu_row) = find(&terminal, "$arena");
+        assert_eq!(menu_row, task_row + 2, "right under the typed line, past the border");
+        key(&mut app, KeyCode::Char('d'));
+        let screen = text(&render(&app, at(1)));
+        assert!(screen.contains("▸ $deslop"), "{screen}");
+        assert!(!screen.contains("$arena"), "{screen}");
     }
 
     #[test]
@@ -1033,6 +1062,7 @@ mod conveniences {
             thinking: String::new(),
             title: "Ship the release notes".into(),
             task: "Ship the release notes".into(),
+            prompt: String::new(),
             agent_name: "t".into(),
             created_at: 0,
             stage,
@@ -1097,10 +1127,53 @@ mod conveniences {
         let mut terminal = render(&app, at(1));
         let screen = text(&terminal);
         assert!(screen.contains("Reply to “Add invoice export”"), "{screen}");
-        assert!(screen.contains("↵ send · ⇧↵ new line · esc cancel"), "{screen}");
+        assert!(screen.contains("↵ send · ⇧↵ new line · $ skills · esc cancel"), "{screen}");
         assert!(screen.lines().last().unwrap().contains("REPLY"));
         let (x, y) = find(&terminal, "add tests");
         terminal.backend_mut().assert_cursor_position((x + 9, y));
+    }
+
+    #[test]
+    fn the_reply_box_lists_skills_above_itself() {
+        let mut app = loaded(110, 30);
+        let skill = crate::discovery::Skill {
+            name: "deslop".into(),
+            description: "Remove slop".into(),
+            path: "/h/.agents/skills/deslop/SKILL.md".into(),
+        };
+        let inventory = crate::discovery::Inventory { skills: vec![skill], ..Default::default() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('r'));
+        for c in "now $".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        let terminal = render(&app, at(1));
+        let (_, menu_row) = find(&terminal, "▸ $deslop  Remove slop");
+        let (_, box_row) = find(&terminal, "Reply to");
+        assert_eq!(menu_row + 2, box_row, "the menu sits right above the box");
+    }
+
+    #[test]
+    fn a_reply_with_no_room_above_still_shows_the_skills_it_takes_keys_for() {
+        let mut app = loaded(110, 10);
+        let skill = crate::discovery::Skill {
+            name: "deslop".into(),
+            description: "Remove slop".into(),
+            path: "/h/.agents/skills/deslop/SKILL.md".into(),
+        };
+        let inventory = crate::discovery::Inventory { skills: vec![skill], ..Default::default() };
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory) }, at(1));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('j'));
+        key(&mut app, KeyCode::Char('r'));
+        // A tall reply on a short screen leaves no row above its box.
+        app.reply.as_mut().unwrap().editor.set(&"line\n".repeat(40));
+        for c in "now $".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        find(&render(&app, at(1)), "▸ $deslop");
     }
 
     #[test]
