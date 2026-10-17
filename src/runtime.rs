@@ -1,7 +1,7 @@
 //! Runs the inbox: owns the terminal, the link to Herdr and the agent's live
 //! session, and performs the app's effects.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -181,7 +181,8 @@ fn event_loop(terminal: &mut DefaultTerminal, setup: Setup) -> anyhow::Result<()
     app.update(Input::Speech(voice.status()), SystemTime::now());
     let mut app = app.with_credentials(credentials);
     let api = start_api(&config, &tx, &mut app);
-    let work = Work { state, config, voice, labels, tx: tx.clone(), api };
+    let pulls = start_pulls(tx.clone());
+    let work = Work { state, config, voice, labels, tx: tx.clone(), api, pulls };
     work.restore(&mut app);
     let mut session: Option<(u64, Session)> = None;
     let mut redraw = Redraw::new(Instant::now());
@@ -242,6 +243,34 @@ fn start_api(config: &Config, tx: &Sender<Input>, app: &mut App) -> Option<crate
             None
         }
     }
+}
+
+/// Reads the threads' pull requests with `gh`, one repository at a time:
+/// at once when the branches change, then every [`crate::pulls::INTERVAL`].
+fn start_pulls(tx: Sender<Input>) -> Sender<BTreeSet<crate::pulls::Key>> {
+    let (keys_tx, keys_rx) = mpsc::channel::<BTreeSet<crate::pulls::Key>>();
+    thread::spawn(move || {
+        let mut keys = BTreeSet::new();
+        loop {
+            match keys_rx.recv_timeout(crate::pulls::INTERVAL) {
+                // Only the latest set matters.
+                Ok(new) => keys = keys_rx.try_iter().last().unwrap_or(new),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+            let mut repos: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+            for (repo, branch) in &keys {
+                repos.entry(repo.as_str()).or_default().push(branch.clone());
+            }
+            for (repo, branches) in repos {
+                let result = crate::pulls::fetch(repo, &branches);
+                if tx.send(Input::Pulls { repo: repo.to_string(), result }).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    keys_tx
 }
 
 fn drain(rx: &Receiver<Input>) -> Vec<Input> {
@@ -385,6 +414,9 @@ fn perform(
             }
         }
         Effect::OpenUrl(url) => open_url(&url),
+        Effect::WatchPulls(keys) => {
+            let _ = work.pulls.send(keys);
+        }
         Effect::CheckUpdate => {
             let tx = tx.clone();
             thread::spawn(move || {
@@ -555,6 +587,8 @@ struct Work {
     tx: Sender<Input>,
     /// Listening for prompts, when `[api]` is enabled.
     api: Option<crate::api::Listener>,
+    /// Hands the pull request reader the branches to read.
+    pulls: Sender<BTreeSet<crate::pulls::Key>>,
 }
 
 impl Work {
