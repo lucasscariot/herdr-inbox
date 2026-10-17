@@ -4,6 +4,18 @@ All notable changes to Herdr Inbox. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.5.0...v1.6.0) (2026-10-17)
+
+
+### Features
+
+* **threads:** show each branch's pull request and what it waits for ([#52](https://github.com/lucasscariot/herdr-inbox/issues/52)) ([8414f5a](https://github.com/lucasscariot/herdr-inbox/commit/8414f5ade62c990608bf18b2654e27adb3170b7e))
+
+
+### Bug Fixes
+
+* **machines:** start the local server on launch and skip down machines ([#51](https://github.com/lucasscariot/herdr-inbox/issues/51)) ([8f767be](https://github.com/lucasscariot/herdr-inbox/commit/8f767be47eb74ee6fca758c5eecc4bfcc184305a))
+
 ## [1.5.0](https://github.com/lucasscariot/herdr-inbox/compare/v1.4.0...v1.5.0) (2026-10-16)
 
 
