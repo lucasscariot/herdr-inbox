@@ -487,6 +487,7 @@ impl Composer {
         let usable = hosts.iter().any(|h| !down(h));
         if self.machine.as_ref().is_none_or(|m| !hosts.contains(m) || (down(m) && usable)) {
             let kept = remembered.machine.clone().filter(|m| hosts.contains(m));
+            let before = self.machine.take();
             self.machine = kept
                 .clone()
                 .filter(|m| !down(m))
@@ -495,6 +496,12 @@ impl Composer {
                 .or(kept)
                 .or_else(|| hosts.first().cloned());
             self.harness = None;
+            if self.machine != before {
+                // What the last send said about the old machine ("Local is
+                // not reachable right now.") is stale once the composer
+                // has moved; the next send judges the new one.
+                self.error = None;
+            }
         }
         let Some(machine) = self.machine.clone() else {
             return;

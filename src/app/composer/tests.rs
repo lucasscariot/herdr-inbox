@@ -266,6 +266,19 @@ fn a_chosen_machine_that_goes_down_gives_way_to_a_live_one() {
 }
 
 #[test]
+fn moving_to_another_machine_clears_what_the_last_send_said_about_the_old_one() {
+    let mut world = world();
+    let mut composer = settled(&world);
+    composer.error = Some("Local is not reachable right now.".into());
+    composer.settle(&world.ctx());
+    assert_eq!(composer.error.as_deref(), Some("Local is not reachable right now."), "same machine: the error stays");
+    world.machines[0].connection = Connection::Lost("timed out".into());
+    composer.settle(&world.ctx());
+    assert_eq!(composer.machine.as_deref(), Some("studio"));
+    assert!(composer.error.is_none(), "the error was about local");
+}
+
+#[test]
 fn project_names_are_merged_across_machines_with_the_last_one_first() {
     let mut world = world();
     assert_eq!(world.ctx().project_names(), ["api", "cockpit"]);

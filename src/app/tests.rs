@@ -1508,6 +1508,7 @@ mod composer_flow {
         assert_eq!(app.composer.error.as_deref(), Some("Local is not reachable right now."));
         app.update(snapshot_on("studio", vec![]), at(4));
         assert_eq!(app.composer.machine.as_deref(), Some("studio"), "the studio answers again");
+        assert!(app.composer.error.is_none(), "the notice about local is stale on the studio");
         let effects = app.update(press(KeyCode::Enter), at(5));
         assert_eq!(launch_of(&effects).map(|r| r.machine_id.as_str()), Some("studio"));
     }
