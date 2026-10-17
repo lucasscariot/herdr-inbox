@@ -189,6 +189,8 @@ fn thread_metadata_is_neutral_and_only_the_visible_discussion_is_accented() {
 fn action_hints_use_neutral_theme_colours_without_a_server_or_after_a_takeover() {
     let palette = crate::theme::from_herdr_config("[theme.custom]\naccent = \"#ff9f0a\"\nsubtext0 = \"#abcdef\"");
     let mut app = App::new(80, 12, vec![]);
+    // A start that failed leaves the offer up.
+    app.server_started = true;
     app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
     let terminal = render_with_palette(&app, at(0), &palette);
     let buffer = terminal.backend().buffer();
@@ -453,6 +455,8 @@ fn an_empty_session_explains_where_threads_come_from() {
 #[test]
 fn without_a_server_the_screen_offers_to_start_one() {
     let mut app = App::new(80, 12, vec![]);
+    // A start that failed leaves the offer up.
+    app.server_started = true;
     app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
     insta::assert_snapshot!(text(&render(&app, at(0))));
 }
@@ -549,6 +553,8 @@ fn fleet(width: u16, height: u16) -> App {
             MachineInfo { id: "book".into(), label: "MacBook".into() },
         ],
     );
+    // A start that failed leaves the offer up.
+    app.server_started = true;
     app.update(Input::Connection { machine: LOCAL.into(), connection: Connection::NoServer }, at(0));
     app.update(
         snapshot("studio", vec![agent("w1:p1", AgentStatus::Blocked, "Ship the release", "/w/api", "codex")]),

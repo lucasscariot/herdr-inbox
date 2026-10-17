@@ -402,6 +402,9 @@ pub struct App {
     pub menu: Option<Menu>,
     pub credentials: crate::speech::backends::Credentials,
     pub updates: Updates,
+    /// A local server was started this run. Only the first missing server
+    /// is started without asking; after a failed start the user retries.
+    pub server_started: bool,
 }
 
 /// Whether the reply box fits in the terminal area: below this, it is not
@@ -508,6 +511,7 @@ impl App {
             menu: None,
             credentials: Default::default(),
             updates: Updates::default(),
+            server_started: false,
         }
     }
 
@@ -1239,27 +1243,36 @@ impl App {
             }
             self.notify("Herdr did not start. Try `herdr server` in a shell to see why.", NoticeKind::Error, now);
         }
+        if id == threads::LOCAL && connection == Connection::NoServer && !self.server_started {
+            // Inbox sends to the local machine by default, so it starts the
+            // server it needs instead of offering to.
+            self.start_local_server(now, effects);
+            return;
+        }
         let Some(machine) = self.machine_mut(id) else {
             return;
         };
         let lost = !matches!(connection, Connection::Live | Connection::Connecting);
         machine.connection = connection;
-        if !lost {
-            return;
+        if lost {
+            // The machine's threads and streams are stale.
+            machine.snapshot = None;
+            machine.checkouts.clear();
+            if let Some(open) = self.open.take_if(|o| o.machine == id) {
+                self.resume = Some(open.id);
+                effects.push(Effect::Detach);
+                self.focus = Focus::List;
+            }
+            self.rebuild();
+            if self.confirm_archive.as_deref().is_some_and(|c| self.thread(c).is_none()) {
+                self.confirm_archive = None;
+            }
+            self.fix_cursor();
         }
-        // The machine's threads and streams are stale.
-        machine.snapshot = None;
-        machine.checkouts.clear();
-        if let Some(open) = self.open.take_if(|o| o.machine == id) {
-            self.resume = Some(open.id);
-            effects.push(Effect::Detach);
-            self.focus = Focus::List;
-        }
-        self.rebuild();
-        if self.confirm_archive.as_deref().is_some_and(|c| self.thread(c).is_none()) {
-            self.confirm_archive = None;
-        }
-        self.fix_cursor();
+        // A composer on the machine that dropped moves to a live host, and
+        // one left on a down host moves to a machine that comes up, the
+        // same as after a manual switch.
+        self.with_composer(|composer, ctx| composer.settle(ctx));
     }
 
     fn on_snapshot(
@@ -1274,6 +1287,7 @@ impl App {
             return;
         };
         let first = machine.snapshot.is_none();
+        let was_live = machine.connection.is_live();
         for agent in &snapshot.agents {
             let thread = threads::thread_id(id, &agent.pane_id);
             if first || self.activity.knows(&thread) {
@@ -1293,6 +1307,11 @@ impl App {
             .collect();
         self.activity.retain(&live);
         self.rebuild();
+        if !was_live {
+            // A composer left on a down host, because every host was down,
+            // moves to this machine now that it answers.
+            self.with_composer(|composer, ctx| composer.settle(ctx));
+        }
 
         if let Some(open) = self.open.take_if(|o| !live.contains(&o.id)) {
             effects.push(Effect::Detach);
@@ -1530,6 +1549,7 @@ impl App {
         if let Some(local) = self.machine_mut(threads::LOCAL) {
             local.connection = Connection::Starting(now);
         }
+        self.server_started = true;
         self.notice = None;
         effects.push(Effect::StartServer);
     }
