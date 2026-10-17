@@ -346,7 +346,9 @@ anything that is not an installed skill (`$HOME`, `$5`) stays plain text.
 
 The composer remembers per project which machine, harness and workspace mode
 you used, and per machine and harness which model and thinking level, so
-switching hosts never carries over another host's model.
+switching hosts never carries over another host's model. A remembered machine
+that is down (no Herdr server, or unreachable) gives way to one that is up and
+has the project, so the composer never opens on a machine it cannot send to.
 
 If an agent stops at a startup dialog (a folder-trust or login prompt), the
 thread shows under **needs input**. Answer the dialog in the thread and the

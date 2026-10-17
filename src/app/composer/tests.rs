@@ -237,6 +237,35 @@ fn a_project_on_an_unreachable_machine_only_still_settles_there() {
 }
 
 #[test]
+fn a_remembered_machine_that_is_down_gives_way_to_a_live_one() {
+    let mut world = world();
+    remember(&mut world, "api", "local", "claude", "opus", "", "worktree");
+    world.machines[0].connection = Connection::NoServer;
+    let composer = settled(&world);
+    assert_eq!(composer.machine.as_deref(), Some("studio"), "the studio is live and has api");
+    assert_eq!(composer.requests(&world.ctx()).map(|_| ()).unwrap_err(), "Write a task first.");
+}
+
+#[test]
+fn a_remembered_machine_still_connecting_is_kept() {
+    let mut world = world();
+    remember(&mut world, "api", "local", "claude", "opus", "", "worktree");
+    world.machines[0].connection = Connection::Connecting;
+    assert_eq!(settled(&world).machine.as_deref(), Some("local"));
+}
+
+#[test]
+fn a_chosen_machine_that_goes_down_gives_way_to_a_live_one() {
+    let mut world = world();
+    let mut composer = settled(&world);
+    assert_eq!(composer.machine.as_deref(), Some("local"));
+    world.machines[0].connection = Connection::Lost("timed out".into());
+    composer.settle(&world.ctx());
+    assert_eq!(composer.machine.as_deref(), Some("studio"));
+    assert_eq!(composer.harness.as_deref(), Some("codex"), "the studio's only harness");
+}
+
+#[test]
 fn project_names_are_merged_across_machines_with_the_last_one_first() {
     let mut world = world();
     assert_eq!(world.ctx().project_names(), ["api", "cockpit"]);
