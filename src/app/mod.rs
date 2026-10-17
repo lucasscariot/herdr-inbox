@@ -414,6 +414,9 @@ pub struct App {
     pub pulls: HashMap<crate::pulls::Key, crate::pulls::PullRequest>,
     /// The branches whose pull requests the runtime is asked to read.
     pub pull_keys: BTreeSet<crate::pulls::Key>,
+    /// A local server was started this run. Only the first missing server
+    /// is started without asking; after a failed start the user retries.
+    pub server_started: bool,
 }
 
 /// Whether the reply box fits in the terminal area: below this, it is not
@@ -522,6 +525,7 @@ impl App {
             menu: None,
             credentials: Default::default(),
             updates: Updates::default(),
+            server_started: false,
         }
     }
 
@@ -1254,6 +1258,12 @@ impl App {
             }
             self.notify("Herdr did not start. Try `herdr server` in a shell to see why.", NoticeKind::Error, now);
         }
+        if id == threads::LOCAL && connection == Connection::NoServer && !self.server_started {
+            // Inbox sends to the local machine by default, so it starts the
+            // server it needs instead of offering to.
+            self.start_local_server(now, effects);
+            return;
+        }
         let Some(machine) = self.machine_mut(id) else {
             return;
         };
@@ -1586,6 +1596,7 @@ impl App {
         if let Some(local) = self.machine_mut(threads::LOCAL) {
             local.connection = Connection::Starting(now);
         }
+        self.server_started = true;
         self.notice = None;
         effects.push(Effect::StartServer);
     }

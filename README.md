@@ -53,8 +53,9 @@ herdr-inbox                  # the default Herdr session
 herdr-inbox --session work   # a named session
 ```
 
-If no Herdr server is running, Inbox offers to start one. Existing threads
-in that session appear automatically.
+If no Herdr server is running, Inbox starts one, so the local machine is
+ready before you write a task. If that start fails, Inbox says so and offers
+to try again. Existing threads in that session appear automatically.
 
 The installer checks the download's SHA-256 and puts `herdr-inbox` in
 `~/.local/bin`. Add that directory to your `PATH` if needed, or set
@@ -465,7 +466,8 @@ per host. On the remote side it needs `herdr` on the PATH of a login shell, or
 in `~/.local/bin`, `~/.cargo/bin`, Homebrew or mise. A machine that cannot be
 reached never blocks the others. Project and agent discovery on that machine
 also needs Python 3.9 or newer available as `python3`. Without a local Herdr
-server, the remote threads stay usable, and `s` starts the local server.
+server (one that failed to start), the remote threads stay usable, and `s`
+tries the local server again.
 
 ### Prompts from another device
 
