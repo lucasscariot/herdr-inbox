@@ -1253,7 +1253,7 @@ fn dictation_records_meters_and_types_the_transcript_into_the_composer() {
 }
 
 #[test]
-fn without_a_server_the_inbox_offers_to_start_one() {
+fn without_a_server_the_inbox_starts_one() {
     if !enabled() {
         return;
     }
@@ -1263,9 +1263,8 @@ fn without_a_server_the_inbox_offers_to_start_one() {
     }
     // No server yet; the Drop of this sandbox stops the one the inbox starts.
     let sandbox = Sandbox { root, server: Command::new("true").spawn().expect("true") };
-    let mut inbox = Inbox::start(&sandbox, 80, 12);
-    inbox.wait_for_text("No Herdr server is running.");
-    inbox.keys("\r");
+    let inbox = Inbox::start(&sandbox, 80, 12);
+    // No key pressed: the inbox starts the server on its own.
     inbox.wait_for_text("No agent threads yet.");
     assert!(sandbox.socket().exists());
 }

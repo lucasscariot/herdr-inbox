@@ -589,15 +589,26 @@ fn q_quits_from_the_list_and_ctrl_c_too() {
 }
 
 #[test]
-fn without_a_server_enter_starts_one_and_q_quits() {
+fn a_missing_server_is_started_without_asking() {
+    let mut app = app();
+    assert_eq!(app.update(connection(LOCAL, Connection::NoServer), at(0)), vec![Effect::StartServer]);
+    assert_eq!(app.local().connection, Connection::Starting(at(0)));
+    assert!(app.needs_server_screen(), "the starting screen shows while it boots");
+}
+
+#[test]
+fn after_a_failed_start_enter_retries_and_q_quits() {
     let mut app = app();
     app.update(connection(LOCAL, Connection::NoServer), at(0));
-    assert_eq!(app.update(press(KeyCode::Char('j')), at(0)), vec![]);
-    assert_eq!(app.update(press(KeyCode::Enter), at(0)), vec![Effect::StartServer]);
-    assert_eq!(app.local().connection, Connection::Starting(at(0)));
+    app.update(connection(LOCAL, Connection::NoServer), at(10));
+    assert_eq!(app.local().connection, Connection::NoServer, "no second start without asking");
+    assert_eq!(app.update(press(KeyCode::Char('j')), at(10)), vec![]);
+    assert_eq!(app.update(press(KeyCode::Enter), at(11)), vec![Effect::StartServer]);
+    assert_eq!(app.local().connection, Connection::Starting(at(11)));
     let mut app = self::app();
     app.update(connection(LOCAL, Connection::NoServer), at(0));
-    assert_eq!(app.update(press(KeyCode::Char('q')), at(0)), vec![Effect::Quit]);
+    app.update(connection(LOCAL, Connection::NoServer), at(10));
+    assert_eq!(app.update(press(KeyCode::Char('q')), at(10)), vec![Effect::Quit]);
 }
 
 #[test]
@@ -998,14 +1009,15 @@ fn a_previewed_ready_thread_stays_unseen_when_its_machine_reconnects() {
 #[test]
 fn without_a_local_server_remote_threads_stay_usable_and_s_starts_one() {
     let mut app = App::new(120, 40, vec![studio()]);
-    app.update(connection(LOCAL, Connection::NoServer), at(0));
-    app.update(snapshot_on("studio", vec![agent("w1:p1", AgentStatus::Working, "Studio build")]), at(0));
+    assert_eq!(app.update(connection(LOCAL, Connection::NoServer), at(0)), vec![Effect::StartServer]);
+    app.update(connection(LOCAL, Connection::NoServer), at(10));
+    app.update(snapshot_on("studio", vec![agent("w1:p1", AgentStatus::Working, "Studio build")]), at(10));
     assert!(!app.needs_server_screen());
     assert_eq!(app.threads.len(), 1);
-    assert_eq!(app.update(press(KeyCode::Char('j')), at(1)), vec![], "the list works");
-    assert_eq!(app.update(press(KeyCode::Char('s')), at(1)), vec![Effect::StartServer]);
-    assert_eq!(app.local().connection, Connection::Starting(at(1)));
-    assert!(app.update(press(KeyCode::Char('s')), at(2)).is_empty(), "s only starts a missing server");
+    assert_eq!(app.update(press(KeyCode::Char('j')), at(11)), vec![], "the list works");
+    assert_eq!(app.update(press(KeyCode::Char('s')), at(11)), vec![Effect::StartServer], "s retries a failed start");
+    assert_eq!(app.local().connection, Connection::Starting(at(11)));
+    assert!(app.update(press(KeyCode::Char('s')), at(12)).is_empty(), "s only starts a missing server");
 }
 
 #[test]
