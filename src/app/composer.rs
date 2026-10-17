@@ -478,15 +478,30 @@ impl Composer {
         };
         let remembered = ctx.preferences.project(&project);
         let hosts: Vec<String> = ctx.machines_with(&project).iter().map(|m| m.id.clone()).collect();
-        if self.machine.as_ref().is_none_or(|m| !hosts.contains(m)) {
-            let live = |id: &String| ctx.machine(id).is_some_and(|m| m.connection.is_live());
-            self.machine = remembered
-                .machine
+        let live = |id: &String| ctx.machine(id).is_some_and(|m| m.connection.is_live());
+        // Down, not merely connecting: a machine still connecting may be the
+        // remembered one coming up, and is kept.
+        let down = |id: &String| {
+            ctx.machine(id).is_none_or(|m| matches!(m.connection, Connection::NoServer | Connection::Lost(_)))
+        };
+        let usable = hosts.iter().any(|h| !down(h));
+        if self.machine.as_ref().is_none_or(|m| !hosts.contains(m) || (down(m) && usable)) {
+            let kept = remembered.machine.clone().filter(|m| hosts.contains(m));
+            let before = self.machine.take();
+            self.machine = kept
                 .clone()
-                .filter(|m| hosts.contains(m))
+                .filter(|m| !down(m))
                 .or_else(|| hosts.iter().find(|h| live(h)).cloned())
+                .or_else(|| hosts.iter().find(|h| !down(h)).cloned())
+                .or(kept)
                 .or_else(|| hosts.first().cloned());
             self.harness = None;
+            if self.machine != before {
+                // What the last send said about the old machine ("Local is
+                // not reachable right now.") is stale once the composer
+                // has moved; the next send judges the new one.
+                self.error = None;
+            }
         }
         let Some(machine) = self.machine.clone() else {
             return;

@@ -53,8 +53,9 @@ herdr-inbox                  # the default Herdr session
 herdr-inbox --session work   # a named session
 ```
 
-If no Herdr server is running, Inbox offers to start one. Existing threads
-in that session appear automatically.
+If no Herdr server is running, Inbox starts one, so the local machine is
+ready before you write a task. If that start fails, Inbox says so and offers
+to try again. Existing threads in that session appear automatically.
 
 The installer checks the download's SHA-256 and puts `herdr-inbox` in
 `~/.local/bin`. Add that directory to your `PATH` if needed, or set
@@ -346,7 +347,9 @@ anything that is not an installed skill (`$HOME`, `$5`) stays plain text.
 
 The composer remembers per project which machine, harness and workspace mode
 you used, and per machine and harness which model and thinking level, so
-switching hosts never carries over another host's model.
+switching hosts never carries over another host's model. A remembered machine
+that is down (no Herdr server, or unreachable) gives way to one that is up and
+has the project, so the composer never opens on a machine it cannot send to.
 
 If an agent stops at a startup dialog (a folder-trust or login prompt), the
 thread shows under **needs input**. Answer the dialog in the thread and the
@@ -463,7 +466,8 @@ per host. On the remote side it needs `herdr` on the PATH of a login shell, or
 in `~/.local/bin`, `~/.cargo/bin`, Homebrew or mise. A machine that cannot be
 reached never blocks the others. Project and agent discovery on that machine
 also needs Python 3.9 or newer available as `python3`. Without a local Herdr
-server, the remote threads stay usable, and `s` starts the local server.
+server (one that failed to start), the remote threads stay usable, and `s`
+tries the local server again.
 
 ### Prompts from another device
 

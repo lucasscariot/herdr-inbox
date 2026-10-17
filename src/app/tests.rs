@@ -589,15 +589,26 @@ fn q_quits_from_the_list_and_ctrl_c_too() {
 }
 
 #[test]
-fn without_a_server_enter_starts_one_and_q_quits() {
+fn a_missing_server_is_started_without_asking() {
+    let mut app = app();
+    assert_eq!(app.update(connection(LOCAL, Connection::NoServer), at(0)), vec![Effect::StartServer]);
+    assert_eq!(app.local().connection, Connection::Starting(at(0)));
+    assert!(app.needs_server_screen(), "the starting screen shows while it boots");
+}
+
+#[test]
+fn after_a_failed_start_enter_retries_and_q_quits() {
     let mut app = app();
     app.update(connection(LOCAL, Connection::NoServer), at(0));
-    assert_eq!(app.update(press(KeyCode::Char('j')), at(0)), vec![]);
-    assert_eq!(app.update(press(KeyCode::Enter), at(0)), vec![Effect::StartServer]);
-    assert_eq!(app.local().connection, Connection::Starting(at(0)));
+    app.update(connection(LOCAL, Connection::NoServer), at(10));
+    assert_eq!(app.local().connection, Connection::NoServer, "no second start without asking");
+    assert_eq!(app.update(press(KeyCode::Char('j')), at(10)), vec![]);
+    assert_eq!(app.update(press(KeyCode::Enter), at(11)), vec![Effect::StartServer]);
+    assert_eq!(app.local().connection, Connection::Starting(at(11)));
     let mut app = self::app();
     app.update(connection(LOCAL, Connection::NoServer), at(0));
-    assert_eq!(app.update(press(KeyCode::Char('q')), at(0)), vec![Effect::Quit]);
+    app.update(connection(LOCAL, Connection::NoServer), at(10));
+    assert_eq!(app.update(press(KeyCode::Char('q')), at(10)), vec![Effect::Quit]);
 }
 
 #[test]
@@ -998,14 +1009,15 @@ fn a_previewed_ready_thread_stays_unseen_when_its_machine_reconnects() {
 #[test]
 fn without_a_local_server_remote_threads_stay_usable_and_s_starts_one() {
     let mut app = App::new(120, 40, vec![studio()]);
-    app.update(connection(LOCAL, Connection::NoServer), at(0));
-    app.update(snapshot_on("studio", vec![agent("w1:p1", AgentStatus::Working, "Studio build")]), at(0));
+    assert_eq!(app.update(connection(LOCAL, Connection::NoServer), at(0)), vec![Effect::StartServer]);
+    app.update(connection(LOCAL, Connection::NoServer), at(10));
+    app.update(snapshot_on("studio", vec![agent("w1:p1", AgentStatus::Working, "Studio build")]), at(10));
     assert!(!app.needs_server_screen());
     assert_eq!(app.threads.len(), 1);
-    assert_eq!(app.update(press(KeyCode::Char('j')), at(1)), vec![], "the list works");
-    assert_eq!(app.update(press(KeyCode::Char('s')), at(1)), vec![Effect::StartServer]);
-    assert_eq!(app.local().connection, Connection::Starting(at(1)));
-    assert!(app.update(press(KeyCode::Char('s')), at(2)).is_empty(), "s only starts a missing server");
+    assert_eq!(app.update(press(KeyCode::Char('j')), at(11)), vec![], "the list works");
+    assert_eq!(app.update(press(KeyCode::Char('s')), at(11)), vec![Effect::StartServer], "s retries a failed start");
+    assert_eq!(app.local().connection, Connection::Starting(at(11)));
+    assert!(app.update(press(KeyCode::Char('s')), at(12)).is_empty(), "s only starts a missing server");
 }
 
 #[test]
@@ -1458,6 +1470,47 @@ mod composer_flow {
         assert_eq!(app.composer.project.as_deref(), Some("cockpit"));
         assert_eq!(app.composer.machine.as_deref(), Some(LOCAL));
         assert_eq!(app.composer.harness.as_deref(), Some("claude"));
+    }
+
+    /// Local and the studio both live with cockpit and no threads, so no
+    /// open thread is lost with a machine; the composer is open on local.
+    fn composing_on_a_fleet() -> App {
+        let mut app = App::new(120, 40, vec![studio()]);
+        app.update(snapshot(vec![]), at(0));
+        app.update(snapshot_on("studio", vec![]), at(0));
+        app.update(press(KeyCode::Char('n')), at(1));
+        app.update(Input::Inventory { machine: LOCAL.into(), result: Ok(inventory()) }, at(1));
+        app.update(Input::Inventory { machine: "studio".into(), result: Ok(inventory()) }, at(1));
+        assert_eq!(app.composer.machine.as_deref(), Some(LOCAL));
+        app
+    }
+
+    #[test]
+    fn a_composer_on_a_machine_that_drops_moves_to_a_live_one_and_sends_there() {
+        let mut app = composing_on_a_fleet();
+        type_text(&mut app, "Fix login");
+        app.update(connection(LOCAL, Connection::Lost("socket closed".into())), at(2));
+        assert_eq!(app.composer.machine.as_deref(), Some("studio"));
+        assert_eq!(app.composer.task.text(), "Fix login", "the task is kept");
+        let effects = app.update(press(KeyCode::Enter), at(3));
+        assert_eq!(launch_of(&effects).map(|r| r.machine_id.as_str()), Some("studio"));
+        assert!(app.composer.error.is_none());
+    }
+
+    #[test]
+    fn a_machine_coming_back_rescues_a_composer_left_with_no_live_host() {
+        let mut app = composing_on_a_fleet();
+        app.update(connection("studio", Connection::Lost("timed out".into())), at(2));
+        app.update(connection(LOCAL, Connection::Lost("socket closed".into())), at(2));
+        assert_eq!(app.composer.machine.as_deref(), Some(LOCAL), "every host is down: the first stays");
+        type_text(&mut app, "Fix login");
+        assert!(launch_of(&app.update(press(KeyCode::Enter), at(3))).is_none());
+        assert_eq!(app.composer.error.as_deref(), Some("Local is not reachable right now."));
+        app.update(snapshot_on("studio", vec![]), at(4));
+        assert_eq!(app.composer.machine.as_deref(), Some("studio"), "the studio answers again");
+        assert!(app.composer.error.is_none(), "the notice about local is stale on the studio");
+        let effects = app.update(press(KeyCode::Enter), at(5));
+        assert_eq!(launch_of(&effects).map(|r| r.machine_id.as_str()), Some("studio"));
     }
 
     #[test]
