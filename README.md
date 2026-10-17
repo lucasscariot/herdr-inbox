@@ -150,10 +150,12 @@ scroll thumb show where you are in the list.
 
 When a thread's branch has a pull request on GitHub, the row shows the pull
 request instead of the branch, with what it waits for: `#49 ready to merge` in
-green; `conflicts` or `checks failed` in red; `changes requested` or
-`2 comments` (unresolved review threads) or `behind base` in yellow;
-`checks running`, `awaiting review`, `draft` or `checking` quietly; `merged`
-and `closed` once it is done. `agent fixing` means a PR monitor
+green; `conflicts` or `checks failed` in red; `changes requested`,
+`2 comments` (unresolved review threads, all of them even past GitHub's first
+page), `behind base` or `blocked` (a rule GitHub enforces, such as a required
+deployment or a check that never ran) in yellow; `checks running`,
+`awaiting review`, `draft` or `checking` quietly; `merged` and `closed` once
+it is done. `agent fixing` means a PR monitor
 (`pr_watch.py`, which keeps its state under
 `$XDG_STATE_HOME/personal-skills/pr-watch/`) is running its background agent
 on it right now. Inbox reads them with your local `gh` login, one
