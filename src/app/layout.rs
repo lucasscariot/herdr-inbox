@@ -222,6 +222,8 @@ mod tests {
             title: id.into(),
             project: "p".into(),
             branch: None,
+            github: None,
+            pull: None,
             harness: "Claude".into(),
             kind: None,
             note: None,

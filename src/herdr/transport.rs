@@ -290,12 +290,13 @@ impl BufRead for KeepAlive {
     }
 }
 
-/// Reads repository and branch for many paths with one SSH round trip.
+/// Reads repository, branch and origin for many paths with one SSH round trip.
 const PROBE: &str = r#"for p in "$@"; do
   root=$(git -C "$p" rev-parse --show-toplevel 2>/dev/null) || continue
   common=$(cd "$p" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P) || continue
   branch=$(git -C "$p" symbolic-ref --short -q HEAD 2>/dev/null || git -C "$p" rev-parse --short HEAD 2>/dev/null)
-  printf '%s\t%s\t%s\t%s\n' "$p" "$root" "$common" "$branch"
+  origin=$(git -C "$p" config --get remote.origin.url 2>/dev/null)
+  printf '%s\t%s\t%s\t%s\t%s\n' "$p" "$root" "$common" "$branch" "$origin"
 done
 "#;
 
@@ -326,7 +327,7 @@ fn ssh_checkouts(ssh: &SshHerdr, paths: &[String]) -> Result<HashMap<String, Che
 
 /// Runs a command to completion and returns its stdout, killing it after
 /// `timeout`. A failure carries the last stderr line.
-fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, ApiError> {
+pub(crate) fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, ApiError> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -353,7 +354,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<String, A
     Ok(output)
 }
 
-/// Parses `path<TAB>root<TAB>common-dir<TAB>branch` lines.
+/// Parses `path<TAB>root<TAB>common-dir<TAB>branch[<TAB>origin-url]` lines.
 pub fn parse_probe(output: &str) -> HashMap<String, Checkout> {
     output
         .lines()
@@ -362,7 +363,8 @@ pub fn parse_probe(output: &str) -> HashMap<String, Checkout> {
             let (path, root, common, branch) = (fields.next()?, fields.next()?, fields.next()?, fields.next()?);
             let repo = git::repo_name(std::path::Path::new(common))?;
             let branch = Some(branch.trim()).filter(|b| !b.is_empty() && *b != "HEAD").map(str::to_string);
-            Some((path.to_string(), Checkout { repo, branch, root: PathBuf::from(root) }))
+            let github = fields.next().and_then(|url| git::github_repo(url.trim()));
+            Some((path.to_string(), Checkout { repo, branch, root: PathBuf::from(root), github }))
         })
         .collect()
 }

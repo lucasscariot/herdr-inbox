@@ -3825,3 +3825,97 @@ mod pasted_images {
         assert_eq!(effects, vec![Effect::Send { generation: 1, control: Control::Input(vec![0x16]) }]);
     }
 }
+
+mod pull_requests {
+    use super::*;
+    use crate::git::Checkout;
+    use crate::pulls::{PullRequest, PullState};
+
+    fn on(pane: &str, cwd: &str) -> AgentInfo {
+        AgentInfo { cwd: Some(cwd.into()), ..agent(pane, AgentStatus::Working, pane) }
+    }
+
+    fn checkout(github: Option<&str>, branch: &str) -> Checkout {
+        Checkout {
+            repo: "inbox".into(),
+            branch: Some(branch.into()),
+            root: "/w".into(),
+            github: github.map(Into::into),
+        }
+    }
+
+    fn with_checkouts(checkouts: &[(&str, Checkout)]) -> Input {
+        Input::Snapshot {
+            machine: LOCAL.into(),
+            snapshot: SessionSnapshot {
+                agents: vec![on("w1:p1", "/w/fix"), on("w2:p1", "/w/main"), on("w3:p1", "/w/gitlab")],
+                ..SessionSnapshot::default()
+            },
+            checkouts: checkouts.iter().map(|(path, c)| (path.to_string(), c.clone())).collect(),
+        }
+    }
+
+    fn pull(number: u64, state: PullState) -> PullRequest {
+        PullRequest { number, url: format!("https://github.com/lucas/inbox/pull/{number}"), state }
+    }
+
+    fn checkouts() -> Vec<(&'static str, Checkout)> {
+        vec![
+            ("/w/fix", checkout(Some("lucas/inbox"), "fix")),
+            ("/w/main", checkout(Some("lucas/inbox"), "main")),
+            ("/w/gitlab", checkout(None, "other")),
+        ]
+    }
+
+    fn watched(effects: &[Effect]) -> Option<Vec<(&str, &str)>> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::WatchPulls(keys) => Some(keys.iter().map(|(r, b)| (r.as_str(), b.as_str())).collect()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn branches_on_github_are_watched_once_per_change() {
+        let mut app = app();
+        let effects = app.update(with_checkouts(&checkouts()), at(0));
+        assert_eq!(watched(&effects), Some(vec![("lucas/inbox", "fix"), ("lucas/inbox", "main")]));
+        let effects = app.update(with_checkouts(&checkouts()), at(1));
+        assert_eq!(watched(&effects), None, "an unchanged set is not asked for again");
+        let effects = app.update(with_checkouts(&checkouts()[1..]), at(2));
+        assert_eq!(watched(&effects), Some(vec![("lucas/inbox", "main")]));
+    }
+
+    #[test]
+    fn a_thread_shows_its_branch_pull_request_and_a_failed_read_keeps_it() {
+        let mut app = app();
+        app.update(with_checkouts(&checkouts()), at(0));
+        let found = HashMap::from([("fix".to_string(), pull(49, PullState::Ready))]);
+        app.update(Input::Pulls { repo: "lucas/inbox".into(), result: Ok(found) }, at(1));
+        let pull_of = |app: &App, pane: &str| app.thread(&l(pane)).and_then(|t| t.pull.clone());
+        assert_eq!(pull_of(&app, "w1:p1"), Some(pull(49, PullState::Ready)));
+        assert_eq!(pull_of(&app, "w2:p1"), None, "main has no pull request");
+        assert_eq!(pull_of(&app, "w3:p1"), None);
+        app.update(Input::Pulls { repo: "lucas/inbox".into(), result: Err("offline".into()) }, at(2));
+        assert_eq!(pull_of(&app, "w1:p1"), Some(pull(49, PullState::Ready)), "the last answer stays");
+        app.update(with_checkouts(&checkouts()), at(3));
+        assert_eq!(pull_of(&app, "w1:p1"), Some(pull(49, PullState::Ready)), "and survives snapshots");
+        let merged = HashMap::from([("fix".to_string(), pull(49, PullState::Merged))]);
+        app.update(Input::Pulls { repo: "lucas/inbox".into(), result: Ok(merged) }, at(4));
+        assert_eq!(pull_of(&app, "w1:p1"), Some(pull(49, PullState::Merged)));
+        app.update(Input::Pulls { repo: "lucas/inbox".into(), result: Ok(HashMap::new()) }, at(5));
+        assert_eq!(pull_of(&app, "w1:p1"), None, "a pull request GitHub no longer reports is gone");
+    }
+
+    #[test]
+    fn the_filter_finds_pull_requests_by_number_and_state() {
+        let mut app = app();
+        app.update(with_checkouts(&checkouts()), at(0));
+        let found = HashMap::from([("fix".to_string(), pull(49, PullState::Ready))]);
+        app.update(Input::Pulls { repo: "lucas/inbox".into(), result: Ok(found) }, at(1));
+        for query in ["ready to merge", "#49"] {
+            app.filter = query.into();
+            app.rebuild_now();
+            assert_eq!(ids(&app), ["w1:p1"], "{query}");
+        }
+    }
+}

@@ -43,7 +43,8 @@ public interfaces.
 | `threads` | Turns a snapshot into labelled, grouped, sorted threads; tracks when statuses changed and which finished threads the user has seen. |
 | `screen` | A vt100 emulator fed with Herdr's frames, drawn into ratatui cells. |
 | `keys` | Encodes key presses as xterm bytes for the pane, honouring its cursor-key and bracketed-paste modes. |
-| `git` | Reads repository name and branch from `.git` files, without running git. |
+| `git` | Reads repository name, branch and the GitHub `owner/name` of `origin` from `.git` files, without running git. |
+| `pulls` | Pull requests for the threads' branches: one `gh api graphql` query per repository, each branch under its own alias, keeping only PRs opened from that repository, plus one query per further page of review threads when an open PR has more than 100. Classifies each into the one thing it waits for, the most pressing first (merged or closed, then a PR monitor's agent repairing it, conflicts, failing checks, requested changes, unresolved review threads, running checks, behind base, awaiting review, blocked by a GitHub rule, ready to merge). The monitor counts only when its `status.json` says `repairing` and its pid is alive. |
 | `hold` | Telling a held space bar from typed spaces by key-repeat timing. Pure. |
 | `orbit` | The orbit logo: the fleet as rings and beads, rendered to Braille cells. Pure, a function of the time. |
 | `theme` | Herdr's built-in palettes and `config.toml` overrides. |
@@ -210,6 +211,13 @@ assert the compiled version separately from the version-independent layout.
   by name, so a repository whose checkout shares its name with another project
   is refused rather than launched in the wrong one. Without `[api] enabled`
   and both an origin and a login, nothing listens.
+- **Pull requests are read where `gh` is logged in.** The link reads each
+  checkout's `origin` with its branch (the remote git probe prints the URL
+  too); the app asks the runtime for the set of `(owner/name, branch)` pairs
+  whenever it changes, and one worker reads them with the local `gh` at once
+  and every minute after, whichever machine the thread is on. A failed read
+  keeps the last answer and says nothing: the label is a hint, not a status
+  the inbox depends on.
 - **Discovery, launches and self-updates never block the UI.** They run on
   worker threads and report back as inputs.
 - **Usage comes from the CLIs' own channels.** Codex is asked through its

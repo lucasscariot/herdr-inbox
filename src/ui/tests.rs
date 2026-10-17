@@ -47,7 +47,7 @@ fn checkouts() -> HashMap<String, Checkout> {
     ]
     .into_iter()
     .map(|(path, repo, branch)| {
-        (path.to_string(), Checkout { repo: repo.into(), branch: Some(branch.into()), root: path.into() })
+        (path.to_string(), Checkout { repo: repo.into(), branch: Some(branch.into()), root: path.into(), github: None })
     })
     .collect()
 }
@@ -1689,4 +1689,46 @@ mod space_hold_hints {
             assert!(screen.contains(hint) && !screen.contains(absent), "{screen}");
         }
     }
+}
+
+#[test]
+fn a_branch_with_a_pull_request_shows_its_number_and_what_it_waits_for() {
+    use crate::pulls::{PullRequest, PullState};
+    let mut app = App::new(110, 30, vec![]);
+    let mut checkouts = checkouts();
+    for checkout in checkouts.values_mut() {
+        checkout.github = Some(format!("lucas/{}", checkout.repo));
+    }
+    let agents = vec![
+        agent("w1:p1", AgentStatus::Blocked, "Fix the login redirect", "/w/cockpit", "claude"),
+        agent("w2:p1", AgentStatus::Working, "Add invoice export", "/w/api", "codex"),
+        agent("w3:p1", AgentStatus::Done, "Review navigation", "/w/site", "opencode"),
+    ];
+    app.update(
+        Input::Snapshot {
+            machine: LOCAL.into(),
+            snapshot: SessionSnapshot { agents, ..SessionSnapshot::default() },
+            checkouts,
+        },
+        at(0),
+    );
+    let pull = |number, state| PullRequest { number, url: String::new(), state };
+    for (repo, branch, pull) in [
+        ("lucas/cockpit", "fix-login-redirect", pull(49, PullState::Ready)),
+        ("lucas/site", "feat/a-very-long-branch-name-that-will-not-fit", pull(7, PullState::ChecksFailed)),
+    ] {
+        let result = Ok(HashMap::from([(branch.to_string(), pull)]));
+        app.update(Input::Pulls { repo: repo.into(), result }, at(0));
+    }
+    let terminal = render(&app, at(0));
+    let screen = text(&terminal);
+    assert!(screen.contains("Claude · #49 ready to merge"), "{screen}");
+    assert!(screen.contains("OpenCode · #7 checks failed"), "{screen}");
+    assert!(screen.contains("Codex · ⎇ main"), "a branch without a pull request keeps its name\n{screen}");
+    assert!(!screen.contains("⎇ fix-login-redirect"), "{screen}");
+    let palette = Palette::default();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[find(&terminal, "#49")].fg, palette.subtext0);
+    assert_eq!(buffer[find(&terminal, "ready to merge")].fg, palette.green);
+    assert_eq!(buffer[find(&terminal, "checks failed")].fg, palette.red);
 }

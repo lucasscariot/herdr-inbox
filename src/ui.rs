@@ -702,13 +702,33 @@ fn thread_line(buf: &mut Buffer, area: Rect, thread: &Thread, row: ThreadRow, pa
                 left.push((" · ".into(), dim));
                 left.push((machine.clone(), Style::new().fg(palette.subtext0)));
             }
-            if let Some(branch) = &thread.branch {
+            // A branch with a pull request is shown as the pull request,
+            // with what it waits for: the branch name is in its title.
+            if let Some(pull) = &thread.pull {
+                left.push((" · ".into(), dim));
+                left.push((format!("#{} ", pull.number), Style::new().fg(palette.subtext0)));
+                left.push((pull.state.label(), pull_style(pull.state.tone(), palette)));
+            } else if let Some(branch) = &thread.branch {
                 left.push((" · ".into(), dim));
                 left.push((format!("⎇ {branch}"), Style::new().fg(palette.subtext0)));
             }
             let right = thread.changed_at.map(|changed| vec![(age(changed, now), dim)]).unwrap_or_default();
             split_line(buf, x, area.y, width, &left, &right);
         }
+    }
+}
+
+/// A pull request's state: green when it only waits to be merged, red when
+/// broken, yellow when it has something to read, quiet when nothing is due.
+fn pull_style(tone: crate::pulls::Tone, palette: &Palette) -> Style {
+    use crate::pulls::Tone;
+    match tone {
+        Tone::Good => Style::new().fg(palette.green).add_modifier(Modifier::BOLD),
+        Tone::Attention => Style::new().fg(palette.yellow),
+        Tone::Bad => Style::new().fg(palette.red),
+        Tone::Busy => Style::new().fg(palette.blue),
+        Tone::Merged => Style::new().fg(palette.mauve),
+        Tone::Quiet => Style::new().fg(palette.overlay0),
     }
 }
 

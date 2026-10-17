@@ -66,6 +66,10 @@ pub struct Thread {
     pub title: String,
     pub project: String,
     pub branch: Option<String>,
+    /// `owner/name` of the checkout's `origin` on GitHub.
+    pub github: Option<String>,
+    /// The branch's pull request, set by the app from what GitHub said.
+    pub pull: Option<crate::pulls::PullRequest>,
     pub harness: String,
     /// Herdr's agent kind (`claude`, `codex`), when known.
     pub kind: Option<String>,
@@ -239,6 +243,8 @@ fn thread(
         status: activity.effective(&id, agent.agent_status),
         changed_at: activity.changed_at(&id),
         branch: found.and_then(|c| c.branch.clone()),
+        github: found.and_then(|c| c.github.clone()),
+        pull: None,
         machine_id: source.machine_id.to_string(),
         machine_label: source.machine_label.map(str::to_string),
         kind: agent.agent.clone().filter(|k| !k.trim().is_empty()),
@@ -411,7 +417,12 @@ mod tests {
             .map(|(path, repo, branch)| {
                 (
                     path.to_string(),
-                    Checkout { repo: repo.to_string(), branch: Some(branch.to_string()), root: path.into() },
+                    Checkout {
+                        repo: repo.to_string(),
+                        branch: Some(branch.to_string()),
+                        root: path.into(),
+                        github: None,
+                    },
                 )
             })
             .collect()
@@ -618,6 +629,8 @@ mod tests {
             title: format!("title {id}"),
             project: "p".into(),
             branch: None,
+            github: None,
+            pull: None,
             harness: "Claude".into(),
             kind: Some("claude".into()),
             note: None,
