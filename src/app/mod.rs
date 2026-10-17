@@ -9,7 +9,7 @@ mod input;
 mod layout;
 mod updates;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 use crate::hold::Step;
@@ -232,6 +232,8 @@ pub enum Effect {
     },
     InstallWhisper,
     SaveCredentials(crate::speech::backends::Credentials),
+    /// Read these branches' pull requests now and every minute after.
+    WatchPulls(BTreeSet<crate::pulls::Key>),
     /// The answer to a prompt from the API, for the request waiting on it.
     ApiReply {
         id: u64,
@@ -320,6 +322,12 @@ pub enum Input {
     },
     UpdateChecked(Result<crate::update::Release, String>),
     UpdateInstalled(Result<crate::update::Installed, String>),
+    /// One repository's pull requests by branch. A failed read keeps the
+    /// last ones known.
+    Pulls {
+        repo: String,
+        result: Result<HashMap<String, crate::pulls::PullRequest>, String>,
+    },
     /// Something in the background failed in a way the user should know.
     Error(String),
     /// A prompt from the API, to launch like a task sent from the composer.
@@ -402,6 +410,10 @@ pub struct App {
     pub menu: Option<Menu>,
     pub credentials: crate::speech::backends::Credentials,
     pub updates: Updates,
+    /// Pull requests by GitHub repository and branch, as last read.
+    pub pulls: HashMap<crate::pulls::Key, crate::pulls::PullRequest>,
+    /// The branches whose pull requests the runtime is asked to read.
+    pub pull_keys: BTreeSet<crate::pulls::Key>,
 }
 
 /// Whether the reply box fits in the terminal area: below this, it is not
@@ -488,6 +500,8 @@ impl App {
             discovery_errors: HashMap::new(),
             usage: HashMap::new(),
             usage_reading: HashSet::new(),
+            pulls: HashMap::new(),
+            pull_keys: BTreeSet::new(),
             usage_asked: HashSet::new(),
             usage_failed: HashMap::new(),
             api_held: Vec::new(),
@@ -601,6 +615,7 @@ impl App {
                 self.on_usage(&machine, result, now);
                 api::release(self, now, &mut effects);
             }
+            Input::Pulls { repo, result } => self.on_pulls(&repo, result),
             Input::LaunchProgress { id, text } => self.set_launch(&id, LaunchState::Running(text)),
             Input::LaunchFinished { id, result } => self.on_launch_finished(&id, result, now, &mut effects),
             Input::Resumed { result } => self.on_resumed(result, now),
@@ -1293,6 +1308,7 @@ impl App {
             .collect();
         self.activity.retain(&live);
         self.rebuild();
+        self.watch_pulls(effects);
 
         if let Some(open) = self.open.take_if(|o| !live.contains(&o.id)) {
             effects.push(Effect::Detach);
@@ -1353,6 +1369,30 @@ impl App {
         self.rebuild();
     }
 
+    /// Asks for the pull requests of every branch on GitHub that a thread
+    /// is on, whenever that set changes.
+    fn watch_pulls(&mut self, effects: &mut Vec<Effect>) {
+        let keys: BTreeSet<crate::pulls::Key> = self
+            .machines
+            .iter()
+            .flat_map(|m| m.checkouts.values())
+            .filter_map(|c| Some((c.github.clone()?, c.branch.clone()?)))
+            .collect();
+        if keys != self.pull_keys {
+            self.pull_keys = keys.clone();
+            effects.push(Effect::WatchPulls(keys));
+        }
+    }
+
+    fn on_pulls(&mut self, repo: &str, result: Result<HashMap<String, crate::pulls::PullRequest>, String>) {
+        // Pull requests are a hint on the rows: a failed read is not worth
+        // a notice, and the last ones known stay.
+        let Ok(found) = result else { return };
+        self.pulls.retain(|(r, _), _| r != repo);
+        self.pulls.extend(found.into_iter().map(|(branch, pull)| ((repo.to_string(), branch), pull)));
+        self.rebuild();
+    }
+
     fn after_threads_changed(&mut self, effects: &mut Vec<Effect>) {
         self.resume_ready(effects);
     }
@@ -1379,10 +1419,12 @@ impl App {
             // Each field on its own: letters scattered across a title and a
             // branch name are not a match.
             threads.retain(|t| {
+                let pull = t.pull.as_ref().map(crate::pulls::PullRequest::label);
                 let fields = [
                     Some(t.title.as_str()),
                     Some(t.project.as_str()),
                     t.branch.as_deref(),
+                    pull.as_deref(),
                     Some(t.harness.as_str()),
                     t.machine_label.as_deref(),
                 ];
@@ -1397,6 +1439,9 @@ impl App {
     fn annotate(&self, threads: &mut Vec<Thread>) {
         let mut covered = HashSet::new();
         for thread in threads.iter_mut() {
+            if let (Some(repo), Some(branch)) = (&thread.github, &thread.branch) {
+                thread.pull = self.pulls.get(&(repo.clone(), branch.clone())).cloned();
+            }
             if let Some(record) = self.record_for(thread) {
                 covered.insert(record.id.clone());
                 thread.note = match record.stage {
@@ -1425,6 +1470,8 @@ impl App {
                 branch: Some(record.branch.clone()).filter(|b| !b.is_empty()),
                 harness: threads::harness_label_for(&record.harness),
                 kind: Some(record.harness.clone()),
+                github: None,
+                pull: None,
                 note: Some(threads::LaunchNote::Failed(first_line(record))),
                 changed_at: Some(std::time::UNIX_EPOCH + Duration::from_secs(record.created_at)),
                 change_seq: 0,

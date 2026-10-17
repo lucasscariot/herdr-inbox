@@ -654,6 +654,61 @@ fn the_inbox_shows_threads_drives_an_agent_and_archives() {
 }
 
 #[test]
+fn threads_show_their_branch_pull_request_read_with_gh() {
+    if !enabled() {
+        return;
+    }
+    let sandbox = Sandbox::start();
+    let root = sandbox.root.path();
+    let mut panes = Vec::new();
+    for (name, branch, title) in [("cockpit", "fix-login", "Fix the login loop"), ("api", "export", "Add export")] {
+        let repo = git_repo(root, name, branch);
+        let config = format!("[remote \"origin\"]\n\turl = git@github.com:lucas/{name}.git\n");
+        std::fs::write(repo.join(".git/config"), config).expect("git config");
+        let created =
+            sandbox.herdr(&["workspace", "create", "--cwd", repo.to_str().unwrap(), "--label", name, "--no-focus"]);
+        let pane = created["result"]["root_pane"]["pane_id"].as_str().expect("pane id").to_string();
+        sandbox.herdr(&["pane", "report-agent", "--source", "e2e", "--agent", "claude", "--state", "working", &pane]);
+        sandbox.herdr(&["pane", "report-metadata", &pane, "--source", "e2e", "--token", &format!("thread={title}")]);
+        panes.push(pane);
+    }
+    // GitHub answers through a fake gh: cockpit's PR waits to be merged,
+    // api's has failing checks that a PR monitor's agent is repairing.
+    let pull = |number: u64, head: &str, checks: &str| {
+        serde_json::json!({"nodes": [{
+            "number": number, "url": format!("https://github.com/{head}/pull/{number}"), "state": "OPEN",
+            "isDraft": false, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "reviewDecision": null,
+            "headRepository": {"nameWithOwner": head}, "reviewThreads": {"nodes": []},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks}}}]},
+        }]})
+    };
+    for (name, answer) in [("cockpit", pull(49, "lucas/cockpit", "SUCCESS")), ("api", pull(7, "lucas/api", "FAILURE"))]
+    {
+        let answer = serde_json::json!({"data": {"repository": {"b0": answer}}});
+        std::fs::write(root.join(format!("{name}.json")), answer.to_string()).expect("answer");
+    }
+    write_executable(
+        &root.join("bin/gh"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{root}/gh.args'\ncase \"$*\" in\n  *'name: \"cockpit\"'*) cat '{root}/cockpit.json';;\n  *'name: \"api\"'*) cat '{root}/api.json';;\n  *) exit 1;;\nesac\n",
+            root = root.display()
+        ),
+    );
+    let monitor = root.join("state/personal-skills/pr-watch/lucas%2Fapi-7");
+    std::fs::create_dir_all(&monitor).expect("monitor dir");
+    let status = serde_json::json!({"phase": "repairing", "pid": std::process::id()});
+    std::fs::write(monitor.join("status.json"), status.to_string()).expect("monitor status");
+
+    let inbox = Inbox::start(&sandbox, 110, 24);
+    inbox.wait_for_text("Fix the login loop");
+    inbox.wait_for_text("Claude · #49 ready to merge");
+    inbox.wait_for_text("Claude · #7 agent fixing");
+    assert!(!inbox.text().contains("⎇ fix-login"), "the pull request stands for its branch");
+    let args = std::fs::read_to_string(root.join("gh.args")).expect("gh ran");
+    assert!(args.contains("graphql") && args.contains("headRefName: \"fix-login\""), "{args}");
+}
+
+#[test]
 fn navigating_tasks_shows_their_live_discussions_without_enter() {
     if !enabled() {
         return;

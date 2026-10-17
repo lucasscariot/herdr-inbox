@@ -11,6 +11,8 @@ pub struct Checkout {
     /// The branch, or a short commit id when HEAD is detached.
     pub branch: Option<String>,
     pub root: PathBuf,
+    /// `owner/name` of the `origin` remote when it is on GitHub.
+    pub github: Option<String>,
 }
 
 /// Finds the checkout containing `path`, walking up to the filesystem root.
@@ -20,7 +22,8 @@ pub fn checkout(path: &Path) -> Option<Checkout> {
         let dot_git = current.join(".git");
         if let Some((git_dir, common_dir)) = git_dirs(&dot_git) {
             let repo = repo_name(&common_dir)?;
-            return Some(Checkout { repo, branch: read_branch(&git_dir), root: current.to_path_buf() });
+            let github = read_github(&common_dir);
+            return Some(Checkout { repo, branch: read_branch(&git_dir), root: current.to_path_buf(), github });
         }
         dir = current.parent();
     }
@@ -74,6 +77,41 @@ pub fn repo_name(common_dir: &Path) -> Option<String> {
     Some(name.strip_suffix(".git").unwrap_or(name).to_string())
 }
 
+/// The GitHub `owner/name` of the `origin` remote in a common dir's config.
+fn read_github(common_dir: &Path) -> Option<String> {
+    let config = fs::read_to_string(common_dir.join("config")).ok()?;
+    let mut in_origin = false;
+    for line in config.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_origin = line.replace(' ', "") == "[remote\"origin\"]";
+        } else if in_origin
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "url"
+        {
+            return github_repo(value.trim());
+        }
+    }
+    None
+}
+
+/// `owner/name` from a GitHub remote URL, over HTTPS or SSH.
+pub fn github_repo(url: &str) -> Option<String> {
+    let path = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .map(|rest| rest.split_once('@').map_or(rest, |(_, host)| host))
+        .and_then(|rest| rest.strip_prefix("github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("git@github.com:"))?;
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = path.split_once('/')?;
+    let valid = |part: &str| {
+        !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    (valid(owner) && valid(name)).then(|| format!("{owner}/{name}"))
+}
+
 fn read_branch(git_dir: &Path) -> Option<String> {
     let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
     let head = head.trim();
@@ -101,7 +139,7 @@ mod tests {
         write(&repo.join(".git/HEAD"), "ref: refs/heads/main\n");
         fs::create_dir_all(repo.join("src/deep")).unwrap();
         let found = checkout(&repo.join("src/deep")).unwrap();
-        assert_eq!(found, Checkout { repo: "cockpit".into(), branch: Some("main".into()), root: repo });
+        assert_eq!(found, Checkout { repo: "cockpit".into(), branch: Some("main".into()), root: repo, github: None });
     }
 
     #[test]
@@ -175,6 +213,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(&dir.path().join("x/.git"), "garbage");
         assert_eq!(checkout(&dir.path().join("x")), None);
+    }
+
+    #[test]
+    fn the_origin_on_github_names_the_repository_for_linked_worktrees_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("inbox");
+        write(&main.join(".git/HEAD"), "ref: refs/heads/main");
+        write(
+            &main.join(".git/config"),
+            "[core]\n\tbare = false\n[remote \"upstream\"]\n\turl = git@github.com:other/inbox.git\n[remote \"origin\"]\n\turl = git@github.com:lucas/herdr-inbox.git\n",
+        );
+        let admin = main.join(".git/worktrees/w");
+        write(&admin.join("HEAD"), "ref: refs/heads/w");
+        write(&admin.join("commondir"), "../..");
+        let linked = dir.path().join("w");
+        write(&linked.join(".git"), &format!("gitdir: {}", admin.display()));
+        assert_eq!(checkout(&linked).unwrap().github.as_deref(), Some("lucas/herdr-inbox"));
+        assert_eq!(checkout(&main).unwrap().github.as_deref(), Some("lucas/herdr-inbox"));
+    }
+
+    #[test]
+    fn github_urls_are_read_in_every_usual_spelling() {
+        for url in [
+            "git@github.com:lucas/herdr-inbox.git",
+            "ssh://git@github.com/lucas/herdr-inbox",
+            "https://github.com/lucas/herdr-inbox.git",
+            "https://token@github.com/lucas/herdr-inbox/",
+        ] {
+            assert_eq!(github_repo(url).as_deref(), Some("lucas/herdr-inbox"), "{url}");
+        }
+        for url in ["git@gitlab.com:lucas/x.git", "https://github.com/lucas", "/srv/git/x.git", ""] {
+            assert_eq!(github_repo(url), None, "{url}");
+        }
     }
 
     #[test]

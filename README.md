@@ -122,7 +122,7 @@ rm -rf ~/.config/herdr-inbox ~/.local/state/herdr-inbox ~/.local/share/herdr-inb
 | | `n`, click **+ New thread** | Open the composer |
 | | `r` | Reply to the agent without opening it |
 | | `e` | Send the thread's task again, from the composer. On a failed launch it retries: same task, any preset, in the worktree it already made |
-| | `/`, click **Filter threads** | Filter by title, project, branch, harness or machine; `Esc` clears |
+| | `/`, click **Filter threads** | Filter by title, project, branch, pull request, harness or machine; `Esc` clears |
 | | `x`, `Delete`, `Backspace` twice | Archive: closes the thread's workspace, keeps its worktree on disk. The second press (or `Enter`, `y`) confirms; `Esc` cancels |
 | | `d` | Dismiss a failed launch; its task stays in the composer history (`Ctrl+P`) |
 | | `Ctrl+T` | Dictate to the thread under the cursor |
@@ -147,6 +147,19 @@ Claude Code, ◆ for Codex, π for Pi and ◈ for OpenCode. Other harnesses get 
 neutral ❯ and their own name. The harness name comes before the branch, so a
 long branch cannot hide which agent is running. A position counter and a
 scroll thumb show where you are in the list.
+
+When a thread's branch has a pull request on GitHub, the row shows the pull
+request instead of the branch, with what it waits for: `#49 ready to merge` in
+green; `conflicts` or `checks failed` in red; `changes requested` or
+`2 comments` (unresolved review threads) or `behind base` in yellow;
+`checks running`, `awaiting review`, `draft` or `checking` quietly; `merged`
+and `closed` once it is done. `agent fixing` means a PR monitor
+(`pr_watch.py`, which keeps its state under
+`$XDG_STATE_HOME/personal-skills/pr-watch/`) is running its background agent
+on it right now. Inbox reads them with your local `gh` login, one
+query per repository every minute, for threads on every machine; without `gh`
+the rows keep the branch. The filter matches these labels, so `/ready to
+merge` lists what is waiting for you.
 
 Below the composer's controls when there is room, and when no thread is open,
 the orbit turns: the core is the inbox, each ring a machine, each bead a

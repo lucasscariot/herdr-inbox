@@ -145,7 +145,7 @@ fn a_subscription_over_ssh_streams_events_until_closed() {
 
 #[test]
 fn the_probe_output_is_parsed_into_checkouts() {
-    let output = "/w/api/src\t/w/api\t/w/api/.git\tmain\n\
+    let output = "/w/api/src\t/w/api\t/w/api/.git\tmain\tgit@github.com:lucas/api.git\n\
                   /h/.herdr/worktrees/cockpit/fix\t/h/.herdr/worktrees/cockpit/fix\t/w/cockpit/.git\tfix-login\n\
                   /w/detached\t/w/detached\t/w/detached/.git\tHEAD\n\
                   garbage line\n";
@@ -156,6 +156,8 @@ fn the_probe_output_is_parsed_into_checkouts() {
     assert_eq!(checkouts["/h/.herdr/worktrees/cockpit/fix"].repo, "cockpit");
     assert_eq!(checkouts["/h/.herdr/worktrees/cockpit/fix"].branch.as_deref(), Some("fix-login"));
     assert_eq!(checkouts["/w/detached"].branch, None);
+    assert_eq!(checkouts["/w/api/src"].github.as_deref(), Some("lucas/api"));
+    assert_eq!(checkouts["/w/detached"].github, None);
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -178,6 +180,7 @@ fn the_remote_probe_reads_branches_and_worktrees_with_real_git() {
     std::fs::create_dir_all(repo.join("src")).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"]);
+    git(&repo, &["remote", "add", "origin", "https://github.com/lucas/cockpit.git"]);
     let linked = dir.path().join("wt/fix login");
     git(&repo, &["worktree", "add", "-q", "-b", "fix-login", linked.to_str().unwrap()]);
     let ssh = SshHerdr { ssh: fake_ssh(dir.path()), target: "t".into(), session: None, control_dir: dir.path().into() };
@@ -192,6 +195,7 @@ fn the_remote_probe_reads_branches_and_worktrees_with_real_git() {
     assert_eq!(checkouts[&paths[0]].branch.as_deref(), Some("main"));
     assert_eq!(checkouts[&paths[1]].repo, "cockpit", "a linked worktree is named after its main repository");
     assert_eq!(checkouts[&paths[1]].branch.as_deref(), Some("fix-login"));
+    assert_eq!(checkouts[&paths[1]].github.as_deref(), Some("lucas/cockpit"));
 }
 
 #[test]
